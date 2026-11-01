@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
+# 本仓分叉变体；上游参考：ClientTriage/tools/check-secrets.py（2026-11-01 bug 奇偶同步）
 """公开仓敏感信息扫描：凭据 + 本机路径 + 真实邮箱。
 
 用法：
     python tools/check-secrets.py            # 扫描已跟踪文件
-    python tools/check-secrets.py --all      # 扫描工作树（含未跟踪，排除 .git/.work/vault 与两个上游 clone）
+    python tools/check-secrets.py --all      # 已跟踪 + 未跟踪一起扫（遵循 .gitignore）
 
-退出码：0 通过 / 1 发现疑似敏感信息。
+退出码：0 通过 / 1 发现疑似敏感信息 / 2 自身故障（git 不可用或失败）。
 这是 `docs/SECRETS.md` 的可执行版本 —— 文档说「本仓不保存凭据与本机路径」，
 CI 里得有个脚本真的能拦住。
 
@@ -68,8 +69,9 @@ TRUNCATED_PATH = re.compile(
 
 
 # 占位用户名：示例文件里的 C:/Users/You/... 是给用户照着改的模板，不是本机路径。
+# 反斜杠写法同样要认；旧正则只认正斜杠，且 Your 后内嵌的字面 0x08（本意 \b）随此重写移除。
 PLACEHOLDER_USER = re.compile(
-    r"[A-Za-z]:[\/]Users[\/](?:You|User|Your|<[^>]+>|[^\/\s<>]*[一-鿿])", re.I)
+    r"[A-Za-z]:[\\/]Users[\\/](?:You|User|<[^>]+>|[^\\/\s<>]*[一-鿿])", re.I)
 
 
 def is_doc_file(rel: str) -> bool:
@@ -85,20 +87,29 @@ def tracked_files() -> list[str]:
     except FileNotFoundError:
         print("✗ 找不到 git 命令")
         raise SystemExit(2)
+    if out.returncode != 0:
+        print("✗ git ls-files 失败：" + (out.stderr or "").strip())
+        raise SystemExit(2)
     return [x for x in out.stdout.splitlines() if x.strip()]
 
 
-def walk_files() -> list[str]:
-    files = []
-    for dp, dn, fn in os.walk(ROOT):
-        dn[:] = [d for d in dn if d not in SKIP_DIRS]
-        for f in fn:
-            files.append(os.path.relpath(os.path.join(dp, f), ROOT))
-    return files
+def untracked_files() -> list[str]:
+    # --all 的「未跟踪」遵循 .gitignore：忽略规则交给 git 判定，
+    # gitignore 排除的本地文件（vault/、.work/ 等）不进扫描。
+    out = subprocess.run(
+        ["git", "ls-files", "--others", "--exclude-standard"],
+        cwd=ROOT, capture_output=True, text=True)
+    if out.returncode != 0:
+        print("✗ git ls-files --others 失败：" + (out.stderr or "").strip())
+        raise SystemExit(2)
+    return [x for x in out.stdout.splitlines() if x.strip()]
 
 
 def main() -> int:
-    files = walk_files() if "--all" in sys.argv else tracked_files()
+    if "--all" in sys.argv:
+        files = sorted(set(tracked_files()) | set(untracked_files()))
+    else:
+        files = tracked_files()
     bad = []
     for rel in files:
         rel_norm = rel.replace("\\", "/")
@@ -115,23 +126,23 @@ def main() -> int:
             with open(os.path.join(ROOT, rel), encoding="utf-8", errors="replace") as fh:
                 for lineno, line in enumerate(fh, 1):
                     for name, pat in PATTERNS:
-                        m = pat.search(line)
-                        if not m:
-                            continue
-                        # 占位符只豁免它自己所在的那一段，不再整行放行 ——
-                        # 示例与真值写在同一行时，真值仍会被报出来。
-                        if PLACEHOLDER.search(m.group(0)):
-                            continue
-                        if name == "本机用户目录":
-                            # 只豁免命中片段本身：截断形式（C:/Users/x\...）或
-                            # 占位用户名（C:/Users/You）。同一行里并排写下的
-                            # 完整真实路径仍会被报出来。
-                            frag = line[m.start():m.start() + 120]
-                            if allow_truncated and TRUNCATED_PATH.match(frag):
+                        # finditer：一行里每个命中段都单独过豁免，不整行放行 ——
+                        # search 只看首个命中，同一行里第二个真值路径会漏。
+                        for m in pat.finditer(line):
+                            # 占位符只豁免它自己所在的那一段，不再整行放行 ——
+                            # 示例与真值写在同一行时，真值仍会被报出来。
+                            if PLACEHOLDER.search(m.group(0)):
                                 continue
-                            if PLACEHOLDER_USER.match(frag):
-                                continue
-                        bad.append((rel, lineno, name, line.strip()[:120]))
+                            if name == "本机用户目录":
+                                # 只豁免命中片段本身：截断形式（C:/Users/<用户名>\...）或
+                                # 占位用户名（C:/Users/You）。同一行里并排写下的
+                                # 完整真实路径仍会被报出来。
+                                frag = line[m.start():m.start() + 120]
+                                if allow_truncated and TRUNCATED_PATH.match(frag):
+                                    continue
+                                if PLACEHOLDER_USER.match(frag):
+                                    continue
+                            bad.append((rel, lineno, name, line.strip()[:120]))
         except OSError:
             continue
 
