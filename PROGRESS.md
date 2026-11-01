@@ -183,7 +183,7 @@ CN/全球交织、不同厂商混排，主力 `cn:deepseek-v4.1-flash` 落到低
 - [x] 新建当前仓库的定时任务 `automation-cfcb5c6d-a68f-410b-ba27-3dd6032115c9`
   （每天 10:00）：Go sync → WorkBuddy 刷新价格 → 补探未探模型 → 写配置
 - [x] 旧任务 `automation-5ad749e3-0d25-4323-afbc-7ae30cdc7288` 指向已删除的
-  `F:\Project\Openwrt`，已停用（`enabled=0` / `completed`）；
+  `<工作区>\Openwrt`，已停用（`enabled=0` / `completed`）；
   DB 备份 `tasks-index.sqlite.bak-automation-20261021-020918`
 - [x] `docs/MAINTENANCE.md` §6 定期动作同步为 Go + WorkBuddy 双线
 
@@ -254,7 +254,7 @@ CN/全球交织、不同厂商混排，主力 `cn:deepseek-v4.1-flash` 落到低
   全部退出 → 宽限 8 秒后停；运行期间每 15 秒探活，网关挂了自动重启（失败退避 60 秒）
 - [x] 新增 `workbuddy/zcode_gateway_watch.vbs`：用 wscript 无窗口启动 ps1
 - [x] `-Install` 注册开机自启（`%APPDATA%\...\Startup\ZCode Gateway Watch.lnk` →
-  `wscript.exe "F:\Project\ZcodeAIModels\workbuddy\zcode_gateway_watch.vbs"`）并立即启动守护器
+  `wscript.exe "<工作区>\ZcodeAIModels\workbuddy\zcode_gateway_watch.vbs"`）并立即启动守护器
 - [x] 接管原先 `run.bat` 手动拉起的网关；杀掉旧 cmd 树后 1 秒内静默重启（新 pid，无窗口）
 - [x] 文档：TOOLS 工具表、MAINTENANCE §8（新增，原「相关文档」改 §9）、
   TROUBLESHOOTING §11（新增）、docs/README 索引、README 适用环境、MODEL-PROVIDERS §4、CHANGELOG
@@ -298,7 +298,7 @@ CN/全球交织、不同厂商混排，主力 `cn:deepseek-v4.1-flash` 落到低
 
 ## 验收
 - `-Status`：网关监听 7863（pid 17924，路径
-  `F:\Project\ZcodeAIModels\workbuddy\gateway\wb2api.exe`），守护器运行中；
+  `<工作区>\ZcodeAIModels\workbuddy\gateway\wb2api.exe`），守护器运行中；
   网关日志显示恢复 139 个用量桶、4 个账号、cn / global 模型速率正常。
 - `/panel/` 200；当前 ZCode 会话（走 workbuddy-low）请求正常。
 - `git status` 不显示 `workbuddy/gateway/`（整目录已忽略）。

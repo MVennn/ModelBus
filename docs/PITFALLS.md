@@ -515,9 +515,9 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   子系统是 WINDOWS_GUI）→ 用显式参数列表启动：
 
   ```powershell
-  Start-Process -FilePath 'F:\Project\ZcodeAIModels\gateways\zgate\zgate.exe' `
+  Start-Process -FilePath '<工作区>\ZcodeAIModels\gateways\zgate\zgate.exe' `
     -ArgumentList 'serve' `
-    -WorkingDirectory 'F:\Project\ZcodeAIModels\gateways\zgate' -WindowStyle Hidden
+    -WorkingDirectory '<工作区>\ZcodeAIModels\gateways\zgate' -WindowStyle Hidden
   ```
 
   起来后必须验证：`netstat -ano | grep 7871` 有 LISTENING，且
