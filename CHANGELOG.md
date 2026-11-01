@@ -17,6 +17,31 @@
 
 ## [未发布]
 
+### 增量审查修复：退避预算互吃、空出口残留、死代码 attemptBridge（2026-11-01）
+
+对 10-26 后三笔 zgate 网络提交（f8084ec / 502fc16 / 3dcb126）做增量审查发现的
+三处明显错误，均为让代码回到其自身文档口径，不改设计：
+
+- 修 1（退避预算互吃）：`doForwardWith` 用循环下标 `attempt == 0` 判「429 是否已
+  就地退避过」，而传输层重试的 `continue` 同样会自增下标 —— 先传输失败一次的
+  请求再吃 429 时直接进 45s 冷却 + 回落，吃不到 700ms 就地退避，违背
+  PITFALLS §34「`txRetry` 与 429 互不吃预算」的口径。改为 `txRetry` / `retry429`
+  两个独立计数
+- 修 2（空出口残留）：`WithProxy(ctx, "")` 原样返回 context，链上「机场跳后面跟
+  直连跳」时直连跳会沿用上一跳的机场出口，违背 `alias.Hop`「空值按直连走」的
+  约定。改为无条件覆盖（空值即直连）。当前生成器把机场孪生跳固定在链尾，
+  此问题属潜伏契约违背，线上暂未触发
+- 修 3（死代码）：`attemptBridge` 自 893c63d（routeChain 改按每跳协议派发）起
+  无任何调用方，但 3dcb126 仍在给它打补丁 —— 它是 `attemptChain` 的第二份
+  状态机拷贝，继续留着必然再漂移。整体删除，行为零变化
+- 测试：新增 `TestTransportFailureDoesNotConsume429Backoff`（EOF → 429 → 退避
+  重试 → 200；无就地退避时一跳链直接 502）；`TestProxyOfRoundTrip` 断言改为
+  「空出口必须覆盖外层」；更新 `tests/test_model_alias_price.py` 的链长断言
+  （502fc16 起链尾带机场孪生跳，该测试 10-30 起本地跑必挂）
+- `go test ./... -count=1` 全绿；`python gateways/zgate/build.py` 重建产物并过
+  PE 子系统校验（GUI）。**zgate.exe 是构建产物（不入库）：改动需重建 + 重启
+  网关进程才生效**
+
 ### 传输层瞬时失败重试同一跳（2026-10-31）
 
 - 事故：机场节点到 opencode.ai 的路径对大包短暂黑洞（POST ≥5 KB 挂 5s，GET 正常），

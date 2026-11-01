@@ -18,11 +18,10 @@ import (
 
 type proxyCtxKey struct{}
 
-// WithProxy 把这一跳的出口代理挂到 context 上；空字符串表示直连（不挂）。
+// WithProxy 把这一跳的出口代理挂到 context 上；空字符串表示直连。
+// 必须无条件覆盖外层值：链上「机场跳后面跟直连跳」时，空值若保留外层，
+// 直连跳会悄悄沿用上一跳的机场出口（alias.Hop 约定「空值按直连走」）。
 func WithProxy(ctx context.Context, proxy string) context.Context {
-	if proxy == "" {
-		return ctx
-	}
 	return context.WithValue(ctx, proxyCtxKey{}, proxy)
 }
 

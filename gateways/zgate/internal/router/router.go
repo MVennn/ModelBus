@@ -454,9 +454,12 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	target := strings.TrimRight(base, "/") + path + search
 	// 429 就地退避重试一次：限流窗口通常很短，先等一小会儿再试同一跳，
 	// 比立刻回落/直接失败更划算。重试仍 429 时再交给 onThrottled 冷却。
-	// txRetry 单独计数：传输层失败的重试不能消耗 429 的退避预算，反之亦然。
+	// txRetry 与 retry429 各自单独计数：传输层失败的重试不能消耗 429 的退避预算，
+	// 反之亦然。不能用循环下标判：传输层重试的 continue 也会自增下标，
+	// 那样先传输失败一次的请求就吃不到 429 的就地退避了。
 	txRetry := 0
-	for attempt := 0; ; attempt++ {
+	retry429 := 0
+	for {
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
 			writeJSON(w, 502, errorBody("unified-router upstream error: "+err.Error(), "proxy_error"))
@@ -503,7 +506,8 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode == 429 {
-					if attempt == 0 {
+					if retry429 == 0 {
+						retry429++
 						s.log.Infof("[router] 429 退避 %v 后重试同一跳", rateLimitBackoff)
 						select {
 						case <-time.After(rateLimitBackoff):
@@ -711,79 +715,6 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKey(hop), rateLimitCooldown)
 		s.markCoolingFor(hop, rateLimitCooldown)
 	})
-}
-
-func (s *Server) attemptBridge(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, protocol, path, search string, index int) {
-	if index >= len(t.Chain) {
-		writeJSON(w, 502, errorBody("all upstreams failed: "+chainNames(t.Chain), "proxy_error"))
-		return
-	}
-	hop := t.Chain[index]
-	r = r.WithContext(WithProxy(r.Context(), hop.Proxy))
-	if s.cooling(hop) {
-		s.log.Infof("[router] %s 冷却中，跳过", hopKey(hop))
-		s.attemptBridge(w, r, body, model, t, protocol, path, search, index+1)
-		return
-	}
-	key := s.keyset().For(hop.Channel)
-	if key == "" {
-		s.attemptBridge(w, r, body, model, t, protocol, path, search, index+1)
-		return
-	}
-	if err := s.prepare(hop.Channel); err != nil {
-		s.attemptBridge(w, r, body, model, t, protocol, path, search, index+1)
-		return
-	}
-	s.log.Infof("%s %s%s model=%s -> %s:%s (%d/%d)", r.Method, path, search, model, hop.Channel, hop.Upstream, index+1, len(t.Chain))
-	// 只有「链尾跳」才走流式：前面某跳失败时需要安全回落，不能先写半截 SSE。
-	streaming := wantsStream(body) && index == len(t.Chain)-1
-	cw := newBridgeChunkWriter(w)
-	opts := bridge.Options{
-		Protocol:      protocol,
-		Base:          hop.Base,
-		Key:           key,
-		Body:          body,
-		UpstreamModel: hop.Upstream,
-		DisplayModel:  model,
-		Ctx:           r.Context(),
-		Stream:        streaming,
-		OnChunk:       cw.write,
-	}
-	result := bridge.Forward(s.client, opts)
-	// 传输层失败且还没写出任何 chunk：重试同一跳一次（理由见 transportFailed）。
-	if !cw.written && transportFailed(result) {
-		s.log.Infof("[router] %s 传输层失败，%v 后重试同一跳", hopKey(hop), transportRetryDelay)
-		select {
-		case <-time.After(transportRetryDelay):
-		case <-r.Context().Done():
-			return
-		}
-		result = bridge.Forward(s.client, opts)
-	}
-	result = s.retryBridgeOn429(r, hop, cw, opts, result)
-	// Retry only on server-side failures; a 4xx (bad request, bad key) would
-	// fail identically on every hop. The last hop's real error is passed
-	// through instead of a generic "all upstreams failed".
-	// 模型不存在 / 额度耗尽 / 欠费与请求无关：这一跳作废，冷却它并换下一跳。
-	if hopFatal(result.Status, result.Body) {
-		s.markCooling(hop)
-		if index+1 < len(t.Chain) {
-			s.log.Infof("[router] %s -> %s, fallback %s", hop.Upstream,
-				strings.TrimSpace(string(result.Body))[:min(len(result.Body), 120)], nextHopName(t.Chain, index))
-			s.attemptBridge(w, r, body, model, t, protocol, path, search, index+1)
-			return
-		}
-	}
-	s.coolBridgeFailure(hop, result)
-	if (result.Status >= 500 || result.Status == 429 || regionBlocked(result.Status, result.Body)) && index+1 < len(t.Chain) {
-		s.log.Infof("[router] %s -> HTTP %d, fallback %s", hop.Upstream, result.Status, nextHopName(t.Chain, index))
-		s.attemptBridge(w, r, body, model, t, protocol, path, search, index+1)
-		return
-	}
-	if streaming {
-		return
-	}
-	writeResult(w, result)
 }
 
 // hopFatal 标记「这一跳现在就是不能用」的响应：模型 id 不存在、免费额度耗尽、欠费。

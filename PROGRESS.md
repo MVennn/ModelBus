@@ -1855,3 +1855,49 @@ mimo 甚至到后面去了」；③「省钱里面应该留下的都是各公司
   当前配置本无 qoder 模型，无影响。要带 Qoder 需先起 8790。
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-01 增量代码审查：10-26 后的 zgate 网络三连提交 + 同期工具/供应商改动
+
+## 任务目标
+对 2026-10-26 全量审查之后的增量做代码审查并直接修复明显错误。重点：
+`f8084ec`（僵死 30s 判定 + 429 先退避再摘跳）、`502fc16`（每跳出口 chain[].proxy +
+403 换机场）、`3dcb126`（传输层瞬时失败重试同一跳），以及同期的 model_alias /
+workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性、proxy 泄漏面、
+超时边界与并发共享状态。
+
+## 已完成变更
+- [x] 审查范围：10-26 后 27 个提交中的 13 个代码提交（其余为 docs/reports/evidence/卫生）
+- [x] 修 1（P2）：`router.go` `doForwardWith` 用 `attempt == 0` 判 429 是否已退避，
+      传输层重试的 `continue` 也自增 `attempt` → 传输失败过的请求吃不到 429 的
+      700ms 就地退避（违背 PITFALLS §34 口径）。改 `txRetry` / `retry429` 独立计数
+- [x] 修 2（P2）：`egress.go` `WithProxy(ctx, "")` 不覆盖外层值 → 机场跳后面的
+      直连跳会沿用上一跳机场出口（潜伏：当前生成器机场孪生跳固定链尾）。
+      改为无条件覆盖，同步改 `TestProxyOfRoundTrip` 断言
+- [x] 修 3（P2）：删除死代码 `attemptBridge`（893c63d 起无调用方，3dcb126 仍在
+      给它打补丁 —— `attemptChain` 的第二份状态机拷贝必然漂移）
+- [x] 修 4（P3）：`tests/test_model_alias_price.py::test_price_drop_is_picked_up`
+      断言未跟上 502fc16 的链尾机场孪生跳，10-30 起本地必挂。更新断言
+- [x] `python gateways/zgate/build.py` 重建产物并过 PE 子系统校验（GUI, Subsystem=2）
+
+## 验收
+- `go test ./... -count=1` 全绿（新增
+  `TestTransportFailureDoesNotConsume429Backoff`：EOF → 429 → 退避重试 → 200，
+  无就地退避时一跳链直接 502）；`python tests/test_model_alias_price.py` 10/10 过
+- `python tools/check-docs.py`、`python tools/check-secrets.py` 通过
+- 泄漏面核查：`chain[].proxy` 不进任何响应（`chainNames`/`nextHopName` 只拼
+  channel:upstream），健康端点不回显；日志里的 `hopKey` 含 proxy 串，但当前值是
+  硬编码 LAN 地址（`http://10.0.0.1:7896`，无凭据）；上游 key 只进 header
+- 未修、记设计口径的项（审查 notes）：
+  1. `routeAlias` 无 chain 的桥接路径（存量手写条目才可达）没有传输重试 / 429
+     退避 / 冷却覆盖，与链式路径不一致
+  2. chat 路径的 504 不冷却该跳（只有桥接路径 5min 冷却）—— 静默僵死的 chat
+     上游每请求都先撞一次
+  3. 非流式桥接调用空闲上限 30s：上游非流式生成超过 30s 会被判僵死（504 + 5min
+     冷却）；ZCode 客户端走流式，非尾跳整段缓冲，影响面是「非流式 + 长生成」组合
+  4. `idleReader.Read` 里 `timer.Reset` 无锁，与看门狗并发存在良性竞态：
+     最坏把传输中断误判成 504 静默（多付一次 5min 冷却）
+  5. `hopKey` 进日志的 proxy 串未做 userinfo 脱敏 —— 换成带凭据的出口时要先补
+
+## 状态: 已完成

@@ -229,6 +229,58 @@ func TestTransportFailureRetriesSameHop(t *testing.T) {
 	}
 }
 
+func TestTransportFailureDoesNotConsume429Backoff(t *testing.T) {
+	// PITFALLS §34 的口径：txRetry 与 429 的退避预算互不吃。
+	// 先传输层失败一次，再吃 429：429 仍必须先就地退避重试同一跳，
+	// 而不是直接冷却+回落（一跳链没有下一跳，那样就是 502）。
+	var mu sync.Mutex
+	n := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		n++
+		cur := n
+		mu.Unlock()
+		switch cur {
+		case 1:
+			if hj, ok := w.(http.Hijacker); ok {
+				if conn, _, err := hj.Hijack(); err == nil {
+					_ = conn.Close() // EOF：请求没被上游受理
+					return
+				}
+			}
+			t.Error("hijack failed")
+			return
+		case 2:
+			w.WriteHeader(429)
+			_, _ = w.Write([]byte(`{"error":{"message":"rate limited"}}`))
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(okBody()))
+	}))
+	defer srv.Close()
+
+	srv2 := newEgressServer(t, `{
+		"models":{"M":{"channel":"OC","upstream":"m","base":"`+srv.URL+`","protocol":"chat",
+			"chain":[{"upstream":"m","base":"`+srv.URL+`","channel":"OC","protocol":"chat","price":0.1}]}},
+		"legacy":{}
+	}`)
+	front := httptest.NewServer(srv2.Handler())
+	defer front.Close()
+
+	resp, raw := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"M","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	mu.Lock()
+	got := n
+	mu.Unlock()
+	if resp.StatusCode != 200 {
+		t.Fatalf("429 after a transport blip must still back off in place: status %d, body %s", resp.StatusCode, raw)
+	}
+	if got != 3 {
+		t.Fatalf("expected exactly 3 attempts (EOF + 429 + backoff retry), got %d", got)
+	}
+}
+
 func TestTransportFailedMarkers(t *testing.T) {
 	cases := []struct {
 		status int
@@ -262,9 +314,10 @@ func TestProxyOfRoundTrip(t *testing.T) {
 	if got := ProxyOf(ctx); got != "http://127.0.0.1:7896" {
 		t.Fatalf("ProxyOf = %q", got)
 	}
-	// 空代理表示直连：不覆盖外层（下一跳会重新设自己的值）。
-	if got := ProxyOf(WithProxy(ctx, "")); got != "http://127.0.0.1:7896" {
-		t.Fatalf("empty proxy must not clear the outer value, got %q", got)
+	// 空代理表示直连：必须覆盖外层值，否则链上「机场跳后面跟直连跳」时，
+	// 直连跳会悄悄沿用上一跳的机场出口（每跳出自己的口，见 alias.Hop 注释）。
+	if got := ProxyOf(WithProxy(ctx, "")); got != "" {
+		t.Fatalf("empty proxy must clear the outer value (per-hop egress), got %q", got)
 	}
 	if got := ProxyOf(context.Background()); got != "" {
 		t.Fatalf("no proxy expected, got %q", got)

@@ -77,8 +77,12 @@ class PriceIsDerivedTest(unittest.TestCase):
             M.expand_hops(item), {"cn:mimo-v2.6-pro": wb_record(0.13)}, {}, "auto",
         )
         self.assertEqual(entries[0]["price"], 0.13)
+        # OC 直连跳链尾会自动补「同上游、经机场」的孪生跳（2026-10-30 起，
+        # with_airport_fallback），孪生跳带 proxy、直连跳不带。
         self.assertEqual([h["upstream"] for h in entries[0]["chain"]],
-                         ["cn:mimo-v2.6-pro", "mimo-v2.6-pro"])
+                         ["cn:mimo-v2.6-pro", "mimo-v2.6-pro", "mimo-v2.6-pro"])
+        self.assertEqual(entries[0]["chain"][1].get("proxy", ""), "")
+        self.assertEqual(entries[0]["chain"][2].get("proxy"), M.AIRPORT_PROXY)
 
     def test_dead_hop_is_dropped(self):
         """源里已经没有这个上游（下架/账号封禁）→ 该跳消失，不靠旧价赖着。"""
