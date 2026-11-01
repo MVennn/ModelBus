@@ -35,7 +35,14 @@ jobs:
           go-version: '1.22'
 
       - name: Go 格式
-        run: test -z "$(gofmt -l gateways/zgate)"
+        # 失败时列出具体文件，避免只看到 exit 1 还得本地复现排查。
+        run: |
+          unformatted=$(gofmt -l gateways/zgate)
+          if [ -n "$unformatted" ]; then
+            echo "::error::以下文件未过 gofmt（先 gofmt -w 再提交）："
+            echo "$unformatted"
+            exit 1
+          fi
 
       - name: Go 构建与测试
         working-directory: gateways/zgate

@@ -795,8 +795,10 @@ func transportFailed(result bridge.Result) bool {
 
 // regionBlocked 判断这一跳是不是「地区受限」：不是跳坏了，是这条出口进不去。
 // opencode 转发上游时原样带回（2026-10-30 实测里两种写法都出现过）：
-//   chat 端点  {"type":"error","error":{"type":"RegionError",...}}
-//   responses {"error":{"code":"unsupported_country_region_territory",...}}
+//
+//	chat 端点  {"type":"error","error":{"type":"RegionError",...}}
+//	responses {"error":{"code":"unsupported_country_region_territory",...}}
+//
 // 桥接路径（messages / responses）不走 chainAccept，必须单独问这个，
 // 否则 403 会原样返回给客户端，链上的机场跳永远轮不到。
 func regionBlocked(status int, head []byte) bool {
