@@ -15,7 +15,20 @@
 
 ---
 
-## [未发布]
+## [0.5.0] — 2026-11-01
+
+### 守卫脚本 bug 奇偶同步 + 维护（2026-11-01）
+
+- `tools/check-secrets.py` 对齐 ClientTriage `c3a3952` 已修的漏报 ——
+  `re.search` 改 `finditer`（同一行多个命中全查）、`--all` 遵循 `.gitignore`
+  （修复前 `--all` 因 .workbuddy 噪音 exit 1）；分叉差异保留，加出处头注释（`079f79d`）
+- `tools/check-docs.py` 对齐已修的功能性 bug —— BOM 首锚点、跨盘符 relpath、
+  引言只认头部（ZAIM ③ 有意不落地：守卫变体无此误报且按需补算会扫上游
+  clone，出处头注释写明）（`9d9ac53`）
+- 文档脱敏 —— 运维示例与守卫文档示例改占位（`cf3b403` / `aee3a22`）
+- 维护 —— 收尾大扫除（清 __pycache__、过期定价备份与中间版报告，`10a4301`）；
+  二进制备份口径收紧为「现役 + 最新回滚点」（`3ff6923`）；
+  CI 修 gofmt 连续挂检查（`dbb9b83`）
 
 ### zgate 安全微优化：hopKey 脱敏、chat 504 冷却对齐、idleReader 竞态修复（2026-11-01）
 
