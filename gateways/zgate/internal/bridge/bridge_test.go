@@ -2,6 +2,7 @@ package bridge
 
 import (
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -296,5 +297,101 @@ func TestForwardStreamIdleTimeout(t *testing.T) {
 	}
 	if !strings.Contains(string(res.Body), "upstream_timeout") {
 		t.Fatalf("unexpected body: %s", res.Body)
+	}
+}
+
+func TestIdleReaderTripsOnSilence(t *testing.T) {
+	// 上游一个字节都不发：idle 窗口一到必须关流返回读错误（504 的来源）。
+	pr, pw := io.Pipe()
+	ir := newIdleReader(pr, 100*time.Millisecond)
+	defer ir.stop()
+	defer pw.Close()
+
+	buf := make([]byte, 16)
+	start := time.Now()
+	_, err := ir.Read(buf)
+	if err == nil {
+		t.Fatal("silent stream must error once the idle watchdog fires")
+	}
+	if !ir.timedOut() {
+		t.Fatal("expected tripped after a full idle window of silence")
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("watchdog fired late: %v", elapsed)
+	}
+}
+
+func TestIdleReaderFlowingDataStaysAlive(t *testing.T) {
+	// 字节持续到达（间隔 < idle）：窗口不断重排，绝不判超时。
+	pr, pw := io.Pipe()
+	ir := newIdleReader(pr, 200*time.Millisecond)
+	defer ir.stop()
+	defer pr.Close()
+
+	stop := make(chan struct{})
+	go func() {
+		tick := time.NewTicker(50 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			select {
+			case <-tick.C:
+				if _, err := pw.Write([]byte("x")); err != nil {
+					return
+				}
+			case <-stop:
+				return
+			}
+		}
+	}()
+
+	buf := make([]byte, 16)
+	for i := 0; i < 8; i++ { // 8 × 50ms ≈ 400ms > 2× 窗口
+		if _, err := ir.Read(buf); err != nil {
+			t.Fatalf("read %d failed: %v (tripped=%v)", i, err, ir.timedOut())
+		}
+	}
+	if ir.timedOut() {
+		t.Fatal("flowing data must not trip the watchdog")
+	}
+	close(stop)
+	_ = pw.Close()
+}
+
+func TestIdleReaderBoundaryByteIsNotKilled(t *testing.T) {
+	// 竞态修复的核心用例：字节在 idle 窗口边缘到达（Reset 与看门狗触发在
+	// 同一线竞争交错）。旧实现无条件判超时并关流 —— 还在传输的流被误判成
+	// 504 静默，链路白付一次 5min 冷却。新口径按「距上一个字节是否空满
+	// idle」判定：窗口边缘的字节不算超时，看门狗按剩余窗口重排，流继续。
+	const idle = 400 * time.Millisecond
+	pr, pw := io.Pipe()
+	ir := newIdleReader(pr, idle)
+	defer ir.stop()
+	defer pw.Close()
+
+	go func() {
+		time.Sleep(idle * 3 / 4) // 0.75×idle：窗口边缘
+		_, _ = pw.Write([]byte("a"))
+		time.Sleep(idle * 3 / 10) // 1.05×idle：已越过旧实现的开刀点
+		_, _ = pw.Write([]byte("b"))
+	}()
+
+	buf := make([]byte, 8)
+	if _, err := ir.Read(buf); err != nil {
+		t.Fatalf("boundary byte must survive: %v", err)
+	}
+	// 旧实现在 1.0×idle 已把连接关掉，这个字节只会读到错误。
+	if _, err := ir.Read(buf); err != nil {
+		t.Fatalf("stream was killed at the old deadline despite a boundary byte: %v", err)
+	}
+	// 此后彻底沉默：再空满一个窗口必须判超时（连接由看门狗关闭）。
+	start := time.Now()
+	if _, err := ir.Read(buf); err == nil {
+		t.Fatal("continued silence must eventually trip the watchdog")
+	}
+	if !ir.timedOut() {
+		t.Fatal("expected tripped after a full idle window of silence")
+	}
+	if elapsed := time.Since(start); elapsed > 2*idle {
+		t.Fatalf("watchdog fired late: %v", elapsed)
 	}
 }

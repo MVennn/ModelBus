@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,34 @@ func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervi
 // 紧接着的机场跳就被当成「冷却中，跳过」—— 恰好把兜底吃掉。
 func hopKey(hop alias.Hop) string { return hop.Channel + "|" + hop.Upstream + "|" + hop.Proxy }
 
+// maskProxy 把出口代理串里的 userinfo 凭据掩掉，只用于日志与错误回显：
+// 有口令时保留用户名、口令换成 ***（http://user:***@host:port）；只有用户名
+// 或没有 userinfo 时原样返回；解析不了的串不回显原文（可能带着读不懂的凭据），
+// 给固定占位。当前配置是无凭据的 LAN 地址，这是给「换成带凭据出口」预埋的脱敏。
+func maskProxy(proxy string) string {
+	if proxy == "" {
+		return ""
+	}
+	u, err := url.Parse(proxy)
+	if err != nil {
+		return "(proxy unparseable)"
+	}
+	if _, hasPassword := u.User.Password(); !hasPassword {
+		return proxy
+	}
+	// 不能走 url.UserPassword("***").String()：它会把掩码转义成 %2A%2A%2A，
+	// 日志里难以辨认。userinfo 在 u.String() 里是第一个 "username:pass@" 段，
+	// 按原文定位替换即可，URL 其余部分保持解析后的原样。
+	return strings.Replace(u.String(), u.User.String()+"@", u.User.Username()+":***@", 1)
+}
+
+// hopKeyForLog 是 hopKey 的日志形态：proxy 段经 maskProxy 脱敏。
+// 冷却表必须继续用原始 hopKey —— 掩码串会让「只差口令」的两跳共用键；
+// 所有日志与错误回显一律用这个。
+func hopKeyForLog(hop alias.Hop) string {
+	return hop.Channel + "|" + hop.Upstream + "|" + maskProxy(hop.Proxy)
+}
+
 func (s *Server) cooling(hop alias.Hop) bool {
 	s.coolMu.Lock()
 	defer s.coolMu.Unlock()
@@ -104,7 +133,7 @@ func (s *Server) retryBridgeOn429(r *http.Request, hop alias.Hop, cw *bridgeChun
 	if result.Status != 429 || cw.written {
 		return result
 	}
-	s.log.Infof("[router] %s 429，退避 %v 后重试同一跳", hopKey(hop), rateLimitBackoff)
+	s.log.Infof("[router] %s 429，退避 %v 后重试同一跳", hopKeyForLog(hop), rateLimitBackoff)
 	select {
 	case <-time.After(rateLimitBackoff):
 	case <-r.Context().Done():
@@ -119,7 +148,7 @@ func (s *Server) coolBridgeFailure(hop alias.Hop, result bridge.Result) {
 	case 429:
 		s.markCoolingFor(hop, rateLimitCooldown)
 	case 504:
-		s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKey(hop), timeoutCooldown)
+		s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
 		s.markCoolingFor(hop, timeoutCooldown)
 	}
 }
@@ -622,7 +651,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	// 往下传的 r 也带着它，回落到下一跳时会被下一跳覆盖。
 	r = r.WithContext(WithProxy(r.Context(), hop.Proxy))
 	if s.cooling(hop) {
-		s.log.Infof("[router] %s 冷却中，跳过", hopKey(hop))
+		s.log.Infof("[router] %s 冷却中，跳过", hopKeyForLog(hop))
 		s.attemptChain(w, r, body, model, t, path, search, index+1)
 		return
 	}
@@ -667,7 +696,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		result := bridge.Forward(s.client, opts)
 		// 传输层失败且还没写出任何 chunk：重试同一跳一次（理由见 transportFailed）。
 		if !cw.written && transportFailed(result) {
-			s.log.Infof("[router] %s 传输层失败，%v 后重试同一跳", hopKey(hop), transportRetryDelay)
+			s.log.Infof("[router] %s 传输层失败，%v 后重试同一跳", hopKeyForLog(hop), transportRetryDelay)
 			select {
 			case <-time.After(transportRetryDelay):
 			case <-r.Context().Done():
@@ -706,13 +735,19 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			s.markCooling(hop)
 			return false
 		}
+		if status == 504 {
+			// 与桥接路径的 coolBridgeFailure 对齐：上游静默超时（连上不说话）
+			// 也冷却这一跳，否则链上后续每个请求都要先撞一遍这个僵死上游再回落。
+			s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
+			s.markCoolingFor(hop, timeoutCooldown)
+		}
 		return chainAccept(status, head)
 	}
 	s.doForwardWith(w, r, rewritten, hop.Base, path, search, headers, accept, func(reason string) {
 		s.log.Infof("[router] %s -> %s, fallback %s", hop.Upstream, reason, nextHopName(t.Chain, index))
 		s.attemptChain(w, r, body, model, t, path, search, index+1)
 	}, func() {
-		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKey(hop), rateLimitCooldown)
+		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKeyForLog(hop), rateLimitCooldown)
 		s.markCoolingFor(hop, rateLimitCooldown)
 	})
 }

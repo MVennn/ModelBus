@@ -439,3 +439,53 @@ data:{"code":"AccessDenied","message":"Free quota exhausted. To continue accessi
 		}
 	}
 }
+
+func TestChatPath504CoolsTheHop(t *testing.T) {
+	// notes 对齐项：桥接路径 504 会把该跳冷却 5min（coolBridgeFailure），
+	// chat 链路径原来不冷 —— 静默僵死的 chat 上游每个请求都要先撞一遍再回落。
+	// 第一跳 504 → 冷却 + 回落第二跳拿 200；下一个请求必须直接跳过第一跳。
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(504)
+		_, _ = w.Write([]byte(`{"error":{"message":"gateway timeout","type":"server_error"}}`))
+	}))
+	defer dead.Close()
+	cap := &capture{}
+	live := httptest.NewServer(cap.handler(nil))
+	defer live.Close()
+
+	srv, _ := newServer(t, `{
+		"models":{"M":{"channel":"OC","upstream":"dead","base":"`+dead.URL+`","protocol":"chat",
+			"chain":[
+				{"upstream":"dead","base":"`+dead.URL+`","channel":"OC","protocol":"chat","price":0.1},
+				{"upstream":"live","base":"`+live.URL+`","channel":"OC","protocol":"chat","price":0.1}
+			]}},
+		"legacy":{}
+	}`, live.URL)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	resp, raw := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"M","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("504 hop did not fall through: status %d, body %s", resp.StatusCode, raw)
+	}
+	deadHop := alias.Hop{Channel: "OC", Upstream: "dead"}
+	liveHop := alias.Hop{Channel: "OC", Upstream: "live"}
+	if !srv.cooling(deadHop) {
+		t.Fatal("chat 504 must cool the hop (aligned with the bridge path)")
+	}
+	if srv.cooling(liveHop) {
+		t.Fatal("the healthy hop must not be cooled")
+	}
+	resp2, raw2 := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"M","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("second request failed: %d %s", resp2.StatusCode, raw2)
+	}
+	cap.mu.Lock()
+	n := len(cap.requests)
+	cap.mu.Unlock()
+	if n != 2 {
+		t.Fatalf("dead hop must be skipped while cooling, live got %d requests", n)
+	}
+}

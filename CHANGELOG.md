@@ -17,6 +17,37 @@
 
 ## [未发布]
 
+### zgate 安全微优化：hopKey 脱敏、chat 504 冷却对齐、idleReader 竞态修复（2026-11-01）
+
+落实 09908d8 增量审查 notes 里挂起的小项；不重构状态机，504 冷却为 notes 明示的
+「对齐语义」项：
+
+- 修 1（日志脱敏）：`router.go` 新增纯函数 `maskProxy` + `hopKeyForLog` —— 日志与
+  错误回显里 `hopKey` 的 proxy 段对 userinfo 做掩码（`http://user:***@host:port`，
+  保留用户名）；解析不了的串给固定占位不回显原文。冷却表键**保持原始串**（掩码串
+  会让只差口令的两跳共用冷却键），5 处日志点全部切换。当前配置是无凭据 LAN 地址，
+  本项为「换成带凭据出口」预埋
+- 修 2（504 冷却对齐）：chat 链路径（`attemptChain` 的 accept）收到 504 现在也把
+  该跳冷却 5min，与桥接路径的 `coolBridgeFailure` 对齐 —— 静默僵死的 chat 上游
+  不再被链上后续每个请求先撞一遍再回落
+- 修 3（idleReader 竞态）：看门狗触发改为按「距上一个字节是否空满 idle」判定
+  （`last` 时间戳 + 与 `timer.Reset` 共用同一把锁），字节在窗口边缘到达时按剩余
+  窗口重排而不是误杀 —— 旧实现两边无锁，这个边界会把还在传输的流误判成 504
+  静默，链路白付一次 5min 冷却
+- 内存面评估（notes 结论）：流式路径全链路流式（32KB 拷贝缓冲、错误体 8KB 截断），
+  无响应体全量驻留；桥接非流式的整段解析属必要驻留；`bufio.Scanner` 初始缓冲
+  1MB→64KB（每流式请求省 ~1MB 急切分配，8MB 行上限不变）；`sync.Pool` 类优化
+  非热点，不值得做
+- 测试：新增 `TestMaskProxyMasksUserinfo`（有凭据 / 仅用户名 / 无凭据 / 畸形）、
+  `TestHopKeyForLogMasksCredentials`、`TestChatPath504CoolsTheHop`（504 → 冷却 →
+  下一请求直接跳过该跳）、`TestIdleReaderTripsOnSilence` /
+  `TestIdleReaderFlowingDataStaysAlive` / `TestIdleReaderBoundaryByteIsNotKilled`
+  （边界用例旧实现必挂，6 连跑稳定）
+- `go vet ./...` + `go test ./... -count=1` 全绿；`tests/test_model_alias_price.py`
+  10/10；`python gateways/zgate/build.py` 重建并过 PE 子系统校验（GUI）。
+  **zgate.exe 是构建产物（不入库）：本轮已重建，运行中的网关仍是旧镜像，需人工
+  重启后才生效**
+
 ### 增量审查修复：退避预算互吃、空出口残留、死代码 attemptBridge（2026-11-01）
 
 对 10-26 后三笔 zgate 网络提交（f8084ec / 502fc16 / 3dcb126）做增量审查发现的

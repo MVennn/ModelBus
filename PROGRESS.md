@@ -1901,3 +1901,52 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
   5. `hopKey` 进日志的 proxy 串未做 userinfo 脱敏 —— 换成带凭据的出口时要先补
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-01 zgate 安全微优化：hopKey 脱敏、chat 504 冷却对齐、idleReader 竞态
+
+## 任务目标
+落实上一轮增量审查（09908d8）notes 里挂起的小项，不重构状态机、不改行为语义：
+① `hopKey` 进日志的 proxy 串补 userinfo 脱敏（纯函数 + 单测）；② 评估 chat 路径
+504 不冷却该跳（与桥接路径不对称）；③ 评估 `idleReader` 的 `timer.Reset` 竞态；
+④ 评估内存面（响应体缓冲 / sync.Pool）。
+
+## 步骤清单
+- [x] 修 1：`router.go` 加 `maskProxy` + `hopKeyForLog`（冷却键保持原始串，
+      日志/错误回显一律脱敏），5 处日志点切换；单测三用例（有凭据/无凭据/畸形）
+- [x] 修 2：chat 链路径 504 对齐桥接路径冷却该跳 5min（`attemptChain` 的 accept）
+- [x] 修 3：`idleReader` 看门狗按「距上一个字节是否空满 idle」判定，
+      Reset 与回调共用锁；单测（静默触发/持续流动存活/窗口边缘字节不误杀）
+- [x] 评估 4：内存面结论落 notes；`bufio.Scanner` 初始缓冲 1MB→64KB（急切分配
+      修剪，上限 8MB 不变）
+- [x] `go vet ./...` + `go test ./... -count=1` 全绿；`tests/` Python 另跑（10/10）
+- [x] `python gateways/zgate/build.py` 重建 + PE 校验（不重启生产网关）
+- [x] `python tools/check-docs.py` + `check-secrets.py`；CHANGELOG [未发布] 补段
+- [x] 中文提交（不 push）
+
+## 验收
+- `go vet ./...` 0 错；`go test ./... -count=1` 全绿（alias / bridge / router / supervisor）
+- 新增 Go 测试 6 个：maskProxy 三态 + 畸形、hopKeyForLog 与冷却键分离、chat 504
+  冷却端到端（504 → 冷却 → 下一请求跳过该跳）、idleReader 静默触发 / 持续流动存活 /
+  窗口边缘字节不误杀（边界用例旧实现必挂，`-count=6` 稳定）
+- `python -I tests/test_model_alias_price.py` 10/10；`tools/check-docs.py` 34 篇通过、
+  `check-secrets.py` 133 文件无敏感
+- `build.py` 重建 OK（Subsystem=2 GUI）；生产进程未动 —— **运行中的 zgate 仍是旧
+  镜像，待人工重启后生效**
+- race 检测器本机不可用（`-race` 需 cgo + gcc，本机无 gcc）：idleReader 改动以
+  「Reset 与回调共用一把锁 + last 时间戳」设计审查替代，时序用例 6 连跑稳定
+
+## notes（本轮评估结论与遗留）
+- 内存面结论：流式路径全链路流式（32KB 拷贝缓冲、错误体 8KB 截断），无响应体全量
+  驻留；桥接非流式整段解析属必要驻留（上限受 max_tokens 65536 约束）；每请求各分配
+  一次的 32KB/scanner 缓冲非热点复用，`sync.Pool` 不值得。已做的唯一修剪：`bufio.Scanner`
+  初始缓冲 1MB→64KB（急切分配，8MB 行上限不变，行为零变化）
+- chat 504 冷却只加在 `attemptChain` 的 accept（有 hop 才有冷却键）；`forwardChain`
+  （WorkBuddy 同 base 的区域链）没有 per-hop 键，维持原样 [P3]
+- 上轮 notes 原项 1（routeAlias 无链桥接路径无重试/冷却）与原项 3（非流式桥接 30s
+  idle）超出本轮范围，保持不动
+- maskProxy 保留用户名、只掩口令（与任务给定形态一致）；`url.UserPassword("***").String()`
+  会转义成 `%2A%2A%2A`，故按 userinfo 原文定位替换
+
+## 状态: 已完成

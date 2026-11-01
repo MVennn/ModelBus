@@ -292,7 +292,7 @@ func TestTransportFailedMarkers(t *testing.T) {
 		{502, `read tcp 1.2.3.4: connection reset by peer`, true},
 		{502, `dial tcp 1.2.3.4: connection refused`, true},
 		{502, `bridge upstream error: boom`, false}, // 普通 5xx，重试没有意义
-		{200, `EOF`, false},                        // 成功响应里出现 EOF 字样不算
+		{200, `EOF`, false}, // 成功响应里出现 EOF 字样不算
 	}
 	for _, c := range cases {
 		if got := transportFailed(bridge.Result{Status: c.status, Body: []byte(c.body)}); got != c.want {
@@ -306,6 +306,46 @@ func TestHopKeySeparatesEgress(t *testing.T) {
 	viaAirport := alias.Hop{Channel: "OC", Upstream: "gpt-6-luna", Proxy: "http://10.0.0.1:7896"}
 	if hopKey(direct) == hopKey(viaAirport) {
 		t.Fatal("直连与机场必须是两个冷却键，否则直连的 403 会把兜底跳冷却掉")
+	}
+}
+
+func TestMaskProxyMasksUserinfo(t *testing.T) {
+	// 有凭据：保留用户名，口令换 ***
+	if got := maskProxy("http://alice:s3cret@10.0.0.1:7896"); got != "http://alice:***@10.0.0.1:7896" {
+		t.Fatalf("maskProxy = %q", got)
+	}
+	// 只有用户名没有口令：原样返回（没有可掩的口令）
+	if got := maskProxy("http://alice@10.0.0.1:7896"); got != "http://alice@10.0.0.1:7896" {
+		t.Fatalf("maskProxy = %q", got)
+	}
+	// 无凭据（当前配置的形态）：原样返回
+	if got := maskProxy("http://10.0.0.1:7896"); got != "http://10.0.0.1:7896" {
+		t.Fatalf("maskProxy = %q", got)
+	}
+	if got := maskProxy(""); got != "" {
+		t.Fatalf(`maskProxy("") = %q`, got)
+	}
+	// 畸形串：不回显原文 —— 解析失败的串可能带着读不懂的凭据，给固定占位
+	bad := "http://[::1"
+	if got := maskProxy(bad); got == bad || got == "" {
+		t.Fatalf("malformed proxy must not be echoed raw, got %q", got)
+	}
+}
+
+func TestHopKeyForLogMasksCredentials(t *testing.T) {
+	hop := alias.Hop{Channel: "OC", Upstream: "m", Proxy: "http://alice:s3cret@10.0.0.1:7896"}
+	// 日志形态必须脱敏
+	if got := hopKeyForLog(hop); got != "OC|m|http://alice:***@10.0.0.1:7896" {
+		t.Fatalf("hopKeyForLog = %q", got)
+	}
+	// 冷却键保持原始串：掩码串会让「只差口令」的两跳共用键
+	if got := hopKey(hop); got != "OC|m|http://alice:s3cret@10.0.0.1:7896" {
+		t.Fatalf("cooldown key must stay raw, got %q", got)
+	}
+	// 无凭据时两个形态一致（当前配置的实际取值）
+	plain := alias.Hop{Channel: "OC", Upstream: "m", Proxy: "http://10.0.0.1:7896"}
+	if hopKeyForLog(plain) != hopKey(plain) {
+		t.Fatalf("plain proxy must log unchanged: %q vs %q", hopKeyForLog(plain), hopKey(plain))
 	}
 }
 

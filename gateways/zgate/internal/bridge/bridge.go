@@ -52,7 +52,7 @@ type Options struct {
 	// Stream 为 true 时，上行（客户端）请求了 SSE 流式；桥接器把上游的流式响应
 	// 逐 delta 转成 chat SSE 经 OnChunk 推给客户端，首字不再等到整段生成完才出现。
 	// OnChunk 为空（非流式调用方）时退化为原行为：整段合成一个 chunk（与旧版一致）。
-	Stream   bool
+	Stream  bool
 	OnChunk func([]byte) error
 	// Idle 是流式路径的空闲上限（0 = DefaultIdle）。上游连续这么久没有任何字节
 	// 到达就断开并返回 504，把「上游僵死」变成可判定的错误。
@@ -290,35 +290,68 @@ func forwardStream(ctx context.Context, client *http.Client, opts Options, url s
 
 // idleReader 在连续 idle 时长没有任何字节到达时关闭底层连接。
 // 用于把「上游接受了连接但永远不说话」变成一次可判定的读错误。
+//
+// 并发口径：Read 的 timer.Reset 与看门狗回调共用 ir.mu。看门狗触发时按
+// 「距上一个字节是否已空满 idle」判定，而不是无条件判超时 —— 字节在窗口
+// 边缘到达时（Reset 与触发在同一线竞争交错）不算超时，按剩余窗口重排。
+// 旧实现两边无锁，这种边界字节会被误判成 504 静默，让链路白付一次 5min 冷却。
 type idleReader struct {
-	r      io.Reader
-	rc     io.ReadCloser
-	d      time.Duration
-	timer  *time.Timer
-	mu     sync.Mutex
+	r       io.Reader
+	rc      io.ReadCloser
+	d       time.Duration
+	timer   *time.Timer
+	mu      sync.Mutex
+	last    time.Time // 最后一个字节到达（Read 返回 n>0）的时刻
 	tripped bool
+	stopped bool
 }
 
 func newIdleReader(rc io.ReadCloser, d time.Duration) *idleReader {
-	ir := &idleReader{r: rc, rc: rc, d: d}
-	ir.timer = time.AfterFunc(d, func() {
-		ir.mu.Lock()
-		ir.tripped = true
-		ir.mu.Unlock()
-		_ = rc.Close()
-	})
+	ir := &idleReader{r: rc, rc: rc, d: d, last: time.Now()}
+	ir.timer = time.AfterFunc(d, ir.watchdog)
 	return ir
+}
+
+// watchdog 是空闲看门狗：只在确实空满 idle 窗口时关流。
+func (ir *idleReader) watchdog() {
+	ir.mu.Lock()
+	if ir.stopped {
+		ir.mu.Unlock()
+		return
+	}
+	remaining := ir.d - time.Since(ir.last)
+	if remaining > 0 {
+		// 窗口边缘来过字节：不算超时。必须重排，否则这条流再没有人排看门狗，
+		// 真僵死时要拖到外层总超时才断。
+		ir.timer.Reset(remaining)
+		ir.mu.Unlock()
+		return
+	}
+	ir.tripped = true
+	ir.mu.Unlock()
+	_ = ir.rc.Close()
 }
 
 func (ir *idleReader) Read(p []byte) (int, error) {
 	n, err := ir.r.Read(p)
 	if n > 0 {
-		ir.timer.Reset(ir.d)
+		now := time.Now()
+		ir.mu.Lock()
+		ir.last = now
+		if !ir.tripped && !ir.stopped {
+			ir.timer.Reset(ir.d)
+		}
+		ir.mu.Unlock()
 	}
 	return n, err
 }
 
-func (ir *idleReader) stop() { ir.timer.Stop() }
+func (ir *idleReader) stop() {
+	ir.mu.Lock()
+	ir.stopped = true
+	ir.mu.Unlock()
+	ir.timer.Stop()
+}
 
 func (ir *idleReader) timedOut() bool {
 	ir.mu.Lock()
@@ -330,7 +363,8 @@ func (ir *idleReader) timedOut() bool {
 // 三种增量都翻译成 chat SSE。返回本轮是否出现过工具调用（决定 finish_reason）。
 func streamAnthropic(r io.Reader, emit func(map[string]any, any) error) (bool, error) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
+	// 初始缓冲给小的：Scanner 行超长会自动翻倍到 8MB 上限，急切占 1MB 只浪费。
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	var ev string
 	sawTool := false
 	toolIndex := -1
@@ -432,7 +466,8 @@ func streamAnthropic(r io.Reader, emit func(map[string]any, any) error) (bool, e
 // 都翻译成 chat SSE。返回本轮是否出现过工具调用（决定 finish_reason）。
 func streamResponses(r io.Reader, emit func(map[string]any, any) error) (bool, error) {
 	sc := bufio.NewScanner(r)
-	sc.Buffer(make([]byte, 1024*1024), 8*1024*1024)
+	// 同 streamAnthropic：初始缓冲给小的，Scanner 按需翻倍到 8MB 上限。
+	sc.Buffer(make([]byte, 64*1024), 8*1024*1024)
 	sawTool := false
 	toolIndex := -1
 	// item id / call_id -> chat tool_calls 的连续序号
