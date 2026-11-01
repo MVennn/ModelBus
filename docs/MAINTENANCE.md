@@ -398,6 +398,7 @@ Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒）�
 
 | 日期 | 做了什么 | 结果 |
 |---|---|---|
+| 2026-11-01 | 收尾大扫除：清 9 处 `__pycache__` 与 5 份过期定价备份；按 §3「历史报告只留首版与最近版」裁剪 go-model-sync 报告 25→7、MODEL-SYNC 报告 11→5（被 CHANGELOG/PROGRESS 引用者保留），同步报告索引 | `python tools/check-docs.py` 通过 |
 | 2026-10-23 | 统一模型命名：四组（主力/免费/低耗/高耗）、`渠道/积分/型号`、alias map、协议桥接 | 43 个模型 / 4 个 provider；37 ok，5 个 WB GB 因池冷却暂为瞬时限流 |
 | 2026-10-23 | 接入 Qoder：qoder2api-hub clone 到 `gateways/upstream/qoder`（8790）、OAuth 账号、独立 `qoder` provider、同步/探测脚本与文档 | 7 个模型探测 200；免费 `DeepSeek-Flash` 1.1s；`Qwen3.8-Flash` 因 10605 排队暂不收录 |
 | 2026-10-22 | 收尾大扫除：清 `__pycache__` 与过期定价备份；对齐模型计数 / 快照日期、Release 说明反馈入口、AGENTS 的 CodeGraph 状态 | 仓库 53109K → 53053K；`python tools/check-docs.py` 通过 |
