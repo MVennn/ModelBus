@@ -500,9 +500,10 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		resp, err := s.client.Do(req)
 		if err != nil {
-			// 客户端已经走了（用户中断 / 切模型 / 页面关掉）：这次请求本身作废，
-			// 重试只会让上游多收一次、日志多刷一行。2026-11-02 实测：一次取消
-			// 风暴在半秒内放大成 8 条「传输层失败 context canceled，300ms 后重试」。
+			// 客户端已经走了（用户中断 / 切模型 / 页面关掉）：这次请求作废，直接收工。
+			// 下面 select 的 Done 分支本来也会返回，但那样得先打出「300ms 后重试同一跳」
+			// —— 2026-11-02 实测一次取消风暴里刷了 8 条永远不会发生的重试行，误导排查。
+			// 提前判掉还有一个作用：把「不重试」写成显式契约，而不是依赖 select 的副作用。
 			if r.Context().Err() != nil {
 				return
 			}

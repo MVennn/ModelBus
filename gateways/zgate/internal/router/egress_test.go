@@ -232,9 +232,12 @@ func TestTransportFailureRetriesSameHop(t *testing.T) {
 }
 
 func TestClientCancelDoesNotRetry(t *testing.T) {
-	// 客户端中途取消（用户点停止 / 切模型 / 关页面）不是「上游黑洞」：
-	// 那次请求本身已作废，重试只是多打一次上游。2026-11-02 实测一次取消风暴
-	// 在半秒内被放大成 8 条「传输层失败 context canceled，300ms 后重试」。
+	// 契约：客户端取消后，上游只能被调用一次。
+	//
+	// 注意这条断言在修复前也成立 —— 旧代码是靠重试前那个 select 的 `<-ctx.Done()`
+	// 分支顺带返回的，副作用是仍会打一行「300ms 后重试同一跳」的假重试日志。
+	// 现在把它钉成显式断言：以后谁改重试循环（比如把 select 换成 sleep），
+	// 真的多打一次上游就会红。
 	var mu sync.Mutex
 	attempts := 0
 	release := make(chan struct{})
