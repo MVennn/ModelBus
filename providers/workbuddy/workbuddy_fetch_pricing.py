@@ -53,8 +53,12 @@
     # 指定输出位置
     python workbuddy_fetch_pricing.py --output cache/wb_pricing.json
 
-    # 确认是真实的大规模下架，跳过“列表骤降”保护
+    # 确认是真实的大规模下架，跳过“列表骤降”保护（不逐个探活）
     python workbuddy_fetch_pricing.py --force
+
+    # 列表骤降时默认逐个探活（经网关发最小对话请求）：还能调用的保留旧价格，
+    # 只有上游明确回「模型不可用」的才判下架；状态未知（429/5xx/超时）一律保留
+    python workbuddy_fetch_pricing.py --no-probe   # 旧行为：骤降直接拒写
 
 环境变量
 --------
@@ -222,6 +226,44 @@ def fetch_models(base: str, key: str, timeout: int = 25) -> list[dict]:
     return models
 
 
+def probe_alive(base: str, key: str, model_id: str, timeout: int = 40) -> str:
+    """经网关发一条最小对话请求，判断这个型号现在还能不能用。
+
+    返回 `ok` / `dead` / `unknown`。判据取窄：只有上游明确说「模型不存在/不可用」
+    （网关把 11102 `service info not found`、`model_unavailable` 原样带回）才算 dead；
+    429、5xx、超时这类临时态一律 unknown —— 绝不因为一次抖动把模型从价格表里删掉。
+    """
+    payload = {
+        "model": model_id,
+        "messages": [{"role": "user", "content": "hi"}],
+        "max_tokens": 4,
+        "stream": False,
+    }
+    req = urllib.request.Request(
+        base.rstrip("/") + "/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        method="POST",
+    )
+    req.add_header("Content-Type", "application/json")
+    if key:
+        req.add_header("Authorization", f"Bearer {key}")
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            return "ok" if resp.status == 200 else "unknown"
+    except urllib.error.HTTPError as e:
+        body = e.read(600).decode("utf-8", "replace")
+        if e.code in (400, 404) and (
+            "model_unavailable" in body
+            or "11102" in body
+            or "service info not found" in body
+            or "model not found" in body.lower()
+        ):
+            return "dead"
+        return "unknown"
+    except Exception:
+        return "unknown"
+
+
 def main() -> int:
     ap = argparse.ArgumentParser(description="抓取 WorkBuddy 网关价格表")
     ap.add_argument("--base", default=GATEWAY_BASE, help="网关地址（默认 %(default)s）")
@@ -229,6 +271,10 @@ def main() -> int:
     ap.add_argument("--output", default=str(DEFAULT_OUTPUT), help="输出路径（默认 %(default)s）")
     ap.add_argument("--dry-run", action="store_true", help="只打印结果，不写文件")
     ap.add_argument("--force", action="store_true", help="列表骤降时仍然写入（确认是真实下架）")
+    ap.add_argument("--no-probe", action="store_true",
+                    help="列表骤降时不做逐个探活，直接拒写（旧行为）")
+    ap.add_argument("--probe-timeout", type=int, default=40,
+                    help="逐个探活的单次超时秒数（默认 %(default)s）")
     ap.add_argument("--timeout", type=int, default=25, help="请求超时秒数（默认 %(default)s）")
     args = ap.parse_args()
 
@@ -274,19 +320,46 @@ def main() -> int:
     if removed:
         print(f"   下架 {len(removed)} 个：{', '.join(removed[:8])}{' …' if len(removed) > 8 else ''}")
 
-    # 安全阀：网关偶尔会返回残缺列表（例如只剩 global 池）。数量骤降时不覆盖
-    # 旧表，否则下游同步会把正常模型当成“已下架”从配置里删掉。
+    # 安全阀：网关偶尔会返回残缺列表（例如只剩 global 池、或账号菜单被上游收窄）。
+    # 数量骤降时先**逐个探活**：网关的目录口径是「CLI 菜单」，比实际可调用面窄 ——
+    # 2026-11-02 实测旧表 52 条而菜单只回 20 条，被剔掉的 32 个里还有 15 个能正常出字。
+    # 所以「不在菜单里」不等于「下架」：只有上游明确回 11102/model_unavailable 才判死，
+    # 其余（429/5xx/超时）按未知处理，保留旧价格。
     if old and len(rows) < len(old) * 0.7:
         pct = 100 - len(rows) * 100 // len(old)
         print(
-            f"!! 上游返回 {len(rows)} 条，旧表 {len(old)} 条，减少 {pct}%；疑似网关临时残缺。",
+            f"!! 上游返回 {len(rows)} 条，旧表 {len(old)} 条，减少 {pct}%；疑似网关临时残缺，开始逐个探活。",
             file=sys.stderr,
         )
         if removed:
             print(f"   被判定为下架的 {len(removed)} 个：{', '.join(removed)}", file=sys.stderr)
         if not args.force and not args.dry_run:
-            print("   未写入；确认是真实下架后加 --force 重跑。", file=sys.stderr)
-            return 2
+            if args.no_probe:
+                print("   未写入（--no-probe）；确认是真实下架后加 --force 重跑。", file=sys.stderr)
+                return 2
+            kept, dead, unknown = [], [], []
+            for mid in removed:
+                verdict = probe_alive(args.base, args.api_key, mid, args.probe_timeout)
+                {"ok": kept, "dead": dead}.get(verdict, unknown).append(mid)
+            if unknown and not kept and not dead:
+                print(
+                    "   全部探活失败（网关/网络不可用？）—— 不据此改写价格表。",
+                    file=sys.stderr,
+                )
+                return 2
+            if kept:
+                print(f"   仍可调用 {len(kept)} 个，保留旧价格：{', '.join(kept[:8])}"
+                      f"{' …' if len(kept) > 8 else ''}", file=sys.stderr)
+                rows.extend(old[mid] for mid in kept)
+                rows.sort(key=lambda r: r["id"])
+            if unknown:
+                print(f"   状态未知 {len(unknown)} 个（429/5xx/超时），按保留处理："
+                      f"{', '.join(unknown[:8])}{' …' if len(unknown) > 8 else ''}", file=sys.stderr)
+                rows.extend(old[mid] for mid in unknown)
+                rows.sort(key=lambda r: r["id"])
+            if dead:
+                print(f"   已确认下架 {len(dead)} 个：{', '.join(dead)}", file=sys.stderr)
+            removed = dead
 
     if args.dry_run:
         print("（--dry-run，未写文件）")

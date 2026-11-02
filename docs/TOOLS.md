@@ -34,7 +34,7 @@
 | `tools/sync_report.py` | **同步报告**：对比上一轮快照（`~/.zcode/v2/model-sync-state.json`），写出本次新增 / 移除 / 分组变化 / 链路变化；`--write` 落 `docs/reports/MODEL-SYNC-<时间>.md` 并更新索引，`--push` 再 `git add/commit/push`。自动化最后一步跑它 | 报告 `docs/reports/*.md`、索引 `docs/reports/README.md`、快照 `model-sync-state.json` | ✅ 长期 |
 | `tools/model_probe.py` | 用 **ZCode 真实 body**（`zcode_effective_body.js` + provider id）探测三组模型；经 7871，含桥接模型；结果带 `ever_ok` | `~/.zcode/v2/model_probe.json`（活数据） | ✅ 长期 |
 | `gateways/legacy-router/protocol_bridge.js` | chat ↔ Anthropic Messages / OpenAI Responses 转换（旧 Node 实现，已由 zgate 内置桥取代） | 由 `unified-router.js` require | ⚠️ 回退用（保留一个版本） |
-| `providers/workbuddy/workbuddy_fetch_pricing.py` | 拉网关目录接口 → 归一化 → 写价格表（打印倍率变化 / 新增 / 下架摘要） | `providers/workbuddy/cache/wb_pricing.json`（写前自动备份） | ✅ 长期 |
+| `providers/workbuddy/workbuddy_fetch_pricing.py` | 拉网关目录接口 → 归一化 → 写价格表（打印倍率变化 / 新增 / 下架摘要）；条数骤降时逐个探活，只删确认下架的 | `providers/workbuddy/cache/wb_pricing.json`（写前自动备份） | ✅ 长期 |
 | `providers/workbuddy/workbuddy_probe_zcode.py` | 用 **ZCode 真实 body** 探测网关模型可用性，可断点续跑 | `providers/workbuddy/cache/wb_zcode_probe.json`；`workbuddy/logs/wb_zcode_probe.log` | ✅ 长期 |
 | `providers/workbuddy/workbuddy_zcode_sync.py` | **默认统一模式**：把 WorkBuddy 模型并入 OpenCode 的五个 chat 组（组内 CN 优先、按厂商分组、主力置顶）；`--separate` 才写免代 / 低代 / 高代 / 备用四个独立 provider。倍率取价格表归一化的 `eff_rate`/`list_rate`（免费 `-f` 条目 0.0 进免代）；probe 为 blocked/unavailable 的模型移除，复通后自动加回。`--reclassify-only` 只搬备用档，`--reorder-only` 只重排（分离模式） | 备份 `provider_config.json.bak-wbproxy-<时间戳>` | ✅ 长期 |
 | `providers/workbuddy/zcode_effective_body.js` | 复刻 ZCode 引擎的规则解析顺序，算某 modelId **真实会发的请求体** | stdout JSON | ✅ 长期（`probe_zcode.py` 依赖它，必须同目录） |
