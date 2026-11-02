@@ -116,11 +116,13 @@ MAIN_ORDER = [
 ]
 MAIN_IDS = set(MAIN_ORDER)
 # 省钱组：每个厂商留 1–2 个特色型号（用户 2026-10-28 口径：前旗舰/旧版本全砍，
-# 只留"最能代表这家、日常会用"的）。命中这里才进组，未命中的模型直接不收录 ——
-# 组里不会出现用不上的模型。
+# 只留"最能代表这家、日常会用"的）。
 # ⚠️ 这是**严格有序白名单**：组内顺序由 LOW_ORDER 决定（不是按厂商最低价，
 # 否则便宜厂商会顶到前面把列表打乱）；命中这里即进组，不受 LOW_MAX 价格上限约束，
 # 所以小米 MiMo-2.6-Pro（0.19）也能留在省钱组当厂商旗舰。
+# 名单之外还有一条自动补位（2026-11-02 用户口径）：**新冒出来的一家公司**、或
+# **这家公司更新的一代**，只要价格 ≤ LOW_MAX 就自动收录一条 —— 见 pick_auto_low。
+# 老型号、同代兄弟型号仍然不收录，组里不会堆废物。
 # 省钱组排列顺序（唯一权威来源）：总价档无关，按"厂商代表型号"排。
 # 价格随价格源走，不写死。LOW_PICKS 由它派生，避免两份名单各自维护而漂移。
 # 各行尾注释说明「为什么这家留这个型号」：
@@ -1012,7 +1014,86 @@ def _picked(entry: dict, hop: dict, wanted: set[str]) -> bool:
     return False
 
 
-def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict]) -> tuple[str, str]:
+def _version_of(entry: dict) -> tuple[int, ...]:
+    """上游 id 里的第一个版本号（`muse-spark-1.3-contributor` → (1, 3)）。
+
+    用于判断「这是不是这家公司更新的一代」。只取第一段数字：`hy3-x` 与 `hy3`
+    都是 (3,)，同代；`mimo-v2.6-pro` (2, 6) 新于 `mimo-v2.5` (2, 5)。
+    """
+    for hop in entry["chain"]:
+        for value in (hop.get("base_model"), hop.get("upstream")):
+            m = re.search(r"(\d+(?:\.\d+)*)", str(value or ""))
+            if m:
+                return tuple(int(x) for x in m.group(1).split("."))
+    return ()
+
+
+def _vendor_of_entry(entry: dict) -> str | None:
+    """条目的厂商标记；认不出来的（OTHER）不参与自动收录，免得把杂项堆进省钱组。"""
+    vendor = vendor_of(str(entry.get("abbr") or ""))
+    return None if vendor == "OTHER" else vendor
+
+
+def pick_auto_low(entries: list[dict], arena_targets: dict[tuple[str, str], dict]) -> set[int]:
+    """按厂商自动补「这家公司的代表型号」，返回要自动收录的条目 id 集合。
+
+    口径（用户 2026-11-02）：省钱组是「每家公司一个特色型号」的人工名单，但
+    **新冒出来的一家公司**、或**这家公司更新的一代**，不该因为没写进名单就丢掉。
+    规则：
+      · 只考虑 0 < 价格 ≤ LOW_MAX 的条目（省钱档）；
+      · 每个厂商最多自动补 1 条，取版本号最高者（同版本取便宜的）；
+      · 该厂商还没有任何代表（主力或省钱里都没有）→ 收录；
+        已有代表但新条目版本更高（这家出了新一代）→ 也收录；
+      · 人工点名的条目永远优先，自动条目排在组尾。
+    """
+    represented: dict[str, list[tuple[int, ...]]] = {}
+    for entry in entries:
+        if entry.get("is_pool"):
+            continue
+        manual = (
+            any(_picked(entry, hop, MAIN_IDS) for hop in entry["chain"])
+            or any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"])
+            or any((hop["channel"], hop["upstream"]) in arena_targets for hop in entry["chain"])
+        )
+        if not manual:
+            continue
+        vendor = _vendor_of_entry(entry)
+        if vendor:
+            represented.setdefault(vendor, []).append(_version_of(entry))
+
+    best: dict[str, tuple[tuple[int, ...], float, dict]] = {}
+    for entry in entries:
+        if entry.get("is_pool"):
+            continue
+        price = float(entry["price"])
+        if price <= 0 or price > LOW_MAX:
+            continue
+        if any(_picked(entry, hop, MAIN_IDS) for hop in entry["chain"]):
+            continue
+        if any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"]):
+            continue
+        if any((hop["channel"], hop["upstream"]) in arena_targets for hop in entry["chain"]):
+            continue
+        vendor = _vendor_of_entry(entry)
+        if not vendor:
+            continue
+        version = _version_of(entry)
+        current = best.get(vendor)
+        # 版本高者胜；同版本取便宜的（价格取负号排进元组）。
+        if current is None or (version, -price) > (current[0], -current[1]):
+            best[vendor] = (version, price, entry)
+
+    picked: set[int] = set()
+    for vendor, (version, _, entry) in best.items():
+        have = represented.get(vendor) or []
+        if have and not any(version > v for v in have):
+            continue
+        picked.add(id(entry))
+    return picked
+
+
+def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
+                auto_ids: set[int] | None = None) -> tuple[str, str]:
     """Return (group, reason) for a merged entry. `drop` = 不收录。"""
     # 集合体是「一整串上游」的人造条目：它的跳会包含很多被单型号名单点名的 id，
     # 按跳匹配会把它误吸进主力（91 跳的快速池命中 deepseek-v4.1-flash 的桥接版）。
@@ -1032,6 +1113,9 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict]) -> tupl
         # 严格白名单命中即进省钱组，不受 LOW_MAX 价格上限约束
         # （小米 MiMo-2.6-Pro 0.19 也借此留在组里当厂商旗舰）。
         return "low", ""
+    if auto_ids and id(entry) in auto_ids:
+        # 名单外但价格在省钱档、且是该厂商的新公司/新一代 —— 见 pick_auto_low。
+        return "low", "auto"
     return "drop", ""
 
 
@@ -1187,10 +1271,19 @@ def main() -> int:
                 str(prev_entry.get("protocol") or ""),
             )
             prev_names.setdefault(key, prev_name)
+    # 省钱组的自动补位：新公司/新一代型号即使没写进 LOW_ORDER 也收录一条。
+    auto_low = pick_auto_low(entries, arena_targets)
     for entry in entries:
-        group, main_reason = entry_group(entry, arena_targets)
+        group, main_reason = entry_group(entry, arena_targets, auto_low)
         if group == "drop":
-            skipped.append(f"{entry['name']} (price {entry['price']:g}，未在主力/省钱名单)")
+            if float(entry["price"]) <= LOW_MAX:
+                skipped.append(
+                    f"{entry['name']} (price {entry['price']:g}，同厂商已有同代/更高代代表)"
+                )
+            else:
+                skipped.append(
+                    f"{entry['name']} (price {entry['price']:g} > 省钱档 {LOW_MAX:g})"
+                )
             continue
         if args.max_price > 0 and entry["price"] > args.max_price and group != "main":
             skipped.append(f"{entry['name']} (price {entry['price']:g} > {args.max_price:g})")

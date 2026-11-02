@@ -128,6 +128,55 @@ class PriceIsDerivedTest(unittest.TestCase):
         self.assertEqual(M.entry_group(entry_for("cn:some-free", 0.0), {}), ("free", ""))
 
 
+class AutoLowTest(unittest.TestCase):
+    """省钱组的自动补位（2026-11-02）：新厂商 / 新一代进组，同代兄弟与老型号不进。
+
+    规则见 `pick_auto_low`：价格 ≤ LOW_MAX，且该厂商还没有代表、或版本号高于现有代表。
+    """
+
+    def _entry(self, upstream: str, price: float) -> dict:
+        item = chain_item(("WB", upstream, 0.0))
+        built = M.family_entries(
+            M.expand_hops(item), {upstream: wb_record(price)}, {}, "auto"
+        )[0]
+        return dict(built, price=price)
+
+    def test_new_vendor_is_picked(self):
+        """名单里没有的厂商（MUSE），价格在省钱档 -> 自动进省钱组。"""
+        entry = self._entry("cn:muse-spark-1.3-contributor", 0.04)
+        picked = M.pick_auto_low([entry], {})
+        self.assertIn(id(entry), picked)
+        self.assertEqual(M.entry_group(entry, {}, picked), ("low", "auto"))
+
+    def test_only_newest_per_vendor(self):
+        """同一家两个版本：只收版本高的那个。"""
+        old = self._entry("cn:muse-spark-1.2-contributor", 0.04)
+        new = self._entry("cn:muse-spark-1.3-contributor", 0.04)
+        picked = M.pick_auto_low([old, new], {})
+        self.assertIn(id(new), picked)
+        self.assertNotIn(id(old), picked)
+
+    def test_same_generation_sibling_is_not_picked(self):
+        """腾讯已有 HY3-X（3 代），同代的 HY3 不该因为便宜就混进组。"""
+        incumbent = self._entry("cn:hy3-x", 0.05)
+        sibling = self._entry("cn:hy3", 0.11)
+        picked = M.pick_auto_low([incumbent, sibling], {})
+        self.assertNotIn(id(sibling), picked)
+        self.assertEqual(M.entry_group(sibling, {}, picked), ("drop", ""))
+
+    def test_newer_generation_is_picked(self):
+        """这家出了新一代（HY4 > HY3-X 的 3 代）-> 收录。"""
+        incumbent = self._entry("cn:hy3-x", 0.05)
+        newer = self._entry("cn:hy4-preview-f", 0.05)
+        picked = M.pick_auto_low([incumbent, newer], {})
+        self.assertIn(id(newer), picked)
+
+    def test_over_budget_is_never_picked(self):
+        """超过省钱档（0.22）的模型，哪怕厂商没代表也不自动收录。"""
+        entry = self._entry("cn:longcat-2.0", 0.22)
+        self.assertEqual(M.pick_auto_low([entry], {}), set())
+
+
 class DriftCheckTest(unittest.TestCase):
     def _grouped(self, price: float) -> dict:
         entry = M.family_entries(
