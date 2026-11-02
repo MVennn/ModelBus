@@ -6,8 +6,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"zgate/internal/alias"
 	"zgate/internal/bridge"
@@ -226,6 +228,54 @@ func TestTransportFailureRetriesSameHop(t *testing.T) {
 	}
 	if got != 2 {
 		t.Fatalf("expected exactly 2 attempts (1 fail + 1 retry), got %d", got)
+	}
+}
+
+func TestClientCancelDoesNotRetry(t *testing.T) {
+	// 客户端中途取消（用户点停止 / 切模型 / 关页面）不是「上游黑洞」：
+	// 那次请求本身已作废，重试只是多打一次上游。2026-11-02 实测一次取消风暴
+	// 在半秒内被放大成 8 条「传输层失败 context canceled，300ms 后重试」。
+	var mu sync.Mutex
+	attempts := 0
+	release := make(chan struct{})
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts++
+		mu.Unlock()
+		<-release // 挂住，等测试取消客户端请求
+	}))
+	defer srv.Close()
+	defer close(release)
+
+	front := httptest.NewServer(newEgressServer(t, `{
+		"models":{"M":{"channel":"OC","upstream":"m","base":"`+srv.URL+`","protocol":"chat",
+			"chain":[{"upstream":"m","base":"`+srv.URL+`","channel":"OC","protocol":"chat","price":0.1}]}},
+		"legacy":{}
+	}`).Handler())
+	defer front.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, front.URL+"/v1/chat/completions",
+		strings.NewReader(`{"model":"M","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`))
+	if err != nil {
+		t.Fatalf("new request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	go func() {
+		time.Sleep(100 * time.Millisecond)
+		cancel()
+	}()
+	if resp, err := http.DefaultClient.Do(req); err == nil {
+		_ = resp.Body.Close()
+		t.Fatal("expected the cancelled request to fail client-side")
+	}
+	// 等过重试窗口再看：修好之后不会出现第二次上游调用。
+	time.Sleep(2 * transportRetryDelay)
+	mu.Lock()
+	got := attempts
+	mu.Unlock()
+	if got != 1 {
+		t.Fatalf("client cancel must not trigger a retry: want 1 upstream attempt, got %d", got)
 	}
 }
 

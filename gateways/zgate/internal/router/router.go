@@ -500,6 +500,12 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		resp, err := s.client.Do(req)
 		if err != nil {
+			// 客户端已经走了（用户中断 / 切模型 / 页面关掉）：这次请求本身作废，
+			// 重试只会让上游多收一次、日志多刷一行。2026-11-02 实测：一次取消
+			// 风暴在半秒内放大成 8 条「传输层失败 context canceled，300ms 后重试」。
+			if r.Context().Err() != nil {
+				return
+			}
 			// 传输层失败（EOF / TLS 握手超时 / 连接被重置）说明请求大概率没被上游
 			// 受理过，重试同一条腿通常就能过 —— 先重试本跳一次，再谈回落。
 			// 2026-10-31 实测：机场某节点对 opencode.ai 的大包短暂黑洞，5 KB 以上的
