@@ -1950,3 +1950,31 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
   会转义成 `%2A%2A%2A`，故按 userinfo 原文定位替换
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-02 第七轮：同步链路的四处修复 + 两个网关升级
+
+## 任务目标
+按用户直接指令跑五段模型同步，并把我上一轮发现的问题（地区受限误删、价格表骤降、省钱组名单外丢新模型、客户端取消刷假重试）一并修掉。
+
+## 已完成变更
+- [x] WorkBuddy2API 上游更新：clone 从 `v2026.10.30.1049` 跟到 `misakano/main`（+52 提交），保留本地三处补丁，`goproxy.cn` 构建，临时端口验证后原子替换 `wb2api.exe`（备份 `wb2api.exe.bak-20261102-130504`）。
+- [x] `go_model_sync.py` 体检改走机场（`HTTPS_PROXY=http://10.0.0.1:7896`）：Beam / GPT-6-Luna / Muse-Spark 的地区受限 403 不再误判为「上游不可用」。
+- [x] `workbuddy_fetch_pricing.py`：列表骤降改**逐个探活**（200 保留 / 11102 判死 / 429-5xx 未知保留 / 全失败拒写），新增 `--no-probe` / `--probe-timeout`。
+- [x] `tools/model_alias.py`：新增 `pick_auto_low()` —— 新厂商或新一代且 ≤0.11 自动进省钱组（每厂商最多 1 条）；Qoder 倍率落快照 `providers/qoder/cache/qd_prices.json`，8790 停着时不再丢定价。
+- [x] `gateways/zgate`：客户端取消后提前返回，不再打印「300ms 后重试同一跳」的假重试日志；新增 `TestClientCancelDoesNotRetry`。
+- [x] zgate 二进制换新：`%LOCALAPPDATA%\ZCodeGateway\swap-zgate.ps1`（预检→备份→停→换→起→轮询 health→失败回滚），另留 `start-zgate.bat` 手动拉起。
+
+## 验收
+- 分组 18 条（主力 2 / 免费 6 / 省钱 10），`model_alias --check` 无漂移；新增 Muse-Spark1.3、GPT-6-Luna、Beam，均经 7871 实测 200。
+- 价格表 52 → 37（保留 15 个仍可调用 + 2 个未知，确认下架 15 个）。
+- `go test ./internal/router/` 通过；`tests/test_model_alias_price.py` 15/15。
+- `curl 127.0.0.1:7871/health` 200、alias 18、WB 子进程 running、换二进制后日志无新增「传输层失败」。
+
+## 待解决 / 注意事项
+- 网关目录只剩 20 条是**账号侧 CLI 菜单收窄**（新版本同样如此），已用探活机制兜住，不再阻塞价格表更新。
+- zgate 换二进制会断 2-3 秒所有聊天流量，必须在「不需要模型回复」的工具调用里做。
+- `evidence/go-model-sync-*.md` 三个运行产物未入库。
+
+## 状态: 已完成
