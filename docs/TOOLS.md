@@ -55,6 +55,7 @@
 | `providers/workbuddy/cache/wb_pricing.json` | 网关 56 个模型的倍率 / 上下文 / 输出上限 / effort 档位快照 | 由 `workbuddy_fetch_pricing.py` 生成 | ⚠️ 活数据 |
 | `providers/workbuddy/cache/wb_zcode_probe.json` | 探测结果缓存（status / variant / http / detail / rate） | 被 `workbuddy_zcode_sync.py` 读取 | ⚠️ 活数据 |
 | `providers/qoder/qoder_probe.json` | Qoder 模型探测结果（status / variant / http / detail） | 被 `qoder/qoder_zcode_sync.py --probe-file` 读取；`.gitignore` 排除 | ⚠️ 活数据 |
+| `providers/qoder/cache/qd_prices.json` | Qoder 实时倍率快照（`price_factor` + 峰谷） | 由 `tools/model_alias.py` 每次成功读到 8790 时写入；8790 停着时优先用它，**再退**硬编码 `<QD_PRICES>` | ⚠️ 活数据 |
 | `~/.zcode/v2/model_probe.json` | 三组统一探测结果（status / http / provider / ever_ok） | 被 `tools/model_alias.py --probe-file` 读取 | ⚠️ 活数据 |
 | `~/.zcode/v2/arena-leaderboard.json` | ArenaGalleri 榜单原始响应 + `_fetched_at` | 榜单接口不可用时的缓存；`--refresh` 覆盖 | ⚠️ 活数据 |
 | `~/.zcode/v2/arena-main.json` | 主力候选（基准分 / 窗口规则 / 每个候选的 channel、upstream、分数、积分） | 由 `tools/arena_leaderboard.py` 生成，被 `model_alias.py` 读取 | ⚠️ 活数据 |

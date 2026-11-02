@@ -366,12 +366,17 @@ _UNPRICED: dict[str, int] = {}
 _CHANNEL_ITEMS: dict[str, int] = {}
 
 
-def _warn_price_once(channel: str, detail: str) -> None:
-    """价格源不可用必须留痕：静默返回空表会把整个渠道的模型从配置里剔除。"""
+def _warn_price_once(channel: str, detail: str, fallback: str = "") -> None:
+    """价格源不可用必须留痕：静默返回空表会把整个渠道的模型从配置里剔除。
+
+    `fallback` 非空时说明已经回落到快照/硬编码表，告警只提示「价格不是实时」，
+    不再说成「无法定价」—— 否则每轮都会误导成故障。
+    """
     if channel in _PRICE_WARNED:
         return
     _PRICE_WARNED.add(channel)
-    print(f"WARN: {channel} 价格源不可用（{detail}），该渠道模型将无法定价", file=sys.stderr)
+    tail = fallback or "该渠道模型将无法定价"
+    print(f"WARN: {channel} 价格源不可用（{detail}），{tail}", file=sys.stderr)
 
 
 def _warn_stale_cache(path: Path, label: str, refresh_hint: str,
@@ -444,6 +449,12 @@ def wb_prices() -> dict[str, dict]:
 
 
 def qd_prices() -> dict[str, dict]:
+    """Qoder 实时倍率；8790 不在线时依次回落「上次成功的快照」→ 硬编码表。
+
+    qoder 是 zgate 的 ondemand 子进程，绝大多数时间 8790 是停着的 —— 只靠下面那张
+    硬编码表会让新型号永远定不了价（新模型→无价→被 drop）。所以每次成功读到实时倍率
+    就落一份快照，下次 8790 没起时优先用它。
+    """
     env = read_env(QD_ENV)
     key = os.environ.get("QD_API_KEY") or env.get("QD_API_KEY") or ""
     if key:
@@ -467,13 +478,40 @@ def qd_prices() -> dict[str, dict]:
                     "off_peak": model.get("off_peak") or {},
                 }
             if out:
+                _cache_qd_prices(out)
                 return out
         except Exception as exc:
-            _warn_price_once("QD", f"127.0.0.1:8790: {exc}")
+            _warn_price_once(
+                "QD", f"127.0.0.1:8790: {exc}",
+                "已回落到上次成功的倍率快照" if QD_CACHE.exists() else "已回落到硬编码倍率表",
+            )
+    cached = _read_qd_cache()
+    if cached:
+        return cached
     return {
         name: {"price": price, "peak": price, "valley": price, "off_peak": {}}
         for name, price in QD_PRICES.items()
     }
+
+
+QD_CACHE = REPO / "providers" / "qoder" / "cache" / "qd_prices.json"
+
+
+def _cache_qd_prices(prices: dict[str, dict]) -> None:
+    """落一份实时倍率快照（写失败不影响主流程）。"""
+    try:
+        QD_CACHE.parent.mkdir(parents=True, exist_ok=True)
+        QD_CACHE.write_text(json.dumps(prices, ensure_ascii=False, indent=2), encoding="utf-8")
+    except OSError:
+        pass
+
+
+def _read_qd_cache() -> dict[str, dict]:
+    try:
+        data = json.loads(QD_CACHE.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
 
 
 def in_off_peak(record: dict) -> bool:

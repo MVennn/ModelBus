@@ -1,0 +1,79 @@
+{
+  "Auto": {
+    "price": 0.5,
+    "peak": 0.5,
+    "valley": 0.5,
+    "off_peak": {}
+  },
+  "Qwen3.8-Max": {
+    "price": 0.5,
+    "peak": 0.5,
+    "valley": 0.2,
+    "off_peak": {
+      "active": false,
+      "window_start": "22:00",
+      "window_end": "08:00",
+      "timezone": "Asia/Shanghai",
+      "discount_factor": 0.4,
+      "badge": "错峰 4 折",
+      "badge_en": "Off-Peak 60% off",
+      "description": "错峰时段4折优惠（10 PM-8 AM UTC+8）",
+      "description_en": "Off-Peak 60% off (10 PM-8 AM UTC+8)",
+      "link": "https://docs.qoder.cn/product-overview/qwen-3-7-series-model-staggering-discount"
+    }
+  },
+  "Qwen3.8-Flash": {
+    "price": 0.0,
+    "peak": 0.1,
+    "valley": 0.0,
+    "off_peak": {}
+  },
+  "DeepSeek-V4-Pro": {
+    "price": 0.5,
+    "peak": 0.5,
+    "valley": 0.5,
+    "off_peak": {}
+  },
+  "DeepSeek-Flash": {
+    "price": 0.1,
+    "peak": 0.1,
+    "valley": 0.1,
+    "off_peak": {}
+  },
+  "GLM-5.3": {
+    "price": 0.8,
+    "peak": 0.8,
+    "valley": 0.8,
+    "off_peak": {}
+  },
+  "GLM-5.3-Flash": {
+    "price": 0.1,
+    "peak": 0.1,
+    "valley": 0.1,
+    "off_peak": {}
+  },
+  "Kimi-K3.1-Pro": {
+    "price": 1.0,
+    "peak": 1.0,
+    "valley": 1.0,
+    "off_peak": {}
+  },
+  "Kimi-K2.8-Preview": {
+    "price": 0.8,
+    "peak": 0.8,
+    "valley": 0.8,
+    "off_peak": {}
+  },
+  "MiniMax-M3.1-Flash": {
+    "price": 0.1,
+    "peak": 0.1,
+    "valley": 0.1,
+    "off_peak": {}
+  },
+  "Fast": {
+    "price": 0.8,
+    "peak": 0.8,
+    "valley": 0.8,
+    "off_peak": {}
+  }
+}
