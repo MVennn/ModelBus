@@ -269,13 +269,28 @@ def upsert_provider(cfg: dict, rule: dict, order_after: str) -> str:
     return action
 
 
+def model_rule_config(model: dict) -> dict:
+    """模型级规则：把 Qoder 目录里的 reasoning_efforts 写成 ZCode 的档位表。
+
+    不写 values 的话 ZCode 落到兜底规则 `.*`（["disabled","enabled"]），界面只剩
+    思考开关、上游声明的低档发不出去。**顺序 = 下拉顺序**，且 ZCode 拿最后一档
+    当默认档（`ListModels` 实测 low/high/max → default max），所以这里原样沿用
+    目录顺序。目录没有 can_disable 字段，故不自行补 "disabled"。
+    """
+    cfg: dict = {"enabled": True}
+    efforts = [str(e) for e in (model.get("reasoning_efforts") or []) if str(e).strip()]
+    if efforts:
+        cfg["optionSpecs"] = {"reasoningLevel": {"values": efforts}}
+    return cfg
+
+
 def upsert_model_rules(cfg: dict, models: list[dict], provider_id: str) -> int:
     entries = model_rules(cfg)
     entries[:] = [entry for entry in entries if entry.get("providerId") != provider_id]
     for model in models:
         entries.append({
             "modelId": str(model.get("id") or "").strip(),
-            "config": {"enabled": True},
+            "config": model_rule_config(model),
             "providerId": provider_id,
         })
     return len(models)
@@ -320,7 +335,7 @@ def merge_models(cfg: dict, models: list[dict]) -> tuple[list[tuple[str, str, st
                 ids.append(prefixed)
         entries.append({
             "modelId": prefixed,
-            "config": {"enabled": True},
+            "config": model_rule_config(model),
             "providerId": target_id,
         })
         added.append((tier, target_id, model_id, price))

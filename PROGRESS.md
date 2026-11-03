@@ -1978,3 +1978,79 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 - `evidence/go-model-sync-*.md` 三个运行产物未入库。
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-03 第八轮：hy3 档位补齐（reasoningLevel.values）+ 192K 口径核实
+
+## 任务目标
+用户问「hy3 上下文是不是只有 192K 了」「思考档位是不是调不了、只剩开关」。核实真因并修掉档位丢失。
+
+## 已完成变更
+- [x] 核实上下文：实时 `/panel/api/models` 的 `cn:hy3` 是 `context_length=192000`、
+      `max_allowed_size=192000`、`max_output_tokens=64000` —— 上游事实，不是本地压小；
+      2026-10-20 快照与 §4.3 一直是 192K/64K。
+- [x] 定位档位真因：内置规则没有 hy3 专属条目 → 落兜底 `.*` 的 `["disabled","enabled"]`，
+      UI 只剩开关，上游 `supported_efforts=["low","high"]` 里的 low 发不出去。
+- [x] `providers/workbuddy/workbuddy_zcode_sync.py`：`build_model_rule()` 按上游
+      `efforts`/`supported_efforts` 自动写 `optionSpecs.reasoningLevel.values`；
+      只对 low/high 两档模型生效（五档模型会把默认档从 high 抬到 max，属改费用，未动）；
+      probe fallback 的 map 改写改成 merge，不再覆盖 values。
+- [x] 本机 `provider_config.json` 给 `HY3` / `HY3-X` 补 `values: ["low","high"]`
+      （未加 `disabled`：上游 `can_disable_thinking=false` / `only_reasoning=true`），
+      备份 `provider_config.json.bak-efforts-20261103-152838`。
+- [x] 文档：`docs/MODEL-PROVIDERS.md` 新增 §5.4，§4.3 加一行指路。
+- [x] 第二轮追加：`DeepSeek-4.1-Flash`（上游 low/high/max + 可关思考）补
+      `values: ["disabled","low","high","max"]`；同步脚本新增顶部 `EFFORT_VALUES` 表
+      （整份档位表的登记处，顺序 = 下拉顺序 = 默认档）；备份
+      `provider_config.json.bak-efforts2-20261103-155157`。
+- [x] 修正 `providers/workbuddy/zcode_effective_body.js` 的 `pickLevel()`：默认档取
+      `values.at(-1)`（原实现按 enabled→high→首个猜，与引擎不符）。
+- [x] 文档 §5.4 补「数组顺序 = 默认档决策」与 deepseek 落地记录。
+- [x] 第三轮（全渠道按上游声明补档位）：`build_model_rule()` 改成通用规则 ——
+      有 `supported_efforts` 就整份写 values，`can_disable_thinking=true` 时前面补
+      `"disabled"`；`EFFORT_VALUES` 退化为「改顺序」的手工覆写表（当前为空）。
+      `qoder_zcode_sync.py` 新增 `model_rule_config()`，按目录 `reasoning_efforts` 写
+      values（统一/分离两条路径都用）。备份
+      `provider_config.json.bak-efforts3-20261103-155851`。
+- [x] 本机配置补齐：`GLM-5.3-Flash` low/high/max、`MiniMax-M3.1-Flash` 与
+      `Space-Bunny` 五档、`HY4-Pre` 只有 high、`Qwen-3.8-Max` low/medium/xhigh。
+- [x] 第四轮（OC 渠道 + 规则固化）：`go_model_sync.py` 从 `/models` 的
+      `capabilities.reasoning.effort` 读档位并写 values；四字段被拒但 chat 协议的型号
+      改写成 `map='{"reasoning_effort":reasoningLevel}'`（`EFFORT_UNSUPPORTED` 里的
+      muse 系除外）；日志新增「未声明档位 / 声明了但写不进去」两张清单。
+      本机配置：`Beam`（五档）、`Qwen-3.8-Flash`（low/medium/xhigh）改成裁剪 map，
+      备份 `provider_config.json.bak-efforts4-20261103-160606`。
+
+## 验收
+- `node providers/workbuddy/zcode_effective_body.js HY3 HY3-X` → `values=["low","high"]`、
+  默认档 `high`，body 与改前逐字相同（`reasoning_effort: "high"`），即默认行为零变化。
+- 经 7863 实测 `cn:hy3`：`reasoning_effort:"low"` HTTP 200（1.6s，reasoning 48 tokens）、
+  `high` 200（1.3s，44 tokens）—— 两档都被上游接受（简单题看不出效果差异）。
+- `python -m py_compile providers/workbuddy/workbuddy_zcode_sync.py` 通过。
+- `ListModels`（引擎自己的判定）确认：`DeepSeek-4.1-Flash` → `levels: disabled,low,high,max
+  (default max)`、`HY3`/`HY3-X` → `low,high (default high)`；配置**热加载**，无需重启。
+- 第三轮后 `ListModels`：8/18 有真档位（DeepSeek-4.1-Flash、Qwen-3.8-Max、GLM-5.3-Flash、
+  MiniMax-M3.1-Flash、Space-Bunny、HY3、HY3-X、HY4-Pre）；实测 `cn:minimax-m3.1-flash`
+  xhigh 200 / `cn:space-bunny` low 200 / `cn:glm-5.3-flash` max 200 / Qoder
+  `Qwen-3.8-Max` medium 200。
+- 「面板没列 ≠ 不能用」：`cn:hy3-x`、`cn:hy3-b`、`cn:hy3-c`、`cn:hy4-preview-f` 实测全 200
+  （促销结束被面板隐藏），此前「死跳」的判断作废。
+- 第四轮后 `ListModels`：10/18 有真档位（新增 `Beam` 五档、`Qwen-3.8-Flash` low/medium/xhigh）；
+  实测 `Beam` max 200（1.3s）、`Qwen-3.8-Flash` xhigh 200（5.3s）——只发 `reasoning_effort`
+  的裁剪写法被上游接受。
+
+## 待解决 / 注意事项
+- `DeepSeek-4.1-Flash` 的默认档因 `values` 末位是 max 而变成 max（主力模型，思考更久）；
+  要回 high 就把数组排成 `["disabled","low","max","high"]`（下拉顺序会反直觉）。
+  想量化 max vs high 的 token 差，但上游队列连试 9 次全 429，未测成。
+- 第三轮带来的默认档变化：`MiniMax-M3.1-Flash` / `Space-Bunny` 五档末位是 max、
+  `Qwen-3.8-Max` 末位是 xhigh —— 这三个型号新建会话会按最高档思考（上游自己声明的
+  默认档也是这样，但比之前的 high 更慢更贵）。要回 high 就把 high 挪到数组末尾。
+- `Kimi-K3` 有 low/high/max 三个档位但七牛是 Anthropic 桥、`map="{}"` 不发思考字段，
+  档位是装饰；OC/七牛其余型号目录不吐档位元数据，只能维持开关。
+- `cn:hy3-x`、`cn:hy3-b`、`cn:hy3-c`、`cn:hy4-preview-f` 不以 `hidden:false` 出现在
+  `/panel/api/models`，但接口仍 200 —— 不要因为列表里没有就删配置。
+- `cn:minimax-m3.1-flash` / `cn:space-bunny` 的五档上游声明未落地到 UI，理由见 §5.4。
+
+## 状态: 已完成

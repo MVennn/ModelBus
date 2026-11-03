@@ -160,7 +160,7 @@ python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder �
 
 | 模型 | 协议 | 工具调用 | 关思考 | 价格 | 实测首字 | 备注 |
 |---|---|---|---|---|---|---|
-| **beam-free** | 仅 chat | ✅ 已实测 | 天生关不掉（配了空 map 覆盖） | 0 / 0 | 1.0–1.5s | 免费无限，质量一般 |
+| **beam-free** | 仅 chat | ✅ 已实测 | 天生关不掉；只发 `reasoning_effort`，档位 low…max 可调 | 0 / 0 | 1.0–1.5s | 免费无限，质量一般 |
 | **minimax-m3.1-flash-free** | 仅 chat | 待补 | `enable_thinking:false`（配了空 map 覆盖） | 0 / 0 | ~1.1s | 免费里最快；参数最宽松 |
 | longcat-2.5-preview-free | 仅 chat | ✅ 已实测 | `thinking:{type:"disabled"}` | 0 / 0 | 5.9–24s | 慢，只适合夜里批量 |
 
@@ -354,6 +354,10 @@ chat 组，四个 chat 组的 `api.baseUrl` 指向本地入口 `gateways/zgate`
 | global:hy3 | 192K | 64K | ❌ | low / high | 200 |
 | global:step-5-preview | 1M | 64K | ❌ | low / medium / high | 200 |
 
+> 表里的「effort 档位」是**上游声明的**档位；能不能在 ZCode 界面选到，取决于
+> `optionSpecs.reasoningLevel.values` 有没有写，见 §5.4。`hy3` 2026-11-03 已补齐
+> （之前只剩「思考 / 不思考」）。
+
 ### 4.4 低代 `workbuddy-low`（分离模式，0 < 倍率 ≤ 0.16，主力价位）
 
 | 模型 | 倍率 | 上下文 | 输出上限 | 可关思考 | effort 档位 | 实测 |
@@ -497,7 +501,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 ## 5. 关思考参数矩阵
 
 > §5.1 是**上游实测数据**（哪个模型认哪种写法，随模型变）；
-> §5.2 / §5.3 是**ZCode 侧的通用机制**（换供应商照样成立）。
+> §5.2–§5.4 是**ZCode 侧的通用机制**（换供应商照样成立）。
 
 ### 5.1 上游接受哪种写法（直连实测 2026-10-19）
 
@@ -516,15 +520,15 @@ map 是**一段 JS 表达式**，引擎求值成 JSON 对象后再发出去。
 
 | 写法 | 什么时候用 |
 |---|---|
-| `map = "{}"` | **不发送任何思考参数**。给「上游只认裸 body」的模型用：beam-free、minimax-m3.1-flash-free、minimax-m3、muse-spark-1.2 / 1.3-contributor |
+| `map = "{}"` | **不发送任何思考参数**。给「上游只认裸 body、连 `reasoning_effort` 都拒」的模型用：`muse-spark-1.2 / 1.3-contributor`，以及协议是 messages / responses 的型号 |
+| `map = '{"reasoning_effort":reasoningLevel}'` | 四字段被拒、但只发 `reasoning_effort` 通 —— 这样档位仍然可调（`beam-free`、`qwen3.8-flash` 实测 200） |
 | `map = '{"thinking":{"type":"disabled"}}'` | 需要显式告诉上游「关掉思考」，且上游认这个字段 |
 | `map = '{"thinking":{"type":"enabled"},"reasoning_effort":reasoningLevel}'` | 上游只认 deepseek 系那套（thinking + reasoning_effort），不认 `enable_thinking` / `reasoning` |
 | `map = '{"thinking":{"type":"enabled"}}'` | 上游只认 thinking 一个字段 |
 | 不配 | 模型正常认 ZCode 默认注入的字段（`thinking` + `enable_thinking` + `reasoning_effort` + `reasoning`） |
 
-**当前 ZCode 里配了空 map 的模型**（5 个）：
-`beam-free`、`minimax-m3.1-flash-free`、`minimax-m3`、
-`muse-spark-1.3-contributor`、`muse-spark-1.2-contributor`。
+**当前 ZCode 里配了空 map 的模型**（`Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、
+`Muse-Spark1.3`、`GPT-6-Luna`）—— 它们的档位即使上游声明了也是装饰项，见 §5.4。
 
 **WorkBuddy 侧 18 个模型一个都没配覆盖** —— 探测确认它们**全部接受 ZCode 原生 body**。
 （与 OpenCode-Go 侧不同：那边 minimax-m3 会拒 `thinking:{type:"enabled"}`，这边 CodeBuddy 上游接受。）
@@ -549,6 +553,67 @@ ZCode 的内置规则 `resources/config/provider/zcode-builtin.json` 里：
 
 `providers/workbuddy/zcode_effective_body.js` 就是复刻这套语义，用来算「ZCode 真实会发什么」。
 **任何时候改了规则或换了模型 id，都要用它重算，不要手写规则表。**
+
+### 5.4 档位：不写 `reasoningLevel.values` 就只剩「思考 / 不思考」
+
+ZCode 的档位下拉**只**由 `optionSpecs.reasoningLevel.values` 生成，与上游能力无关。
+内置规则里没有该模型的专属条目时，落到兜底的 `.*` 规则：
+`values = ["disabled","enabled"]` —— 界面上就只剩一个开关，**上游支持的低档永远发不出去**
+（选「思考」时实际发的是 `reasoning_effort: "high"`）。
+
+判定方法：`node providers/workbuddy/zcode_effective_body.js <模型 id>` 看返回的 `values`。
+
+**数组顺序是行为的一部分**：ZCode 的默认档 = `values` 的**最后一档**（引擎
+`completeNewModelSelection` 取 `values.at(-1)`；`ListModels` 的 `defaultReasoningLevel`
+实测同值 —— `low/high/max` → max，`low/high` → high）。所以把 max 写进去，默认档就从
+high 抬到 max，等于改费用与首字延迟，不能当成排版问题。
+
+**三个同步脚本都自动写 `values`（新模型接进来就带上档位）**：
+
+| 渠道 | 元数据来源 | 谁写 | 补 `disabled` 的规则 |
+|---|---|---|---|
+| WB | `/panel/api/models` 的 `supported_efforts` | `workbuddy_zcode_sync.py` `build_model_rule()` | `can_disable_thinking=true` 才补 |
+| QD | `/v1/models` 的 `reasoning_efforts` | `qoder_zcode_sync.py` `model_rule_config()` | 目录没这字段，不补 |
+| OC | `/models` 的 `capabilities.reasoning.effort` | `go_model_sync.py` `add_model()` | 目录没这字段，不补 |
+| QN / QW | 目录里没有档位字段 | —— | 只能「思考/不思考」，同步日志会列出这些型号 |
+
+OC 有个特例：四字段原生 body 被拒的型号（`needs_no_thinking`）如果是 chat 协议且不在
+`EFFORT_UNSUPPORTED`（muse 系，带 `reasoning_effort` 直接报错），改写成
+`map='{"reasoning_effort":reasoningLevel}'` —— **只发 `reasoning_effort`**，
+实测 `beam-free` / `qwen3.8-flash` 的 low 与 max/xhigh 全部 200，档位因此仍可调。
+其余被拒型号（messages / responses 协议）维持 `map="{}"`，档位只能是装饰项，所以不写。
+
+要**改顺序**（= 改默认档）才登记到 WorkBuddy 脚本顶部的 `EFFORT_VALUES` 覆写表。
+
+**2026-11-03 覆盖面**（18 个模型，`ListModels` 实测）：
+
+| 状态 | 模型 | 说明 |
+|---|---|---|
+| 真档位（选择会变成 `reasoning_effort`） | `DeepSeek-4.1-Flash`（disabled/low/high/max）、`Qwen-3.8-Max`（low/medium/xhigh）、`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`、`Space-Bunny`、`Beam`（五档/三档）、`Qwen-3.8-Flash`（low/medium/xhigh）、`HY3`/`HY3-X`（low/high）、`HY4-Pre`（只有 high） | 10 个 |
+| 有档位但**不发**（装饰项） | `Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、`Muse-Spark1.3`、`GPT-6-Luna` | 5 个：七牛是 Anthropic 桥、后两个是 messages/responses 协议，都只能 `map="{}"` |
+| 只有开关且开关生效 | `Iceman`、`MiMo-2.6-Flash`、`MiMo-2.6-Pro` | 上游目录没有档位声明（`cn:mimo-v2.6-pro` 的 `supported_efforts` 为空） |
+
+**「面板没列」不等于「不能用」**：2026-11-03 实测 `cn:hy3-x`、`cn:hy3-b`、`cn:hy3-c`、
+`cn:hy4-preview-f` 全部 HTTP 200，只是不以 `hidden:false` 出现在 `/panel/api/models`
+（促销结束后被面板隐藏）。所以不要因为列表里没有就删配置。
+
+**2026-11-03 hy3 落地记录**：上游 `cn:hy3` 声明 `supported_efforts=["low","high"]`、
+`default_effort=high`、`can_disable_thinking=false`、`only_reasoning=true`，
+上下文 `192000` / 输出 `64000`（面板 `context_length` 与 `max_allowed_size` 同值，
+不是本地压小）。补 `values: ["low","high"]` 后默认档仍是 high（body 与改前逐字相同），
+`low` 经 7863 实测 200（1.6s）。因为关不掉思考，**不加** `"disabled"`。
+同批的 `cn:hy3-x` 同理补 `["low","high"]`；它不以 `hidden:false` 出现在面板，但实测 200。
+
+**2026-11-03 deepseek-4.1-flash 落地记录**：上游 `cn:deepseek-v4.1-flash`
+`supported_efforts=["low","high","max"]`、`default_effort=high`、
+`can_disable_thinking=true`，配 `values: ["disabled","low","high","max"]` ——
+**默认档随之变成 max**（`ListModels` 已确认），与网关 `default_effort=max` 的口径一致；
+嫌慢就把 `high` 挪到数组末尾（下拉顺序会变成 disabled/low/max/high）。
+
+**规则（新模型准入）**：上游目录声明了档位就必须写进 `values`；写不进去只有两种正当理由
+——目录没有该字段（QN/QW），或该型号必须整包禁发思考字段（messages/responses 协议、
+muse 系）。同步日志会分别打印「未声明档位」和「声明了但写不进去」的型号清单，出现第三种
+理由就是回归。
 
 ---
 

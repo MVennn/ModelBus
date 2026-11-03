@@ -91,6 +91,10 @@ REGION_BLOCKED_MARKERS = (
 # 本轮经机场复测通过的模型（裸上游 id），报告里单独标注。
 AIRPORT_MODELS = set()
 
+# 连「只发 reasoning_effort」都拒的模型：这类只能 map="{}"，档位写不出来。
+# （muse 系实测带 reasoning_effort 直接报错；其余被拒的型号先按需加。）
+EFFORT_UNSUPPORTED = {"muse-spark-1.2-contributor", "muse-spark-1.3-contributor"}
+
 # 输出单价上限（美元 / 百万 token）。现有配置里最贵的是 qwen3.7-plus 的 $1.60。
 MAX_OUTPUT_PRICE = 1.60
 # 低耗档阈值：月额度 / 输出单价 >= 80M token
@@ -186,9 +190,25 @@ def rows_of(html):
 
 # ---------------------------------------------------------------- 数据源解析
 
+def declared_efforts(models):
+    """从实时 /models 里取上游声明的思考档位：capabilities.reasoning.effort。
+
+    这个字段是「上游说这个型号支持哪些档位」的唯一权威来源；ZCode 侧不写
+    optionSpecs.reasoningLevel.values 就只会落到兜底的「思考/不思考」。
+    """
+    out = {}
+    for m in models:
+        caps = (m.get("capabilities") or {}).get("reasoning") or {}
+        vals = [str(e) for e in (caps.get("effort") or []) if str(e).strip()]
+        if vals:
+            out[str(m.get("id"))] = vals
+    return out
+
+
 def fetch_live_models():
     st, raw = http(BASE + "/models")
-    return [m["id"] for m in json.loads(raw)["data"]]
+    data = json.loads(raw)["data"]
+    return [m["id"] for m in data], declared_efforts(data)
 
 
 def base_name(name):
@@ -588,7 +608,8 @@ def tail_number(model_id):
         return 0.0
 
 
-def add_model(cfg, model, provider_id, needs_no_thinking, durable):
+def add_model(cfg, model, provider_id, needs_no_thinking, durable, efforts=None,
+              protocol=None):
     for r in provider_rules(cfg):
         if r["providerId"] != provider_id:
             continue
@@ -601,13 +622,38 @@ def add_model(cfg, model, provider_id, needs_no_thinking, durable):
         break
     else:
         raise RuntimeError("provider not found: " + provider_id)
-    rule = {"modelId": model, "config": {"enabled": True}, "providerId": provider_id}
+    # 档位表按上游声明写 values（数组顺序 = 下拉顺序，末位 = 默认档）。
+    # 需要「禁发思考字段」的模型分两种：
+    #   · chat 协议且不在 EFFORT_UNSUPPORTED 里 —— 四件套被拒、只发
+    #     reasoning_effort 是通的（Beam / Qwen-3.8-Flash 实测 200），于是用
+    #     裁剪 map 保住可调的档位；
+    #   · 其余（messages / responses 协议，或整包拒 reasoning_effort 的
+    #     muse 系）—— 只能 map="{}"，档位是装饰项，故不写 values。
+    values = list(efforts or [])
+    spec = {}
     if needs_no_thinking:
-        rule["config"]["optionSpecs"] = {"reasoningLevel": {"map": "{}"}}
+        if values and protocol == "chat/completions" and model not in EFFORT_UNSUPPORTED:
+            spec["values"] = values
+            spec["map"] = '{"reasoning_effort":reasoningLevel}'
+        else:
+            spec["map"] = "{}"
+    elif values:
+        spec["values"] = values
+    rule = {"modelId": model, "config": {"enabled": True}, "providerId": provider_id}
+    if spec:
+        rule["config"]["optionSpecs"] = {"reasoningLevel": spec}
     rules = model_rules(cfg)
     for m in rules:
         if m.get("modelId") == model:
             m["providerId"] = provider_id
+            if values and spec.get("map") != "{}":
+                cfg_m = m.setdefault("config", {})
+                rl = cfg_m.setdefault("optionSpecs", {}).setdefault("reasoningLevel", {})
+                rl["values"] = values
+                # 只有「裁剪写法」才连 map 一起改写；没有 map 决策时保留原有
+                # 覆写（已有 map="{}" 的型号贸然去掉会退回四字段而 400）。
+                if "map" in spec:
+                    rl["map"] = spec["map"]
             break
     else:
         rules.append(rule)
@@ -758,7 +804,7 @@ def main():
     if not key:
         log("!! 配置里没有 apiKey，探测会全部 401")
 
-    live = fetch_live_models()
+    live, live_efforts = fetch_live_models()
     hint, go_price = parse_go_docs()
     public_price, deprecated = parse_catalog()
     log("- 实时 /models: %d 个" % len(live))
@@ -853,6 +899,19 @@ def main():
     for m, why in skipped:
         log("  - %-28s %s" % (m, why))
 
+    # 档位覆盖体检：新增模型必须带上游声明的 values，带不上要有明确原因。
+    no_efforts = [r["model"] for r in added if not live_efforts.get(r["model"])]
+    blocked = [r["model"] for r in added
+               if live_efforts.get(r["model"]) and r["needs_no_thinking"]
+               and (r.get("protocol") != "chat/completions"
+                    or r["model"] in EFFORT_UNSUPPORTED)]
+    if no_efforts:
+        log("\n### 上游目录未声明档位（只能给「思考/不思考」开关）：%s"
+            % ", ".join(no_efforts))
+    if blocked:
+        log("### 上游声明了档位但本模型需禁发思考字段（values 会是装饰项，未写）：%s"
+            % ", ".join(blocked))
+
     # ---- 写入
     if args.apply and not args.probe_only:
         for m, _ in removed:
@@ -866,7 +925,8 @@ def main():
         for pid, rows in by_provider.items():
             rows.sort(key=lambda r: tail_number(r["model"]), reverse=True)
             for r in rows:
-                add_model(cfg, r["model"], pid, r["needs_no_thinking"], r.get("durable"))
+                add_model(cfg, r["model"], pid, r["needs_no_thinking"], r.get("durable"),
+                          live_efforts.get(r["model"]), r.get("protocol"))
         # 记录新模型的真实协议，供 model_alias.py 写进 alias map（4 组制靠它桥接）。
         try:
             hints = {}

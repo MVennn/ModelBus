@@ -244,12 +244,13 @@ if (opts.verbose) {
   console.error(`规则总数: ${rules.length}  apiType=${API_TYPE}  baseUrl=${BASE_URL ?? '(无)'}`);
 }
 
-// ZCode 每个模型的默认推理档位 = 解析出的 values 列表里的第一个；通用回退是 "enabled"。
+// ZCode 的默认推理档位 = 解析出的 values 列表里的**最后一档**：
+// 引擎 completeNewModelSelection 取 `values.at(-1)`，`ListModels` 的
+// defaultReasoningLevel 实测同值（low/high/max → max，low/high → high）。
+// 2026-11-03 之前这里按 "enabled 优先 / 再 high / 再第一个" 猜，与引擎不符。
 function pickLevel(values) {
   if (!values || !values.length) return 'enabled';
-  if (values.includes('enabled')) return 'enabled';
-  if (values.includes('high')) return 'high';
-  return values[0];
+  return values[values.length - 1];
 }
 
 const result = {};

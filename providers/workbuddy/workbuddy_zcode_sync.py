@@ -111,6 +111,14 @@ TIER_DISPLAY_ORDER = ("low", "free", "high", "backup")
 # providers point at tools/unified-router.js, which routes cn:/global: models
 # to the gateway and everything else to OpenCode-Go.
 MAIN_MODEL_IDS = {"cn:deepseek-v4.1-flash", "global:deepseek-v4.1-flash-sg"}
+
+# 上游档位表的「手工覆写」登记处（键 = 上游 id）。默认不需要登记：
+# build_model_rule() 会按上游 supported_efforts 原样写 values，可关思考的型号
+# 自动在数组最前面加 "disabled"。只有要**改顺序**（= 改默认档）时才登记。
+# 数组顺序**就是** ZCode 下拉的顺序，而 ZCode 拿**最后一档**当默认档
+# （`ListModels` 实测：GLM-5.3-Flash 的 low/high/max → default max），
+# 所以顺序是行为的一部分，不是排版问题。
+EFFORT_VALUES: dict[str, list[str]] = {}
 UNIFIED_TARGETS = {
     "main": "opencode-go-chat",
     "free": "opencode-go-chat-free",
@@ -291,22 +299,37 @@ def build_model_rule(provider_id: str, model: dict, probe_rec: dict | None) -> d
     if out > 0:
         cfg["optionSpecs"] = {"maxOutputTokens": {"max": out}}
 
+    # 把上游声明的档位表原样写进 values。不写的话 ZCode 落到兜底规则 `.*`
+    # （values ["disabled","enabled"]），界面只剩思考开关，上游的低档永远发不出去。
+    # 顺序 = 上游 supported_efforts 的顺序；能关思考的型号在最前面补 "disabled"。
+    # 记住 ZCode 拿最后一档当默认档，所以「上游默认档」必须等于列表末位——
+    # 上游声明 default_effort=max 时末位就是 max，这不是 bug。
+    # 需要改顺序（= 改默认档）的型号走 EFFORT_VALUES 手工覆写。
+    efforts = [str(e) for e in (model.get("efforts") or model.get("supported_efforts") or [])
+               if str(e).strip()]
+    can_disable = model.get("can_disable")
+    if can_disable is None:
+        can_disable = model.get("can_disable_thinking")
+    override = EFFORT_VALUES.get(str(model.get("id")))
+    if override:
+        cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {"values": list(override)}
+    elif efforts:
+        values = (["disabled"] if can_disable else []) + efforts
+        cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {"values": values}
+
     # The probe found that ZCode's native body (thinking + reasoning_effort +
     # enable_thinking + reasoning) is rejected by this model; a slimmer body
     # works. Override reasoningLevel.map so ZCode stops sending the rejected
-    # fields.
+    # fields. Merge (not replace) so declared values survive.
     if probe_rec and probe_rec.get("status") == "fallback":
+        variant_maps = {
+            "deepseek": '{"thinking":{"type":"enabled"},"reasoning_effort":reasoningLevel}',
+            "thinking": '{"thinking":{"type":"enabled"}}',
+            "bare": "{}",
+        }
         variant = probe_rec.get("variant")
-        if variant == "deepseek":
-            cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {
-                "map": '{"thinking":{"type":"enabled"},"reasoning_effort":reasoningLevel}'
-            }
-        elif variant == "thinking":
-            cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {
-                "map": '{"thinking":{"type":"enabled"}}'
-            }
-        elif variant == "bare":
-            cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {"map": "{}"}
+        if variant in variant_maps:
+            cfg.setdefault("optionSpecs", {}).setdefault("reasoningLevel", {})["map"] = variant_maps[variant]
     return {"providerId": provider_id, "modelId": str(model["id"]), "config": cfg}
 
 
