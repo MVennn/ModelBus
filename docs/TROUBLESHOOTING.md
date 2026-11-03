@@ -423,7 +423,7 @@ python -c "import json,pathlib,urllib.request,urllib.error; ..."   # 复刻探�
 | 现象 | 原因 | 解法 |
 |---|---|---|
 | 18 个 `cn:*` / `global:*` 全部 400 `Model is unavailable` | **误报**：`go_model_sync.py` 的体检固定探 OpenCode-Go 的公共 API（`https://opencode.ai/zen/go/v1`），而这些模型在统一路由并组后由本机网关供给，OpenCode-Go 那边本来就没有 | 体检要按模型 id 前缀分流上游；在脚本改好前，**这 18 条不用管**，WorkBuddy 侧的真实状态看 `workbuddy_probe_zcode.py` 的结果 |
-| `beam-free` / `gpt-6-luna` / `gpt-5.6-luna` / `muse-spark-*` 403 `RegionError` | 出口 IP 落在不支持的地区。**本仓的代理在 OpenWrt 上（ShellCrash 透明代理），本机没有代理客户端** | 查 OpenWrt 侧 ShellCrash 规则 / 节点；修好后重跑即可。**不要**在任务里加「先开梯子」这类前置条件 |
+| `beam-free` / `gpt-6-luna` / `gpt-5.6-luna` / `muse-spark-*` 403 `RegionError` | 出口 IP 落在不支持的地区。**本仓的出网代理在 OpenWrt 上（ShellCrash 透明代理），本机没有系统代理** | **2026-11-03 起体检自带机场复测**：直连 403 → 自动用 `AIRPORT_PROXY`（`10.0.0.1:7896`）再探一次，通过就保留并在报告里标 `⇄` / `[经机场]`；只有机场也不通才判「上游不可用」移除（[PITFALLS.md](PITFALLS.md) §35）。若两个出口都 403，再去查 OpenWrt 侧的 ShellCrash 规则 / 节点；**不要**在任务里加「先开梯子」这类前置条件 |
 | `mimo-v2.5-pro` 400 `Unsupported model` | 上游已下架该模型，与网络无关 | 无需手动处理：`go_model_sync.py --apply` 按「跑不通即清」直接移除，复通后自动加回 |
 | `longcat-2.0` / `longcat-2.5-preview-free` 402 `Endpoint is unavailable` | 上游端点不可用，与网络无关 | 同上：自动移除，等上游恢复后自动加回 |
 | `cn:hy4-preview-f` / `global:hy4-preview-f` 没被收录 | **已修**：`rate_of` 原先只看原始 `credits`（免费条目为空串）→ 判成 `None` → 按「无公布倍率」排除 | 现改为优先用归一化的 `eff_rate` / `list_rate`，两个免费 `-f` 已进免代档（见 [MAINTENANCE.md](MAINTENANCE.md) §7 待办 7） |

@@ -234,7 +234,9 @@ python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder �
 `go_model_sync.py` 的四道门槛，缺一不收：
 
 1. 上游**未弃用**（410 `ModelDeprecated` 或官方弃用日期表已过）；
-2. 三种协议里**至少一种能跑通**（200）；401 一律不收（凭据 / workspace 隐私问题，脚本解决不了）；
+2. 三种协议里**至少一种能跑通**（200）；401 一律不收（凭据 / workspace 隐私问题，脚本解决不了）。
+   直连拿到**地区受限 403**（`RegionError` / `unsupported_country_region_territory` 等）时先经
+   机场 `AIRPORT_PROXY` 复测，机场能过就算「能跑通」，只有两处都不通才排除（[PITFALLS.md](PITFALLS.md) §35）；
 3. 输出单价 **≤ $1.60 / M token**（门槛取现有配置里最贵的 qwen3.7-plus）；
 4. **价格未知**的模型只列候选，不自动收录。
 

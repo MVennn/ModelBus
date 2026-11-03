@@ -72,6 +72,25 @@ REPORT_DIR = os.environ.get(
 )
 UA = "opencode-cli/1.0"
 
+# 机场出口：opencode.ai 对地区受限型号（gpt / beam / muse）从中国 IP 直连返回
+# 403 unsupported_country_region_territory / RegionError。路由器侧早就按 alias 的
+# 孪生跳换机场，但**体检是脚本自己发的请求**，不经过 zgate —— 只走直连就会把这些
+# 可用模型判成「上游不可用」删掉（2026-11-03 又复现一次）。所以探测遇到地区标记时
+# 用同一出口复测。与 tools/model_alias.py 的 AIRPORT_PROXY 保持同值；
+# 设 GO_AIRPORT_PROXY="" 可关闭机场复测。
+AIRPORT_PROXY = os.environ.get("GO_AIRPORT_PROXY", "http://10.0.0.1:7896")
+
+# 与 zgate 的 regionBlocked() 同一套标记：403/400 带这些字样 = 换出口，不是模型死了。
+REGION_BLOCKED_MARKERS = (
+    "unsupported_country_region_territory",
+    "RegionError",
+    "not available in your country",
+    "region, or territory not supported",
+)
+
+# 本轮经机场复测通过的模型（裸上游 id），报告里单独标注。
+AIRPORT_MODELS = set()
+
 # 输出单价上限（美元 / 百万 token）。现有配置里最贵的是 qwen3.7-plus 的 $1.60。
 MAX_OUTPUT_PRICE = 1.60
 # 低耗档阈值：月额度 / 输出单价 >= 80M token
@@ -113,7 +132,8 @@ def stamp():
     return now().strftime("%Y%m%d-%H%M%S")
 
 
-def http(url, data=None, headers=None, timeout=45):
+def http(url, data=None, headers=None, timeout=45, proxy=None):
+    """发一个请求。proxy 非空时经该出口（只给决定要换机场的探测用，别全局套）。"""
     h = {"User-Agent": UA, "Accept": "application/json, text/html;q=0.9"}
     if headers:
         h.update(headers)
@@ -122,9 +142,22 @@ def http(url, data=None, headers=None, timeout=45):
         body = json.dumps(data).encode("utf-8")
         h["Content-Type"] = "application/json"
     req = urllib.request.Request(url, data=body, headers=h)
-    with urllib.request.urlopen(req, timeout=timeout) as r:
+    opener = urllib.request.urlopen
+    if proxy:
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"http": proxy, "https": proxy})
+        ).open
+    with opener(req, timeout=timeout) as r:
         raw = r.read().decode("utf-8", "replace")
         return r.status, raw
+
+
+def region_blocked(status, raw):
+    """这条出口是不是「地区受限」——不是模型坏了，换个出口就能用。"""
+    if status not in (403, 400):
+        return False
+    low = (raw or "").lower()
+    return any(m.lower() in low for m in REGION_BLOCKED_MARKERS)
 
 
 def norm(s):
@@ -294,8 +327,7 @@ def probe_headers(protocol=None):
     return h
 
 
-def probe_detail(model, protocol, thinking=True):
-    """返回 (status, kind, raw)。kind: ok / protocol_unsupported / deprecated / unauthorized / error"""
+def probe_body(model, protocol, thinking=True):
     if protocol == "chat/completions":
         body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4096}
         if thinking:
@@ -308,17 +340,45 @@ def probe_detail(model, protocol, thinking=True):
         body = {"model": model, "input": "hi", "max_output_tokens": 4096}
         if thinking:
             body["reasoning_effort"] = "medium"
+    return body
+
+
+def probe_once(model, protocol, thinking=True, proxy=None):
+    """一次探测，返回 (status, raw)；HTTP 错误也按 (code, body) 返回，不抛。"""
+    body = probe_body(model, protocol, thinking)
+    url = BASE + "/" + protocol
+    headers = probe_headers(protocol)
     try:
-        st, raw = http(BASE + "/" + protocol, data=body, headers=probe_headers(protocol))
+        return http(url, data=body, headers=headers, proxy=proxy)
     except urllib.error.HTTPError as e:
-        st, raw = e.code, e.read().decode("utf-8", "replace")
+        return e.code, e.read().decode("utf-8", "replace")
+
+
+def probe_detail(model, protocol, thinking=True):
+    """返回 (status, kind, raw)。kind: ok / protocol_unsupported / deprecated / unauthorized / error
+
+    地区受限（403 + region 标记）先按机场复测：模型本身可用，只是这条出口进不去。
+    只有机场也不通才把 403 当失败交给 stale_reason。
+    """
+    try:
+        st, raw = probe_once(model, protocol, thinking)
     except Exception as e:  # 超时等 -> 重试一次
         try:
-            st, raw = http(BASE + "/" + protocol, data=body, headers=probe_headers(protocol))
-        except urllib.error.HTTPError as e2:
-            st, raw = e2.code, e2.read().decode("utf-8", "replace")
+            st, raw = probe_once(model, protocol, thinking)
         except Exception as e2:
             return 0, "error:" + type(e2).__name__, str(e2)
+    if region_blocked(st, raw) and AIRPORT_PROXY:
+        st2, raw2 = 0, ""
+        try:
+            st2, raw2 = probe_once(model, protocol, thinking, proxy=AIRPORT_PROXY)
+        except Exception as e:
+            raw2 = str(e)
+        if st2 == 200:
+            AIRPORT_MODELS.add(model)
+            return st2, "ok", raw2
+        # 机场也不通：400 的「参数不合法」这类证词更具体，留给报告
+        if st2 and st2 != 403:
+            st, raw = st2, raw2
     if st == 200:
         return st, "ok", raw
     low = raw.lower()
@@ -377,6 +437,9 @@ def stale_reason(model, st, kind, raw, deprecated_dates, live, hint):
         # 按用户要求——上游不可达即清除，待下次探测复通后再由新模型评估自动加回。
         if st in (401, 429):
             return None
+        if region_blocked(st, raw):
+            # 走到这里说明机场也没把它救回来（probe_detail 已经试过）。
+            return "地区受限：直连 HTTP %s，机场复测也不通 %s" % (st, upstream_message(raw))
         still_listed = (model in live or model in hint)
         where = "仍在清单但上游不可用" if still_listed else "已不在任何清单"
         return "%s：HTTP %s %s" % (where, st, upstream_message(raw))
@@ -727,6 +790,10 @@ def main():
                 log("  ⚠ %s 返回 401（凭据/隐私授权问题）" % display)
             elif kind != "ok":
                 log("  ⚠ %s 探测异常: %s (HTTP %s)" % (display, kind, st))
+        airport_kept = sorted(m for m in probes if m in AIRPORT_MODELS)
+        if airport_kept:
+            log("  ⇄ %d 个直连地区受限、经机场复测通过（保留）：%s"
+                % (len(airport_kept), ", ".join(airport_kept)))
         if non_go:
             log("  · 跳过 %d 个 WorkBuddy/Qoder 模型（W/Q 显示名与 cn:/global:/qoder: 前缀，由统一路由处理）" % non_go)
         if not removed:
@@ -778,9 +845,10 @@ def main():
             price_txt = "输入 $%.3f / 输出 $%.2f~%.2f / 无 Go 额度表(按公开价)" % (
                 p.get("input") or 0, p.get("out_min") or 0, p.get("out_max") or 0)
         durable_txt = ("额度可撑 %.0fM" % r["durable"]) if r.get("durable") else "—"
-        log("  + %-28s 协议 %-16s 组 %-4s (%s) %s %s %s" % (
+        log("  + %-28s 协议 %-16s 组 %-4s (%s) %s %s %s%s" % (
             r["model"], r["protocol"], r["tier"], r["provider"], price_txt, durable_txt,
-            "  [需关思考覆盖]" if r["needs_no_thinking"] else ""))
+            "  [需关思考覆盖]" if r["needs_no_thinking"] else "",
+            "  [经机场]" if r["model"] in AIRPORT_MODELS else ""))
     log("\n### 不收录 %d 个" % len(skipped))
     for m, why in skipped:
         log("  - %-28s %s" % (m, why))

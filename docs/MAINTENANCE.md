@@ -123,7 +123,7 @@ curl -s http://127.0.0.1:7863/panel/api/models \
 | 场景 | 频率 | 命令 |
 |---|---|---|
 | OpenCode-Go 新模型收录 | **每天一次** | `python providers/opencode-go/ops/go_model_sync.py --apply` |
-| 已配置模型体检 | 跟上面同一次 | 同上（默认会体检；`--no-existing` 可跳过） |
+| 已配置模型体检 | 跟上面同一次 | 同上（默认会体检；`--no-existing` 可跳过）。地区受限型号直连 403 会先经机场复测，机场也不通才移除（[PITFALLS.md](PITFALLS.md) §35） |
 | 外部榜单 → 主力候选 | **每天一次**（随 08:00 / 22:00 与工作日时段） | `python tools/arena_leaderboard.py --refresh --write` |
 | 候选变化 → 重写分组 | 随上一步；候选没变脚本会跳过 | `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply` |
 | WorkBuddy 可用性复探 | **换套餐 / 换账号池后**才需要全量重探 | `python providers/workbuddy/workbuddy_probe_zcode.py --sleep 20` |
@@ -239,7 +239,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 | 周期 | 动作 |
 |---|---|
-| **每天 12:00（定时任务 `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）** | 四段顺序：① `python providers/opencode-go/ops/go_model_sync.py --apply`；② WorkBuddy（`workbuddy_fetch_pricing.py` → `workbuddy_probe_zcode.py --max-rate 0.3 --sleep 20` → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_probe_zcode.py --timeout 90 --sleep 3` → `qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply`）；④ `python tools/model_alias.py --slot auto --apply` 归一化三组与 alias map；⑤ `python tools/sync_report.py --write --push` 生成 `docs/reports/MODEL-SYNC-<时间>.md`（写明新增 / 移除 / 分组 / 链路变化）、更新报告索引并提交推送。手动补跑也按这个顺序；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
+| **每天 12:00（定时任务 `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）** | 五段顺序：① `python providers/opencode-go/ops/go_model_sync.py --apply`（体检对地区受限型号自动经机场复测，**不要**再用「403 就删」的旧口径判读）；② WorkBuddy（`workbuddy_fetch_pricing.py` → `workbuddy_probe_zcode.py --max-rate 0.3 --sleep 20` → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_probe_zcode.py --timeout 90 --sleep 3` → `qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply`）；④ `python tools/model_alias.py --slot auto --apply` 归一化三组与 alias map；⑤ `python tools/sync_report.py --write --push` 生成 `docs/reports/MODEL-SYNC-<时间>.md`（写明新增 / 移除 / 分组 / 链路变化）、更新报告索引并提交推送。手动补跑也按这个顺序；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
 | **每天（可选，全量体检）** | `python tools/model_probe.py` → `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；定时任务不跑全量 probe，各 sync 自带定向探测。规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6 |
 | **每天 08:00 / 22:00 + 工作日 09:00 / 12:00 / 14:00 / 18:00** | `python providers/workbuddy/workbuddy_fetch_pricing.py` → `python tools/model_alias.py --slot auto --apply`（峰谷价切换，见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
@@ -266,6 +266,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 6 | ~~`go_model_sync.py` 的**体检**把全部已配置模型都探向 OpenCode-Go~~ **已修** | 体检按 id 前缀分流：`cn:*` / `global:*` 跳过（由统一路由供给），不再每天刷 18 条假异常 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
 | 7 | ~~`workbuddy_zcode_sync.py` 的 `rate_of` 认不出 `credits` 为空的免费条目~~ **已修** | 改为优先信任价格表归一化的 `eff_rate` / `list_rate`（免费 `-f` 条目为 0.0），缺失才回退原始串；`cn:hy4-preview-f` / `global:hy4-preview-f` 已收进免代档 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
 | 8 | ~~探测失败的已配置模型只打 ⚠、不清理~~ **已修** | 落实「跑不通即清、复通即加回」：Go 侧对 400/402/404/410/5xx 直接 `prune_model`（仅豁免 401/429）；WorkBuddy 侧 blocked/unavailable 亦移除 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
+| 9 | ~~Go 体检只走直连，把地区受限型号当死模型删掉~~ **已修（2026-11-03）** | 探测遇到地区 403 标记先经 `AIRPORT_PROXY` 复测，机场也不通才移除；报告标 `⇄` / `[经机场]`。Beam / GPT-6-Luna / Muse-Spark1.3 已恢复 | [PITFALLS.md](PITFALLS.md) §35 |
 
 ---
 

@@ -96,6 +96,9 @@ DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. QW 直连 → 4. OC @机场
 - 机场跳排链尾而不是紧跟直连跳：前面还有免费的国内跳（千问尾跳）时先试它们。
 - 改 `AIRPORT_PROXY` 时路由器侧必须同时有对应的 `listeners` 入站，
   否则这一跳直接连不上（见 ShellcrashRules `docs/ARCHITECTURE.md` §2.2）。
+- **这个出口只对经过 zgate 的请求生效**。同步脚本（`go_model_sync.py`）自己发探测、
+  不经过路由器，所以它把同一个 `AIRPORT_PROXY` 用在「直连地区受限 → 复测」上，
+  否则会把这三个模型当死模型删掉（[PITFALLS.md](PITFALLS.md) §35）。改地址时两处同改。
 
 ### 3.1 价格是派生量，不继承
 

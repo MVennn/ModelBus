@@ -56,6 +56,10 @@ jobs:
       - name: Python 语法
         run: python3 -c "import ast,glob; [ast.parse(open(f,encoding='utf-8').read(), f) for f in glob.glob('**/*.py', recursive=True)]"
 
+      - name: Python 单元测试
+        # 价格派生、地区受限换机场等回归守卫；用例全离线，不联网、不碰 provider_config。
+        run: python3 -m unittest discover -s tests -v
+
       - name: JavaScript 语法
         run: find . -name '*.js' -not -path './third-party/*' -not -path './node_modules/*' -print0 | xargs -0 -n1 node --check
 

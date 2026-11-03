@@ -628,3 +628,32 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
      普通 5xx 不重试（上游可能已计费）。
 - **排查口径**：怀疑链路时用 **POST 带 6 KB body** 探（`curl -x <proxy> --data-binary @b.json`），
   只看 GET/HEAD 会把这种路径判成健康。
+
+## 35. 脚本自己发的探测绕过了路由器：地区 403 被当成「模型死了」删掉 【通用】
+
+- **现象**：`go_model_sync.py --apply` 的「已配置模型体检」连续两轮（2026-11-02、2026-11-03）
+  把 `Beam`(beam-free)、`GPT-6-Luna`(gpt-6-luna)、`Muse-Spark1.3` 判成
+  「上游不可用：HTTP 403 This model is not available in your country」并从配置移除，
+  随后 `model_alias.py` 把它们从三组里一并清掉 —— 客户端里这三个模型直接消失。
+  但同一时刻从 7871 调它们完全正常。
+- **根因**：P33 修的是**路由器**的回落（alias 机场孪生跳 + `regionBlocked`），
+  而体检是脚本**自己**用 `urllib` 直接打 `https://opencode.ai/zen/go/v1`，
+  根本不经过 zgate，自然拿不到那第二条出口 → 直连 403 → `stale_reason` 判「跑不通即清」。
+  换句话说：**出口策略只修在路由器一侧，任何自建请求的脚本都得各修一遍**。
+- **解法**：
+  1. 探测遇到地区标记（与 zgate `regionBlocked` 同一套字符串：`unsupported_country_region_territory` /
+     `RegionError` / `not available in your country` / `region, or territory not supported`）时，
+     用 `AIRPORT_PROXY`（默认 `http://10.0.0.1:7896`）**复测一次**；
+     只有机场也不通，才把 403 交给 `stale_reason` 移除。
+  2. 复测只加在「已经决定要换出口」的那一次请求上（`http(..., proxy=)`），
+     不做全局代理 —— 全量文档/模型清单请求仍走直连，别烧机场流量。
+  3. 出口地址只有一个来源：`tools/model_alias.py` 的 `AIRPORT_PROXY`；
+     脚本侧同值并允许 `GO_AIRPORT_PROXY` 覆盖、空值关闭。
+  4. 报告里标出来：体检段出现 `⇄ N 个直连地区受限、经机场复测通过（保留）`，
+     新模型行尾出现 `[经机场]`，便于和「真下架」区分。
+- **验证**：
+  - `python providers/opencode-go/ops/go_model_sync.py` → 三个模型重新出现在「建议收录」并带 `[经机场]`；
+    `--apply` 后 `model_alias.py --check` 无漂移，三组恢复 18 个（主力 2 / 免费 6 / 省钱 10）。
+  - 端到端：`curl 127.0.0.1:7871/v1/chat/completions -d '{"model":"Beam",...}'` 返回 200，
+    zgate 日志 `(1/2)` 直连 403 → `(2/2)` 机场 200。
+  - 反证：直连复测仍是 403，说明不是网络抖动而是出口问题。
