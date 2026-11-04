@@ -1,0 +1,330 @@
+﻿[18:37:17] ===== 模型同步开始 =====
+[18:37:17] 仓库: F:\Project\ZcodeAIModels
+[18:37:17] 日志: F:\Project\ZcodeAIModels\docs\reports\sync-20261104-183717.log
+[18:37:17] ----- 一、Go 套餐 -----
+[18:37:17] >>> Go 套餐同步
+# OpenCode Go 模型自动收录同步 — 2026-11-04 18:37:18
+模式: 写入
+- 实时 /models: 28 个
+- Go 文档模型表: 29 个; 定价表: 30 个
+- 全量目录价格: 84 个; 已过弃用日: 19 个
+- 已配置 19 个（Go 7 / 非 Go 跳过 12）; 待评估新模型 23 个
+
+## 已配置模型体检
+  ⇄ 3 个直连地区受限、经机场复测通过（保留）：beam-free, gpt-6-luna, muse-spark-1.3-contributor
+  · 跳过 12 个 WorkBuddy/Qoder 模型（W/Q 显示名与 cn:/global:/qoder: 前缀，由统一路由处理）
+  无需移除
+
+## 新模型评估
+
+### 建议收录 7 个
+  + deepseek-v4.1-flash          协议 chat/completions 组 低耗   (opencode-go-chat-fast) 输入 $0.150 / 输出 $0.60~1.20 / 月额度 $100.0 额度可撑 167M 
+  + glm-5.3-flash                协议 chat/completions 组 低耗   (opencode-go-chat-fast) 输入 $0.150 / 输出 $0.50~0.50 / 月额度 $60.0 额度可撑 120M 
+  + hy3                          协议 chat/completions 组 低耗   (opencode-go-chat-fast) 输入 $0.140 / 输出 $0.58~0.58 / 月额度 $60.0 额度可撑 103M 
+  + longcat-2.0                  协议 chat/completions 组 高耗   (opencode-go-chat-fast) 输入 $0.300 / 输出 $1.20~1.20 / 月额度 $60.0 额度可撑 50M 
+  + mimo-v2.6-pro                协议 chat/completions 组 高耗   (opencode-go-chat-fast) 输入 $0.435 / 输出 $0.87~0.87 / 月额度 $15.0 额度可撑 17M 
+  + minimax-m3.1-flash           协议 chat/completions 组 高耗   (opencode-go-chat-fast) 输入 $0.150 / 输出 $0.60~0.60 / 月额度 $20.0 额度可撑 33M 
+  + muse-spark-1.2-contributor   协议 messages         组 低耗   (opencode-go-chat-fast) 输入 $0.100 / 输出 $0.20~0.20 / 月额度 $60.0 额度可撑 300M   [经机场]
+
+### 不收录 16 个
+  - deepseek-v4-pro              输出单价 $3.96 超过门槛 $1.60
+  - gemini-4-argon               输出单价 $20.00 超过门槛 $1.60
+  - glm-5.2                      输出单价 $4.40 超过门槛 $1.60
+  - glm-5.3                      输出单价 $4.40 超过门槛 $1.60
+  - gpt-5.6-luna                 输出单价 $1.80 超过门槛 $1.60
+  - grok-4.7                     输出单价 $12.00 超过门槛 $1.60
+  - hy4-preview                  输出单价 $2.50 超过门槛 $1.60
+  - kimi-k2.7-code               输出单价 $4.00 超过门槛 $1.60
+  - kimi-k3                      输出单价 $15.00 超过门槛 $1.60
+  - kimi-k3.1-pro                输出单价 $10.00 超过门槛 $1.60
+  - mimo-v2.5                    三种协议都跑不通: deprecated
+  - mimo-v2.5-pro                三种协议都跑不通: deprecated
+  - minimax-m3                   输出单价 $2.40 超过门槛 $1.60
+  - qwen3.7-plus                 输出单价 $4.80 超过门槛 $1.60
+  - qwen3.8-max                  输出单价 $6.00 超过门槛 $1.60
+  - step-5-preview               输出单价 $2.70 超过门槛 $1.60
+
+### 上游目录未声明档位（只能给「思考/不思考」开关）：longcat-2.0, mimo-v2.6-pro
+
+已写入 provider_config.json（备份 provider_config.json.bak-gosync-20261104-183820）
+报告: F:\Project\ZcodeAIModels\evidence\go-model-sync-20261104-183820.md
+[18:38:20] <<< Go 套餐同步  exit=0
+[18:38:20] ----- 二、WorkBuddy2API -----
+[18:38:21] WB_GATEWAY_KEY 已载入（48 字符）
+[18:38:21] >>> WorkBuddy 价格表
+!! 上游返回 20 条，旧表 39 条，减少 49%；疑似网关临时残缺，开始逐个探活。
+   被判定为下架的 19 个：cn:auto, cn:deepseek-v3-1-lkeap, cn:deepseek-v3-2-volc, cn:deepseek-v4-flash, cn:glm-5.0-turbo, cn:hunyuan-chat, cn:hy3-b, cn:hy3-c, cn:hy3-x, cn:hy4-preview, cn:hy4-preview-ctrl, cn:hy4-preview-exp, cn:hy4-preview-exp1, cn:hy4-preview-exp2, cn:hy4-preview-exp3, cn:hy4-preview-f, cn:kimi-k2.5, cn:minimax-m2.7, cn:wb-lite
+   仍可调用 17 个，保留旧价格：cn:auto, cn:deepseek-v3-2-volc, cn:deepseek-v4-flash, cn:hunyuan-chat, cn:hy3-b, cn:hy3-c, cn:hy3-x, cn:hy4-preview …
+   状态未知 2 个（429/5xx/超时），按保留处理：cn:deepseek-v3-1-lkeap, cn:glm-5.0-turbo
+→ 拉取 http://127.0.0.1:7863/panel/api/models
+   上游 20 条 → 归一化 20 条（跳过无 id 的 0 条）
+   有价格的 16 条
+   下架 19 个：cn:auto, cn:deepseek-v3-1-lkeap, cn:deepseek-v3-2-volc, cn:deepseek-v4-flash, cn:glm-5.0-turbo, cn:hunyuan-chat, cn:hy3-b, cn:hy3-c …
+   旧文件已备份到 wb_pricing.json.bak-20261104-183859
+[OK] 已写入 F:\Project\ZcodeAIModels\providers\workbuddy\cache\wb_pricing.json（39 条）
+[18:38:59] <<< WorkBuddy 价格表  exit=0
+[18:38:59] >>> WorkBuddy 探测
+plan=27 cached=69 pending=2 -> F:\Project\ZcodeAIModels\providers\workbuddy\cache\wb_zcode_probe.json
+     0.0  cn:auto                        body=generic  cached=ok
+     0.0  cn:hy3                         body=generic  cached=ok
+     0.0  cn:hy3-b                       body=generic  cached=ok
+     0.0  cn:hy3-c                       body=generic  cached=ok
+     0.0  cn:hy4-preview-f               body=generic  cached=ok
+     0.0  cn:hy4free                     body=generic  cached=ok
+    0.05  cn:hy3-x                       body=generic  cached=ok
+    0.08  cn:glm-5.3-flash               body=generic  cached=ok
+    0.08  cn:minimax-m3.1-flash          body=generic  cached=ok
+    0.08  cn:space-bunny                 body=generic  cached=ok
+    0.11  cn:deepseek-v4.1-flash         body=deepseek cached=ok
+    0.13  cn:mimo-v2.6-pro               body=generic  cached=ok
+    0.15  cn:fast-model                  body=generic  cached=ok
+    0.17  cn:deepseek-v4-flash           body=deepseek cached=ok
+    0.26  cn:minimax-m2.7                body=generic  cached=ok
+    0.29  cn:deepseek-v3-2-volc          body=generic  cached=ok
+    0.29  cn:hy4-preview                 body=generic  cached=ok
+    0.29  cn:hy4-preview-ctrl            body=generic  cached=ok
+    0.29  cn:hy4-preview-exp             body=generic  cached=ok
+    0.29  cn:hy4-preview-exp1            body=generic  cached=ok
+    0.29  cn:hy4-preview-exp2            body=generic  cached=ok
+    0.29  cn:hy4-preview-exp3            body=generic  cached=ok
+    0.29  cn:hy4std                      body=generic  cached=ok
+    None  cn:hunyuan-chat                body=generic  cached=ok
+    None  cn:hunyuan-image-alpha         body=generic  cached=rate_limited
+    None  cn:hunyuan-image-alpha-edit    body=generic  cached=rate_limited
+    None  cn:wb-lite                     body=generic  cached=ok
+[1/2] cn:hunyuan-image-alpha         rate_limited body=generic ->zcode    {"error": {"code": "no_healthy_account", "message": "{\"code\":11103,\
+[2/2] cn:hunyuan-image-alpha-edit    rate_limited body=generic ->zcode    {"error": {"code": "no_healthy_account", "message": "{\"code\":11103,\
+summary: {"ok": 51, "blocked": 2, "unavailable": 13, "rate_limited": 3}
+[18:39:27] <<< WorkBuddy 探测  exit=0
+[18:39:27] >>> WorkBuddy 写配置
+config      : C:\Users\SansK\.zcode\v2\provider_config.json
+mode        : unified (WorkBuddy -> OpenCode chat tiers)
+router base : http://127.0.0.1:7871/v1
+selected    : 9 models
+merged      : 9 model entries
+  main   -> opencode-go-chat: 1
+  low    -> opencode-go-chat-fast: 5
+  free   -> opencode-go-chat-free: 2
+  high   -> opencode-go-chat-fast: 1
+  backup -> opencode-go-chat-fast: 0
+excluded    : 11
+backup      : provider_config.json.bak-wbproxy-20261104-183927
+written     : C:\Users\SansK\.zcode\v2\provider_config.json
+[18:39:27] <<< WorkBuddy 写配置  exit=0
+[18:39:27] ----- 三、Qoder -----
+[18:39:27] 8790 已在监听
+[18:39:27] >>> Qoder 探测
+probe: http://127.0.0.1:7871/v1 prefix=qoder: catalog=http://127.0.0.1:8790/v1
+[1/9] Qwen3.8-Flash ...
+  ok           http=200 {"choices":[{"finish_reason":"length","index":0,"message":{"content":"","reasoning_content":"We need to respond to user:
+[2/9] DeepSeek-Flash ...
+  ok           http=200 {"id": "chatcmpl-de62620e-ccce-9ffd-9f47-27fa9182ca01", "object": "chat.completion", "created": 1793788882, "model": "au
+[3/9] GLM-5.3-Flash ...
+  ok           http=200 {"choices":[{"finish_reason":"length","index":0,"message":{"content":"","reasoning_content":"Hmm, the user just said \"o
+[4/9] MiniMax-M3.1-Flash ...
+  ok           http=200 {"choices":[{"finish_reason":"stop","index":0,"message":{"content":"Hi! How can I help you today?","role":"assistant"}}]
+[5/9] Step-5-Preview ...
+  ok           http=200 {"id": "chatcmpl-4d05d2ce-9ab5-9e3c-8425-6e993a2bbe94", "object": "chat.completion", "created": 1793788901, "model": "au
+[6/9] DeepSeek-V4-Pro ...
+  ok           http=200 {"id": "chatcmpl-8cc8ffee-7d83-9815-9d71-4bf9b91e5ac5", "object": "chat.completion", "created": 1793788907, "model": "au
+[7/9] Qwen3.8-Max ...
+  ok           http=200 {"id": "chatcmpl-041e7a22-a91f-9fc5-ab24-e987ea1c948f", "object": "chat.completion", "created": 1793788911, "model": "au
+[8/9] GLM-5.3 ...
+  ok           http=200 {"id": "chatcmpl-02706c60-6556-964e-a726-f00bbc3a0a47", "object": "chat.completion", "created": 1793788951, "model": "au
+[9/9] Kimi-K2.8-Preview ...
+  ok           http=200 {"id": "chatcmpl-29e838f2-9bbc-935b-9500-b1063aa35199", "object": "chat.completion", "created": 1793788955, "model": "au
+
+结果写入 F:\Project\ZcodeAIModels\providers\qoder\qoder_probe.json
+  Qwen3.8-Flash          ok           http=200
+  DeepSeek-Flash         ok           http=200
+  GLM-5.3-Flash          ok           http=200
+  MiniMax-M3.1-Flash     ok           http=200
+  Step-5-Preview         ok           http=200
+  DeepSeek-V4-Pro        ok           http=200
+  Qwen3.8-Max            ok           http=200
+  GLM-5.3                ok           http=200
+  Kimi-K2.8-Preview      ok           http=200
+[18:41:18] <<< Qoder 探测  exit=0
+[18:41:19] Qoder 探测通过 9 个模型（exit=0）
+[18:41:19] >>> Qoder 写配置
+合并模式：Qoder 模型并入现有 chat 组（前缀 qoder:）
+  qoder:Qwen3.8-Flash          -> opencode-go-chat-free    free
+  qoder:DeepSeek-Flash         -> opencode-go-chat-fast    x0.1
+  qoder:GLM-5.3-Flash          -> opencode-go-chat-fast    x0.1
+  qoder:MiniMax-M3.1-Flash     -> opencode-go-chat-fast    x0.1
+  qoder:Step-5-Preview         -> opencode-go-chat-fast    x0.3
+  qoder:DeepSeek-V4-Pro        -> opencode-go-chat-fast    x0.5
+  qoder:Qwen3.8-Max            -> opencode-go-chat-fast    x0.5
+  qoder:GLM-5.3                -> opencode-go-chat-fast    x0.8
+  qoder:Kimi-K2.8-Preview      -> opencode-go-chat-fast    x0.8
+目标组：
+  opencode-go-chat-free    10 个模型（其中 qoder: 1）
+  opencode-go-chat-fast    31 个模型（其中 qoder: 8）
+  opencode-go-chat-fast    31 个模型（其中 qoder: 8）
+providerOrder: ['opencode-go-chat', 'opencode-go-chat-free', 'opencode-go-chat-fast']
+跳过：
+  Auto (routing alias)
+  Kimi-K3.1-Pro (price 1 > 0.8)
+  Fast (routing alias)
+已写入 C:\Users\SansK\.zcode\v2\provider_config.json（备份：provider_config.json.bak-qoder-merge-20261104-184119）
+[18:41:19] <<< Qoder 写配置  exit=0
+[18:41:19] ----- 四、统一命名与分组 -----
+[18:41:19] >>> 统一命名写入
+分组 / 新 ID / 原模型 / 协议 / 积分
+
+## 主力 (2)
+  DeepSeek-4.1-Flash                 cn:deepseek-v4.1-flash             chat       0.11
+  Qwen-3.8-Max                       qoder:Qwen3.8-Max                  chat       0.43
+
+## 免费 (7)
+  HY3-Free                           cn:hy3                             chat       0.00
+  HY4-Free                           cn:hy4free                         chat       0.00
+  HY4-Pre                            cn:hy4-preview-f                   chat       0.00
+  Beam                               beam-free                          messages   0.00
+  Conatus                            qn:qiniu/conatus-free              messages   0.00
+  Iceman                             iceman-contributor-free            chat       0.00
+  Kimi-K3                            qn:moonshotai/kimi-k3-free         messages   0.00
+
+## 省钱 (10)
+  Qwen-3.8-Flash                     qwen3.8-flash                      messages   0.09
+  GLM-5.3-Flash                      cn:glm-5.3-flash                   chat       0.08
+  MiniMax-M3.1-Flash                 cn:minimax-m3.1-flash              chat       0.08
+  MiMo-2.6-Flash                     mimo-v2.6-flash                    chat       0.06
+  MiMo-2.6-Pro                       cn:mimo-v2.6-pro                   chat       0.13
+  HY3-X                              cn:hy3-x                           chat       0.05
+  Claude-Haiku-5.5                   claude-haiku-5-5                   messages   0.09
+  Space-Bunny                        cn:space-bunny                     chat       0.08
+  Muse-Spark1.3                      muse-spark-1.3-contributor         messages   0.04
+  GPT-6-Luna                         gpt-6-luna                         messages   0.09
+
+跳过：
+  HY3 (price 0.11，同厂商已有同代/更高代代表)
+  HY4-Std (price 0.29 > 省钱档 0.11)
+  HY-Fast (price 0.15 > 省钱档 0.11)
+  LongCat-2.0 (price 0.22 > 省钱档 0.11)
+  Muse-Spark1.2 (price 0.04，同厂商已有同代/更高代代表)
+  DeepSeek-4-Flash (price 0.09，同厂商已有同代/更高代代表)
+  Step-5-Pre (price 0.26 > 省钱档 0.11)
+  DeepSeek-4-Pro (price 0.43 > 省钱档 0.11)
+  GLM-5.3 (price 0.69 > 省钱档 0.11)
+  Kimi-K2.8-Pre (price 0.69 > 省钱档 0.11)
+
+已写入 C:\Users\SansK\.zcode\v2\provider_config.json（备份：provider_config.json.bak-alias-20261104-184119-200900）
+已写入 C:\Users\SansK\.zcode\v2\model-alias-map.json
+DeepSeekHarness: DeepSeekHarness 同步：3 个 provider / 19 个模型
+[18:41:19] <<< 统一命名写入  exit=0
+[18:41:19] >>> 漂移检查
+分组 / 新 ID / 原模型 / 协议 / 积分
+
+## 主力 (2)
+  DeepSeek-4.1-Flash                 cn:deepseek-v4.1-flash             chat       0.11
+  Qwen-3.8-Max                       qoder:Qwen3.8-Max                  chat       0.43
+
+## 免费 (7)
+  HY3                                cn:hy3                             chat       0.00
+  HY4-Free                           cn:hy4free                         chat       0.00
+  HY4-Pre                            cn:hy4-preview-f                   chat       0.00
+  Beam                               beam-free                          messages   0.00
+  Conatus                            qn:qiniu/conatus-free              messages   0.00
+  Iceman                             iceman-contributor-free            chat       0.00
+  Kimi-K3                            qn:moonshotai/kimi-k3-free         messages   0.00
+
+## 省钱 (10)
+  Qwen-3.8-Flash                     qwen3.8-flash                      messages   0.09
+  GLM-5.3-Flash                      cn:glm-5.3-flash                   chat       0.08
+  MiniMax-M3.1-Flash                 cn:minimax-m3.1-flash              chat       0.08
+  MiMo-2.6-Flash                     mimo-v2.6-flash                    chat       0.06
+  MiMo-2.6-Pro                       cn:mimo-v2.6-pro                   chat       0.13
+  HY3-X                              cn:hy3-x                           chat       0.05
+  Claude-Haiku-5.5                   claude-haiku-5-5                   messages   0.09
+  Space-Bunny                        cn:space-bunny                     chat       0.08
+  Muse-Spark1.3                      muse-spark-1.3-contributor         messages   0.04
+  GPT-6-Luna                         gpt-6-luna                         messages   0.09
+
+发现漂移 2 处（现有 alias map vs 当前价格源重算）：
+  新增： HY3
+  消失： HY3-Free
+[18:41:20] <<< 漂移检查  exit=1
+[18:41:20] 检测到漂移，收缩名单要两轮才收敛，再写一次
+[18:41:20] >>> 统一命名二轮
+分组 / 新 ID / 原模型 / 协议 / 积分
+
+## 主力 (2)
+  DeepSeek-4.1-Flash                 cn:deepseek-v4.1-flash             chat       0.11
+  Qwen-3.8-Max                       qoder:Qwen3.8-Max                  chat       0.43
+
+## 免费 (7)
+  HY3                                cn:hy3                             chat       0.00
+  HY4-Free                           cn:hy4free                         chat       0.00
+  HY4-Pre                            cn:hy4-preview-f                   chat       0.00
+  Beam                               beam-free                          messages   0.00
+  Conatus                            qn:qiniu/conatus-free              messages   0.00
+  Iceman                             iceman-contributor-free            chat       0.00
+  Kimi-K3                            qn:moonshotai/kimi-k3-free         messages   0.00
+
+## 省钱 (10)
+  Qwen-3.8-Flash                     qwen3.8-flash                      messages   0.09
+  GLM-5.3-Flash                      cn:glm-5.3-flash                   chat       0.08
+  MiniMax-M3.1-Flash                 cn:minimax-m3.1-flash              chat       0.08
+  MiMo-2.6-Flash                     mimo-v2.6-flash                    chat       0.06
+  MiMo-2.6-Pro                       cn:mimo-v2.6-pro                   chat       0.13
+  HY3-X                              cn:hy3-x                           chat       0.05
+  Claude-Haiku-5.5                   claude-haiku-5-5                   messages   0.09
+  Space-Bunny                        cn:space-bunny                     chat       0.08
+  Muse-Spark1.3                      muse-spark-1.3-contributor         messages   0.04
+  GPT-6-Luna                         gpt-6-luna                         messages   0.09
+
+已写入 C:\Users\SansK\.zcode\v2\provider_config.json（备份：provider_config.json.bak-alias-20261104-184120-174600）
+已写入 C:\Users\SansK\.zcode\v2\model-alias-map.json
+DeepSeekHarness: DeepSeekHarness 同步：3 个 provider / 19 个模型
+[18:41:20] <<< 统一命名二轮  exit=0
+[18:41:20] >>> 漂移复查
+分组 / 新 ID / 原模型 / 协议 / 积分
+
+## 主力 (2)
+  DeepSeek-4.1-Flash                 cn:deepseek-v4.1-flash             chat       0.11
+  Qwen-3.8-Max                       qoder:Qwen3.8-Max                  chat       0.43
+
+## 免费 (7)
+  HY3                                cn:hy3                             chat       0.00
+  HY4-Free                           cn:hy4free                         chat       0.00
+  HY4-Pre                            cn:hy4-preview-f                   chat       0.00
+  Beam                               beam-free                          messages   0.00
+  Conatus                            qn:qiniu/conatus-free              messages   0.00
+  Iceman                             iceman-contributor-free            chat       0.00
+  Kimi-K3                            qn:moonshotai/kimi-k3-free         messages   0.00
+
+## 省钱 (10)
+  Qwen-3.8-Flash                     qwen3.8-flash                      messages   0.09
+  GLM-5.3-Flash                      cn:glm-5.3-flash                   chat       0.08
+  MiniMax-M3.1-Flash                 cn:minimax-m3.1-flash              chat       0.08
+  MiMo-2.6-Flash                     mimo-v2.6-flash                    chat       0.06
+  MiMo-2.6-Pro                       cn:mimo-v2.6-pro                   chat       0.13
+  HY3-X                              cn:hy3-x                           chat       0.05
+  Claude-Haiku-5.5                   claude-haiku-5-5                   messages   0.09
+  Space-Bunny                        cn:space-bunny                     chat       0.08
+  Muse-Spark1.3                      muse-spark-1.3-contributor         messages   0.04
+  GPT-6-Luna                         gpt-6-luna                         messages   0.09
+
+无漂移：现有 alias map 与按当前价格源重算的结果一致
+[18:41:21] <<< 漂移复查  exit=0
+[18:41:21] 复查无漂移
+[18:41:21] ----- DeepSeekHarness 投影 -----
+[18:41:21] >>> DSH 投影检查
+ZCode      : 3 个 provider / 19 个模型
+DSH 路由   : 主力 2；免费 7；省钱 10
+patch      : C:\Users\SansK\.dsh\profiles\desktop\cordis.patch.yml
+模型表     : 无变化；凭据引用：无变化
+[18:41:22] <<< DSH 投影检查  exit=0
+[18:41:22] DSH patch 已是最新
+[18:41:22] ----- 五、同步报告 -----
+[18:41:22] >>> 写报告
+模型 19 个（主力 2 / 免费 7 / 低耗 0 / 高耗 0）
+新增 0：无
+移除 0：无
+链路变化 0：无
+已写入 F:\Project\ZcodeAIModels\docs\reports\MODEL-SYNC-20261104-1841.md
+[18:41:22] <<< 写报告  exit=0
+[18:41:22] ===== 模型同步结束 =====
+[18:41:22] 失败段数: 0
+[18:41:22] 本次日志: F:\Project\ZcodeAIModels\docs\reports\sync-20261104-183717.log
