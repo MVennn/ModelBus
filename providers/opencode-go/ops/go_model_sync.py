@@ -72,6 +72,15 @@ REPORT_DIR = os.environ.get(
 )
 UA = "opencode-cli/1.0"
 
+# 控制台目录（需要 apiKey）：只用来提示「目录里还挂着、/models 已不提供」的型号，
+# 任何失败都不影响主流程。实测 opencode-go 组 30 个、/models 28 个，差的两个
+# （mimo-v2.5 / mimo-v2.5-pro）真实调用返回 410 ModelDeprecated。
+CATALOG_API = "https://opencode.ai/console/api/v1/models"
+
+# 一次要删掉的已配置模型超过这个比例，就当成 /models 偶发残缺而不是真下架，
+# 本轮只告警不落盘。确需强删加 --force-prune。
+PRUNE_GUARD_RATIO = 0.34
+
 # 去留只看上游清单，不再发探测请求。
 #
 # 历史教训：探测结果被出口影响——同一个模型中国 IP 直连 403、换机场出口 200，
@@ -341,10 +350,19 @@ def declared_protocols(models):
     """
     protocols, unsupported = {}, {}
     for m in models:
-        api = m.get("api") or {}
+        if not isinstance(m, dict):
+            continue
+        mid = m.get("id")
+        if not mid:
+            continue
+        # api 正常是「协议名 -> 接入参数」的字典。上游改形状就跳过这条，
+        # 让上层走文档表兜底，而不是在这里抛异常把整轮同步带崩。
+        api = m.get("api")
+        if not isinstance(api, dict):
+            continue
         ok = [API_PROTOCOLS[k] for k in api if k in API_PROTOCOLS]
         ok.sort(key=PROTOCOLS.index)
-        mid = str(m.get("id"))
+        mid = str(mid)
         if ok:
             protocols[mid] = ok
         elif api:
@@ -357,6 +375,36 @@ def is_non_go_id(model):
     return model.upper().startswith(("CN:", "GLOBAL:", "QODER:", "WB:", "OC:", "QD:"))
 
 
+def fetch_console_catalog(key):
+    """返回 opencode-go 目录（id -> 条目）；任何失败都返回 {}，不影响主流程。
+
+    目录比 /models 宽：它还挂着已经调不动的型号（实测 mimo-v2.5 那对，真实调用
+    410 ModelDeprecated 并指了替代型号）。所以目录只能当提示，不能当去留依据；
+    去留仍然只认 /models。
+    """
+    if not key:
+        return {}
+    try:
+        st, raw = http(CATALOG_API, headers={"Authorization": "Bearer " + key})
+        if st != 200:
+            return {}
+        data = json.loads(raw)
+    except Exception:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    groups = [v for v in data.values()
+              if isinstance(v, dict) and isinstance(v.get("models"), dict)]
+    if not groups:
+        return {}
+    # 优先取 opencode-go 组；没有就退回第一组
+    for name, val in data.items():
+        if isinstance(val, dict) and isinstance(val.get("models"), dict) \
+                and "go" in str(name).lower():
+            return val["models"]
+    return groups[0]["models"]
+
+
 def stale_reason(model, deprecated_dates, live, hint):
     """返回该配置模型应被移除的原因；None 表示保留。调用方已排除 WorkBuddy 前缀。
 
@@ -367,6 +415,22 @@ def stale_reason(model, deprecated_dates, live, hint):
     if model not in live and model not in hint:
         return "上游实时清单与 Go 文档表里都没有了"
     return None
+
+
+def prune_is_suspicious(removed_count, configured_count, live_count):
+    """一次要移除太多，就当成上游清单残缺而不是真的下架。
+
+    /models 偶发返回残缺时，所有已配置模型都会「不在清单里」，照单全收就会
+    把配置一次清空。这里给一个粗暴但有效的刹车：要删的超过三成（且多于 2 个），
+    或者实时清单直接是空的，就只告警不落盘。
+    """
+    if removed_count <= 0:
+        return False
+    if live_count <= 0:
+        return True
+    if removed_count <= 2:
+        return False
+    return bool(configured_count) and removed_count / configured_count > PRUNE_GUARD_RATIO
 
 
 # ---------------------------------------------------------------- 配置读写
@@ -643,7 +707,9 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="真正写入 provider_config.json")
     ap.add_argument("--config", default=DEFAULT_CONFIG)
-    ap.add_argument("--probe-only", action="store_true", help="只探测，不做分组/写入")
+    ap.add_argument("--probe-only", action="store_true", help="只出报告，不做分组/写入")
+    ap.add_argument("--force-prune", action="store_true",
+                    help="忽略清单残缺保护，强制按 /models 移除已配置模型")
     ap.add_argument("--no-existing", action="store_true", help="跳过对已配置模型的重测")
     ap.add_argument("--reclassify-only", action="store_true",
                     help="只按备用档重排，不联网探测")
@@ -689,6 +755,15 @@ def main():
     log("- Go 文档模型表: %d 个; 定价表: %d 个" % (len(hint), len(go_price)))
     log("- 全量目录价格: %d 个; 已过弃用日: %d 个" % (len(public_price), len(deprecated)))
 
+    # 控制台目录比 /models 宽：多出来的多半是已弃用但仍挂在目录上。只作提示。
+    catalog = fetch_console_catalog(key)
+    if catalog:
+        catalog_only = sorted(set(catalog) - set(live))
+        log("- 控制台目录: %d 个; 比 /models 多 %d 个" % (len(catalog), len(catalog_only)))
+        if catalog_only:
+            log("  · 目录里还挂着但 /models 不提供（多半已弃用，不会收录）：%s"
+                % ", ".join(catalog_only))
+
     conf = configured_models(cfg)
     probes, non_go = probe_targets(conf, display_alias())
     # 新增候选只认实时 /models：文档表（hint）会滞后，还挂着已经下架的型号。
@@ -711,6 +786,12 @@ def main():
             if why:
                 removed.append((display, why))
                 log("  - %s %s：%s" % (verb, display, why))
+        # /models 偶发残缺会让「上游已无」一次命中一大片。判定见 prune_is_suspicious。
+        if not args.force_prune and prune_is_suspicious(len(removed), len(probes), len(live)):
+            log("  ⚠ 一次要移除 %d/%d 个，超过 %.0f%%（或 /models 为空）——更像上游清单残缺"
+                % (len(removed), len(probes), PRUNE_GUARD_RATIO * 100))
+            log("    本轮只告警不落盘；确认真的下架了再加 --force-prune 重跑")
+            removed = []
         if non_go:
             log("  · 跳过 %d 个 WorkBuddy/Qoder 模型（W/Q 显示名与 cn:/global:/qoder: 前缀，由统一路由处理）" % non_go)
         if not removed:

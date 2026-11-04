@@ -96,6 +96,41 @@ class DeclaredProtocolsTest(unittest.TestCase):
         self.assertEqual(unsupported, {})
 
 
+    def test_malformed_api_shape_is_skipped_not_crash(self):
+        """api 不是字典时跳过，交给文档表兜底，不能让整轮同步崩。"""
+        protos, unsupported = G.declared_protocols([
+            {"id": "a", "api": ["chat-completions"]},
+            {"id": "b", "api": None},
+            {"id": "c"},
+            {"id": None, "api": {"messages": {}}},
+            "not-a-dict",
+        ])
+        self.assertEqual(protos, {})
+        self.assertEqual(unsupported, {})
+
+
+class PruneGuardTest(unittest.TestCase):
+    """清单残缺保护：不能因为一个坏响应把已配置模型一次清空。"""
+
+    def test_no_removal_is_never_suspicious(self):
+        self.assertFalse(G.prune_is_suspicious(0, 7, 28))
+
+    def test_empty_live_is_always_suspicious(self):
+        self.assertTrue(G.prune_is_suspicious(3, 7, 0))
+
+    def test_small_removal_is_allowed(self):
+        """删一两个是正常下架，不拦。"""
+        self.assertFalse(G.prune_is_suspicious(2, 7, 28))
+
+    def test_mass_removal_is_blocked(self):
+        """7 个里删 4 个 = 57%，远超三成 -> 拦截。"""
+        self.assertTrue(G.prune_is_suspicious(4, 7, 28))
+
+    def test_ratio_threshold_is_strict(self):
+        """三成不拦，四成才拦。"""
+        self.assertFalse(G.prune_is_suspicious(3, 10, 28))
+        self.assertTrue(G.prune_is_suspicious(4, 10, 28))
+
 class NoProbeLeftTest(unittest.TestCase):
     """探测层必须已经从模块里消失。"""
 
