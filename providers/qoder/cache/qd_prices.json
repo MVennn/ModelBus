@@ -75,5 +75,11 @@
     "peak": 0.8,
     "valley": 0.8,
     "off_peak": {}
+  },
+  "Step-5-Preview": {
+    "price": 0.3,
+    "peak": 0.3,
+    "valley": 0.3,
+    "off_peak": {}
   }
 }

@@ -319,3 +319,13 @@ patch      : C:\Users\SansK\.dsh\profiles\desktop\cordis.patch.yml
 [18:52:33] DSH patch 已是最新
 [18:52:33] ----- 五、同步报告 -----
 [18:52:33] >>> 写报告并推送
+模型 19 个（主力 2 / 免费 7 / 低耗 0 / 高耗 0）
+新增 0：无
+移除 0：无
+链路变化 0：无
+已写入 F:\Project\ZcodeAIModels\docs\reports\MODEL-SYNC-20261104-1852.md
+已推送
+[18:52:46] <<< 写报告并推送  exit=0
+[18:52:46] ===== 模型同步结束 =====
+[18:52:46] 失败段数: 0
+[18:52:46] 本次日志: F:\Project\ZcodeAIModels\docs\reports\sync-20261104-184907.log
