@@ -19,6 +19,7 @@
 
 ### 门禁脚本 GBK 控制台自毁修复（2026-11-04）
 
+- 两个门禁脚本同时补 `if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(errors="replace")` 兜底，与其余仓口径一致（不再单靠 ASCII 约束）。
 - `tools/check-docs.py` / `tools/check-secrets.py` 的结论行 `✓` / `✗` 改 ASCII
   `[OK]` / `[FAIL]`：Windows GBK 控制台下 `print("✓")` 抛 `UnicodeEncodeError`，
   两个提交门禁脚本即便检查全过也以退出码 1 结束；`python -I` 会忽略
