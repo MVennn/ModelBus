@@ -201,28 +201,6 @@ function Wait-Port {
     return (Test-Port $TargetHost $Port)
 }
 
-function Get-QoderOkCount {
-    $f = Join-Path $ROOT "providers\qoder\qoder_probe.json"
-    if (-not (Test-Path $f)) { return 0 }
-    try {
-        $j = Get-Content -LiteralPath $f -Raw -Encoding UTF8 | ConvertFrom-Json
-        return @($j.PSObject.Properties | Where-Object { $_.Value.status -eq "ok" }).Count
-    } catch {
-        return 0
-    }
-}
-
-function Test-RouterHealth {
-    try {
-        $resp = Invoke-WebRequest -Uri "http://127.0.0.1:7871/health" -TimeoutSec 10 -UseBasicParsing -ErrorAction Stop
-        Say ("health HTTP " + $resp.StatusCode)
-        return ($resp.StatusCode -ge 200 -and $resp.StatusCode -lt 300)
-    } catch {
-        Say ("health 失败: " + $_.Exception.Message)
-        return $false
-    }
-}
-
 # ---- 开场 ----------------------------------------------------------------
 Say "===== 模型同步开始 ====="
 Say "仓库: $ROOT"
@@ -240,19 +218,18 @@ print(json.loads(pathlib.Path("gateways/upstream/workbuddy/config.json").read_te
 '@
 $env:WB_GATEWAY_KEY = ($keyCode | & $PY -).Trim()
 if ([string]::IsNullOrEmpty($env:WB_GATEWAY_KEY)) {
-    Say "警告：WorkBuddy api_key 为空，探测与写配置大概率会失败"
+    Say "警告：WorkBuddy api_key 为空，拉清单与写配置大概率会失败"
 } else {
     Say ("WB_GATEWAY_KEY 已载入（" + $env:WB_GATEWAY_KEY.Length + " 字符）")
 }
 
 Invoke-Py "WorkBuddy 价格表"   @("providers\workbuddy\workbuddy_fetch_pricing.py")
-Invoke-Py "WorkBuddy 探测"     @("providers\workbuddy\workbuddy_probe_zcode.py", "--max-rate", "0.3", "--sleep", "20")
 Invoke-Py "WorkBuddy 写配置"   @("providers\workbuddy\workbuddy_zcode_sync.py", "--max-rate", "0.3", "--apply")
 
 # ---- 三、Qoder -----------------------------------------------------------
 Say "----- 三、Qoder -----"
 
-# Qoder 的所有探测路径（统一路由 7871 与 --direct 的 8790）最终都要 8790 的 qoder 代理。
+# Qoder 的模型清单从 hub 的 live catalog 拉，需要 8790 的 qoder 代理先起来。
 # 代理是 detached 启动的，调用后立即返回，用端口轮询等它起来。
 if (-not (Test-Port "127.0.0.1" 8790)) {
     Say "8790 未监听，启动 qoder 代理"
@@ -271,45 +248,8 @@ if (-not (Test-Port "127.0.0.1" 8790)) {
     Say "8790 已在监听"
 }
 
-Invoke-Py "Qoder 探测" @("providers\qoder\qoder_probe_zcode.py", "--timeout", "90", "--sleep", "3")
-$qoderProbeCode = $script:LastCode
-
-$qoderOk = Get-QoderOkCount
-Say "Qoder 探测通过 $qoderOk 个模型（exit=$qoderProbeCode）"
-
-# 探测脚本总是 return 0，真失败要看 exit 或实际通过数；
-# 而且 probe json 里保留着上轮的 ever_ok/ok，所以不能只看计数。
-if ($qoderProbeCode -ne 0 -or $qoderOk -eq 0) {
-    Say "Qoder 探测未通过，开始排查入口"
-    $healthy = Test-RouterHealth
-
-    if (-not $healthy) {
-        Say "统一入口不可用，查看 zgate 状态"
-        $zg = Join-Path $ROOT "gateways\zgate\zgate.exe"
-        if (Test-Path $zg) {
-            & $zg status 2>&1 | ForEach-Object {
-                Write-Host $_
-                Add-Content -LiteralPath $LOG -Value $_ -Encoding UTF8
-            }
-            Say "如需手工拉起：$zg serve"
-        } else {
-            Say "找不到 zgate.exe"
-        }
-    }
-
-    Say "重探一次"
-    Invoke-Py "Qoder 重探" @("providers\qoder\qoder_probe_zcode.py", "--timeout", "90", "--sleep", "3") -Soft
-    $qoderOk = Get-QoderOkCount
-
-    if ($qoderOk -eq 0) {
-        Say "仍全失败，改用直连重探"
-        Invoke-Py "Qoder 直连探测" @("providers\qoder\qoder_probe_zcode.py", "--direct", "--timeout", "90", "--sleep", "3") -Soft
-        $qoderOk = Get-QoderOkCount
-        Say "直连探测通过 $qoderOk 个模型"
-    }
-}
-
-Invoke-Py "Qoder 写配置" @("providers\qoder\qoder_zcode_sync.py", "--probe-file", "providers\qoder\qoder_probe.json", "--apply")
+# 清单从 hub 的 live catalog 拉，不再逐个模型发探测请求。
+Invoke-Py "Qoder 写配置" @("providers\qoder\qoder_zcode_sync.py", "--apply")
 
 # ---- 四、统一命名与分组 ---------------------------------------------------
 Say "----- 四、统一命名与分组 -----"

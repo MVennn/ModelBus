@@ -72,24 +72,14 @@ REPORT_DIR = os.environ.get(
 )
 UA = "opencode-cli/1.0"
 
-# 机场出口：opencode.ai 对地区受限型号（gpt / beam / muse）从中国 IP 直连返回
-# 403 unsupported_country_region_territory / RegionError。路由器侧早就按 alias 的
-# 孪生跳换机场，但**体检是脚本自己发的请求**，不经过 zgate —— 只走直连就会把这些
-# 可用模型判成「上游不可用」删掉（2026-11-03 又复现一次）。所以探测遇到地区标记时
-# 用同一出口复测。与 tools/model_alias.py 的 AIRPORT_PROXY 保持同值；
-# 设 GO_AIRPORT_PROXY="" 可关闭机场复测。
-AIRPORT_PROXY = os.environ.get("GO_AIRPORT_PROXY", "http://10.0.0.1:7896")
-
-# 与 zgate 的 regionBlocked() 同一套标记：403/400 带这些字样 = 换出口，不是模型死了。
-REGION_BLOCKED_MARKERS = (
-    "unsupported_country_region_territory",
-    "RegionError",
-    "not available in your country",
-    "region, or territory not supported",
-)
-
-# 本轮经机场复测通过的模型（裸上游 id），报告里单独标注。
-AIRPORT_MODELS = set()
+# 去留只看上游清单，不再发探测请求。
+#
+# 历史教训：探测结果被出口影响——同一个模型中国 IP 直连 403、换机场出口 200，
+# 而机场节点自己会漂。用一次探测决定去留就是「今天删、明天加」：beam-free 在
+# 11-02 / 11-03 / 11-04 各走了一整轮。现在的判据只有两条：
+#   1. 官方弃用日已过（parse_catalog 的 deprecated 表）
+#   2. 实时 /models 与 Go 文档表里都没有了
+# 其余一律保留。上游没删就是还能跑，跑不通是出口的事，不是模型的事。
 
 # 连「只发 reasoning_effort」都拒的模型：这类只能 map="{}"，档位写不出来。
 # （muse 系实测带 reasoning_effort 直接报错；其余被拒的型号先按需加。）
@@ -156,14 +146,6 @@ def http(url, data=None, headers=None, timeout=45, proxy=None):
         return r.status, raw
 
 
-def region_blocked(status, raw):
-    """这条出口是不是「地区受限」——不是模型坏了，换个出口就能用。"""
-    if status not in (403, 400):
-        return False
-    low = (raw or "").lower()
-    return any(m.lower() in low for m in REGION_BLOCKED_MARKERS)
-
-
 def norm(s):
     return re.sub(r"[^a-z0-9]", "", (s or "").lower())
 
@@ -206,9 +188,16 @@ def declared_efforts(models):
 
 
 def fetch_live_models():
+    """返回 (ids, efforts, protocols, unsupported)。
+
+    协议取自 /models 每条记录的 api 字段（协议名 -> 接入参数）。这份 JSON 与
+    Go 文档表的 Endpoint 列 27/27 一致，而且不用爬 HTML，所以协议判定不再
+    需要发探测请求。
+    """
     st, raw = http(BASE + "/models")
     data = json.loads(raw)["data"]
-    return [m["id"] for m in data], declared_efforts(data)
+    protocols, unsupported = declared_protocols(data)
+    return [m["id"] for m in data], declared_efforts(data), protocols, unsupported
 
 
 def base_name(name):
@@ -330,93 +319,37 @@ def price_lookup(model_id, go_price, public_price):
     return None
 
 
-# ---------------------------------------------------------------- 探测
+# ---------------------------------------------------------------- 协议判定
 
-API_KEY = None  # 由 main() 从 provider_config.json 读出，probe 时带上
 SESSION = "go-model-sync"
 
-
-def probe_headers(protocol=None):
-    """anthropic-messages 端点只认 x-api-key，chat/responses 认 Authorization: Bearer"""
-    h = {"x-opencode-session": SESSION}
-    if API_KEY:
-        if protocol == "messages":
-            h["x-api-key"] = API_KEY
-        else:
-            h["Authorization"] = "Bearer " + API_KEY
-    return h
+# /models 的 api 字段用短名，这里映射到请求路径。
+API_PROTOCOLS = {
+    "chat-completions": "chat/completions",
+    "messages": "messages",
+    "responses": "responses",
+}
 
 
-def probe_body(model, protocol, thinking=True):
-    if protocol == "chat/completions":
-        body = {"model": model, "messages": [{"role": "user", "content": "hi"}], "max_tokens": 4096}
-        if thinking:
-            body["thinking"] = {"type": "enabled", "budget_tokens": 1024}
-    elif protocol == "messages":
-        body = {"model": model, "max_tokens": 4096, "messages": [{"role": "user", "content": "hi"}]}
-        if thinking:
-            body["thinking"] = {"type": "enabled", "budget_tokens": 1024}
-    else:
-        body = {"model": model, "input": "hi", "max_output_tokens": 4096}
-        if thinking:
-            body["reasoning_effort"] = "medium"
-    return body
+def declared_protocols(models):
+    """从实时 /models 的 api 字段取上游声明可用的协议。
 
-
-def probe_once(model, protocol, thinking=True, proxy=None):
-    """一次探测，返回 (status, raw)；HTTP 错误也按 (code, body) 返回，不抛。"""
-    body = probe_body(model, protocol, thinking)
-    url = BASE + "/" + protocol
-    headers = probe_headers(protocol)
-    try:
-        return http(url, data=body, headers=headers, proxy=proxy)
-    except urllib.error.HTTPError as e:
-        return e.code, e.read().decode("utf-8", "replace")
-
-
-def probe_detail(model, protocol, thinking=True):
-    """返回 (status, kind, raw)。kind: ok / protocol_unsupported / deprecated / unauthorized / error
-
-    地区受限（403 + region 标记）先按机场复测：模型本身可用，只是这条出口进不去。
-    只有机场也不通才把 403 当失败交给 stale_reason。
+    api 是「协议名 -> 该协议的接入参数」的字典；只保留本客户端支持的三种。
+    返回 (protocols, unsupported)：
+      protocols   : id -> 按 PROTOCOLS 顺序排好的协议名列表
+      unsupported : id -> 上游声明的原始协议名列表（没有任何一种被支持）
     """
-    try:
-        st, raw = probe_once(model, protocol, thinking)
-    except Exception as e:  # 超时等 -> 重试一次
-        try:
-            st, raw = probe_once(model, protocol, thinking)
-        except Exception as e2:
-            return 0, "error:" + type(e2).__name__, str(e2)
-    if region_blocked(st, raw) and AIRPORT_PROXY:
-        st2, raw2 = 0, ""
-        try:
-            st2, raw2 = probe_once(model, protocol, thinking, proxy=AIRPORT_PROXY)
-        except Exception as e:
-            raw2 = str(e)
-        if st2 == 200:
-            AIRPORT_MODELS.add(model)
-            return st2, "ok", raw2
-        # 机场也不通：400 的「参数不合法」这类证词更具体，留给报告
-        if st2 and st2 != 403:
-            st, raw = st2, raw2
-    if st == 200:
-        return st, "ok", raw
-    low = raw.lower()
-    if "modeldeprecat" in low or "has been deprecated" in low:
-        return st, "deprecated", raw
-    if "modelprotocolunsupported" in low or "does not support this protocol" in low:
-        return st, "protocol_unsupported", raw
-    if st == 401:
-        return st, "unauthorized", raw
-    if st == 429:
-        return st, "rate_limited", raw
-    return st, "error", raw
-
-
-def probe(model, protocol, thinking=True):
-    """返回 (status, kind)"""
-    st, kind, _ = probe_detail(model, protocol, thinking)
-    return st, kind
+    protocols, unsupported = {}, {}
+    for m in models:
+        api = m.get("api") or {}
+        ok = [API_PROTOCOLS[k] for k in api if k in API_PROTOCOLS]
+        ok.sort(key=PROTOCOLS.index)
+        mid = str(m.get("id"))
+        if ok:
+            protocols[mid] = ok
+        elif api:
+            unsupported[mid] = sorted(api)
+    return protocols, unsupported
 
 
 def is_non_go_id(model):
@@ -424,78 +357,16 @@ def is_non_go_id(model):
     return model.upper().startswith(("CN:", "GLOBAL:", "QODER:", "WB:", "OC:", "QD:"))
 
 
-def upstream_message(raw):
-    """从上游错误体里取一句话，放进报告。"""
-    try:
-        data = json.loads(raw)
-        err = data.get("error")
-        msg = err.get("message") if isinstance(err, dict) else err
-        if msg:
-            return str(msg).replace("\n", " ")[:200]
-    except Exception:
-        pass
-    return (raw or "").strip().replace("\n", " ")[:200]
+def stale_reason(model, deprecated_dates, live, hint):
+    """返回该配置模型应被移除的原因；None 表示保留。调用方已排除 WorkBuddy 前缀。
 
-
-UNAVAILABLE_MARKERS = (
-    "endpoint is unavailable",
-    "unsupported model",
-    "model is unavailable",
-)
-
-
-def stale_reason(model, st, kind, raw, deprecated_dates, live, hint):
-    """返回该配置模型应被移除的原因；None 表示保留。调用方已排除 WorkBuddy 前缀。"""
+    不发任何请求：去留只由上游清单决定——opencode 删掉了才算删，没删就是没删。
+    """
     if model in deprecated_dates:
         return "已过官方弃用日 %s" % deprecated_dates[model]
-    if kind == "deprecated":
-        return "上游已弃用：HTTP %s %s" % (st, upstream_message(raw))
-    if kind == "error":
-        # 401=凭据/隐私授权问题、429=限频冷却，二者都属环境/用量问题而非模型已死，
-        # 只告警不移除（脚本也解决不了授权，限频会自己恢复）。
-        # 其余（400/402/404/410 不支持或已下架，5xx 端点故障）一律视为「跑不通」：
-        # 按用户要求——上游不可达即清除，待下次探测复通后再由新模型评估自动加回。
-        if st in (401, 429):
-            return None
-        if region_blocked(st, raw):
-            # 地区受限是**出口属性**，不是模型状态：同一个模型从中国 IP 直连 403，
-            # 换个出口就 200，探测结果本身不能证明它已经下架。
-            # 去留只认上游清单（口径：opencode 删掉了才算删，没删就是没删）——
-            # 仍在实时/文档清单里就保留并告警，从清单里消失才移除。
-            # 2026-11-02 / 11-03 / 11-04 各有一次「探测抖动 → 误删 → 下一轮又加回」，
-            # 就是这条分支绕过清单判断直接判死造成的。
-            if model in live or model in hint:
-                return None
-            return "地区受限且已不在上游清单：HTTP %s %s" % (st, upstream_message(raw))
-        still_listed = (model in live or model in hint)
-        where = "仍在清单但上游不可用" if still_listed else "已不在任何清单"
-        return "%s：HTTP %s %s" % (where, st, upstream_message(raw))
-    if kind == "protocol_unsupported" and model not in live and model not in hint:
-        return "已不在实时/文档模型清单，且拒绝当前协议"
+    if model not in live and model not in hint:
+        return "上游实时清单与 Go 文档表里都没有了"
     return None
-
-
-def probe_protocols(model, hint=None):
-    """按协议顺序探测，返回 (protocol, needs_no_thinking) 或 (None, reason)"""
-    order = list(PROTOCOLS)
-    if hint:
-        order.sort(key=lambda p: 0 if p == hint else 1)
-    reasons = []
-    for p in order:
-        st, kind = probe(model, p, thinking=True)
-        if kind == "ok":
-            return p, False, ""
-        if kind == "deprecated":
-            return None, None, "deprecated"
-        reasons.append("%s:%s" % (p, kind))
-        if kind == "unauthorized":
-            return None, None, "unauthorized"
-    # 带思考参数不通、不带思考参数通的模型 -> 需要 reasoningLevel.map="{}"
-    for p in order:
-        st, kind = probe(model, p, thinking=False)
-        if kind == "ok":
-            return p, True, ""
-    return None, None, "|".join(reasons)
 
 
 # ---------------------------------------------------------------- 配置读写
@@ -811,7 +682,7 @@ def main():
     if not key:
         log("!! 配置里没有 apiKey，探测会全部 401")
 
-    live, live_efforts = fetch_live_models()
+    live, live_efforts, protocols, unsupported = fetch_live_models()
     hint, go_price = parse_go_docs()
     public_price, deprecated = parse_catalog()
     log("- 实时 /models: %d 个" % len(live))
@@ -831,22 +702,10 @@ def main():
         log("\n## 已配置模型体检")
         verb = "移除" if (args.apply and not args.probe_only) else "将移除"
         for m, (display, pid, alias_proto) in sorted(probes.items()):
-            proto = _probe_protocol(alias_proto, pid)
-            st, kind, raw = probe_detail(m, proto, thinking=False)
-            why = stale_reason(m, st, kind, raw, deprecated, live, hint)
+            why = stale_reason(m, deprecated, live, hint)
             if why:
                 removed.append((display, why))
                 log("  - %s %s：%s" % (verb, display, why))
-            elif kind == "protocol_unsupported":
-                log("  ✗ %s 现在拒绝 %s 协议，协议归属可能变了" % (display, proto))
-            elif kind == "unauthorized":
-                log("  ⚠ %s 返回 401（凭据/隐私授权问题）" % display)
-            elif kind != "ok":
-                log("  ⚠ %s 探测异常: %s (HTTP %s)" % (display, kind, st))
-        airport_kept = sorted(m for m in probes if m in AIRPORT_MODELS)
-        if airport_kept:
-            log("  ⇄ %d 个直连地区受限、经机场复测通过（保留）：%s"
-                % (len(airport_kept), ", ".join(airport_kept)))
         if non_go:
             log("  · 跳过 %d 个 WorkBuddy/Qoder 模型（W/Q 显示名与 cn:/global:/qoder: 前缀，由统一路由处理）" % non_go)
         if not removed:
@@ -873,11 +732,15 @@ def main():
         if not price.get("free") and price.get("out_max") is not None and price["out_max"] > MAX_OUTPUT_PRICE:
             skipped.append((m, "输出单价 $%.2f 超过门槛 $%.2f" % (price["out_max"], MAX_OUTPUT_PRICE)))
             continue
-        proto, needs_no_thinking, reason = probe_protocols(m, proto_hint)
-        if proto is None:
-            skipped.append((m, "三种协议都跑不通: %s" % reason))
+        # 协议只从清单取：/models 的 api 优先，其次 Go 文档表，最后兜底 chat/completions
+        if m in unsupported:
+            skipped.append((m, "上游只提供 %s，客户端不支持" % "/".join(unsupported[m])))
             continue
-        row.update({"protocol": proto, "needs_no_thinking": needs_no_thinking})
+        proto = (protocols.get(m) or [None])[0] or proto_hint or "chat/completions"
+        if proto not in PROTOCOLS:
+            skipped.append((m, "协议 %s 客户端不支持" % proto))
+            continue
+        row.update({"protocol": proto, "needs_no_thinking": False})
         if price.get("free"):
             tier, durable = "免费", None
         else:
@@ -898,10 +761,9 @@ def main():
             price_txt = "输入 $%.3f / 输出 $%.2f~%.2f / 无 Go 额度表(按公开价)" % (
                 p.get("input") or 0, p.get("out_min") or 0, p.get("out_max") or 0)
         durable_txt = ("额度可撑 %.0fM" % r["durable"]) if r.get("durable") else "—"
-        log("  + %-28s 协议 %-16s 组 %-4s (%s) %s %s %s%s" % (
+        log("  + %-28s 协议 %-16s 组 %-4s (%s) %s %s %s" % (
             r["model"], r["protocol"], r["tier"], r["provider"], price_txt, durable_txt,
-            "  [需关思考覆盖]" if r["needs_no_thinking"] else "",
-            "  [经机场]" if r["model"] in AIRPORT_MODELS else ""))
+            "  [需关思考覆盖]" if r["needs_no_thinking"] else ""))
     log("\n### 不收录 %d 个" % len(skipped))
     for m, why in skipped:
         log("  - %-28s %s" % (m, why))
