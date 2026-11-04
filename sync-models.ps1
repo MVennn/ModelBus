@@ -31,11 +31,33 @@ $ErrorActionPreference = "Continue"
 
 # ---- 环境 ----------------------------------------------------------------
 $ROOT       = "F:\Project\ZcodeAIModels"
-$PY         = "C:\Users\SansK\AppData\Local\Programs\Python\Python312\python.exe"
 $GIT_DIR    = "C:\Program Files\Git\cmd"
 $REPORT_DIR = Join-Path $ROOT "docs\reports"
-$STAMP      = Get-Date -Format "yyyyMMdd-HHmmss"
-$LOG        = Join-Path $REPORT_DIR "sync-$STAMP.log"
+
+# 运行日志不能落在仓库里：日志会回显 provider_config.json 等本机绝对路径，
+# 一旦被 sync_report.py 的 `git add docs/reports` 带进提交，
+# CI 的 tools/check-secrets.py（[本机用户目录] 规则）就会失败。
+# 放到 LOCALAPPDATA 下，仓库里只留 MODEL-SYNC-*.md 这类不含路径的报告。
+$STATE_DIR = Join-Path $env:LOCALAPPDATA "ZcodeAIModels"
+$LOG_DIR   = Join-Path $STATE_DIR "logs"
+$STAMP     = Get-Date -Format "yyyyMMdd-HHmmss"
+$LOG       = Join-Path $LOG_DIR "sync-$STAMP.log"
+$SUMMARY   = Join-Path $STATE_DIR "_last-sync.txt"
+
+# Python 位置不能写死成 C:\Users\<用户名>\...，那同样会触发敏感信息扫描。
+# 优先用 LOCALAPPDATA（环境变量展开，源码里看不到用户名），再退回 PATH。
+function Resolve-Python {
+    foreach ($v in @("Python313", "Python312", "Python311", "Python310")) {
+        $c = Join-Path $env:LOCALAPPDATA "Programs\Python\$v\python.exe"
+        if (Test-Path $c) { return $c }
+    }
+    foreach ($n in @("python", "python3", "py")) {
+        $cmd = Get-Command $n -ErrorAction SilentlyContinue
+        if ($cmd -and $cmd.Source) { return $cmd.Source }
+    }
+    return ""
+}
+$PY = Resolve-Python
 
 # 计划任务的 PATH 很干净，git / python 都得自己补
 if (Test-Path $GIT_DIR) { $env:PATH = "$GIT_DIR;" + $env:PATH }
@@ -52,8 +74,8 @@ $utf8NoBom = New-Object System.Text.UTF8Encoding($false)
 $OutputEncoding           = $utf8NoBom
 try { chcp 65001 | Out-Null } catch { }
 
-if (-not (Test-Path $PY)) {
-    Write-Error "找不到 Python: $PY"
+if (-not $PY -or -not (Test-Path $PY)) {
+    Write-Error "找不到 Python：LOCALAPPDATA\Programs\Python 与 PATH 都没命中"
     exit 2
 }
 if (-not (Test-Path $ROOT)) {
@@ -62,6 +84,7 @@ if (-not (Test-Path $ROOT)) {
 }
 
 New-Item -ItemType Directory -Path $REPORT_DIR -Force | Out-Null
+New-Item -ItemType Directory -Path $LOG_DIR -Force | Out-Null
 Set-Location $ROOT
 
 $script:Fail       = 0
@@ -118,7 +141,7 @@ function Show-SyncToast {
     $detail = if ($ReportPath) { Split-Path $ReportPath -Leaf } else { Split-Path $LogPath -Leaf }
 
     # 结构化摘要落盘，方便事后查
-    $summaryFile = Join-Path $REPORT_DIR "_last-sync.txt"
+    $summaryFile = $SUMMARY
     @(
         "时间: $(Get-Date -Format 'yyyy-MM-dd HH:mm:ss')",
         "结果: $(if ($ok) { '成功' } else { "失败 $($script:Fail) 段" })",

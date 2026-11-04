@@ -98,3 +98,11 @@ desktop.ini
 
 # ---- IDE 本地工作区（agent 记忆与索引，可再生；版本化记忆在 memories/）----
 .workbuddy/
+
+# ---- 同步运行日志与运行摘要（会回显本机绝对路径，不进版本库）----
+# sync_report.py 的 `git add docs/reports` 会把整个目录带上，
+# 而日志里含 provider_config.json / cordis.patch.yml 的完整本机路径，
+# 提交后会让 CI 的 tools/check-secrets.py（[本机用户目录]）失败。
+# 日志现在写到 %LOCALAPPDATA%\ZcodeAIModels\logs\，这里再兜一层。
+/docs/reports/*.log
+/docs/reports/_last-sync.txt
