@@ -91,11 +91,33 @@ class ProbeAirportFallbackTest(unittest.TestCase):
         self.assertEqual((st, kind), (200, "ok"))
         self.assertEqual(self.calls, [None])
 
-    def test_stale_reason_names_region_as_such(self):
+    def test_region_blocked_still_listed_is_kept(self):
+        """地区受限是出口属性，不是模型状态。
+
+        只要模型还在上游清单里就必须保留：同一个模型从中国 IP 直连 403、
+        换机场出口 200，机场节点自己会漂，用单次探测决定去留会造成 churn。
+        2026-11-02 / 11-03 / 11-04 各有一次「误删 → 下一轮又加回」。
+        """
         why = G.stale_reason(
             "beam-free", REGION_403[0], "error", REGION_403[1], {}, {"beam-free"}, {}
         )
+        self.assertIsNone(why, "还在实时清单里的地区受限模型不该被判死")
+
+    def test_region_blocked_in_doc_list_only_is_kept(self):
+        """只在文档模型清单里出现，同样算「上游还有」，保留。"""
+        why = G.stale_reason(
+            "beam-free", REGION_403[0], "error", REGION_403[1], {}, set(), {"beam-free"}
+        )
+        self.assertIsNone(why)
+
+    def test_region_blocked_gone_from_catalog_is_removed(self):
+        """两边清单都没有了才算真删，理由要写明地区受限且已不在清单。"""
+        why = G.stale_reason(
+            "beam-free", REGION_403[0], "error", REGION_403[1], {}, set(), set()
+        )
+        self.assertIsNotNone(why)
         self.assertIn("地区受限", why)
+        self.assertIn("已不在上游清单", why)
 
 
 if __name__ == "__main__":
