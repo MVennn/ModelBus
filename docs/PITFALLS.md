@@ -657,3 +657,23 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   - 端到端：`curl 127.0.0.1:7871/v1/chat/completions -d '{"model":"Beam",...}'` 返回 200，
     zgate 日志 `(1/2)` 直连 403 → `(2/2)` 机场 200。
   - 反证：直连复测仍是 403，说明不是网络抖动而是出口问题。
+
+## 36. 检查脚本用 ✓ / ✗ 打结论：GBK 控制台下自己把自己判成失败 【通用】
+
+- **现象**：Windows 中文控制台（`cp936`）跑 `python -I tools/check-docs.py`，
+  最后一行 `print(f"✓ {n} 篇文档全部通过…")` 抛
+  `UnicodeEncodeError: 'gbk' codec can't encode character '\u2713'`，
+  脚本以**退出码 1** 结束 —— 检查其实全过，门禁却报红。
+  CI（ubuntu-24.04）是 UTF-8，看不到这个问题，所以能长期潜伏。
+- **根因**：`✓` U+2713 / `✗` U+2717 不在 cp936 码表里；Python 3.12 的
+  `sys.stdout` 在管道与控制台下按 locale 编码（`gbk`），`print` 非 ASCII 直接抛。
+  `python -I`（isolated 模式）把 `PYTHONIOENCODING` / `PYTHONUTF8` 一起忽略，
+  所以「设个环境变量」不是解法 —— 必须改脚本本身。
+- **解法**：脚本自身的结论行只用 ASCII 标记（本仓惯例 `[OK]` / `[FAIL]`），
+  正文说明照旧写中文（GBK 覆盖得到）。确有字形需求时，在入口显式
+  `sys.stdout.reconfigure(encoding="utf-8", errors="replace")`；
+  优先 ASCII —— 不改调用方环境就能复现同一结果。
+- **验证**：
+  - `python -I tools/check-docs.py` → `[OK] 52 篇文档全部通过…`，退出码 0；
+  - `python -I tools/check-secrets.py` → `[OK] 已扫描 176 个文件…`，退出码 0；
+  - 反证：把 `✓` 临时改回原样，同一命令退出码 1 并抛 `UnicodeEncodeError`。

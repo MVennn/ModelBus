@@ -17,6 +17,14 @@
 
 ## [未发布]
 
+### 门禁脚本 GBK 控制台自毁修复（2026-11-04）
+
+- `tools/check-docs.py` / `tools/check-secrets.py` 的结论行 `✓` / `✗` 改 ASCII
+  `[OK]` / `[FAIL]`：Windows GBK 控制台下 `print("✓")` 抛 `UnicodeEncodeError`，
+  两个提交门禁脚本即便检查全过也以退出码 1 结束；`python -I` 会忽略
+  `PYTHONIOENCODING` / `PYTHONUTF8`，环境变量救不回来，只能改脚本
+- 机制与验证口径见 [docs/PITFALLS.md](docs/PITFALLS.md) §36
+
 ### DeepSeekHarness 模型自动同步（2026-11-04）
 
 - 新增 `tools/dsh_sync.py`：读取 ZCode 最终三组，重写 DeepSeekRuntime

@@ -86,10 +86,10 @@ def tracked_files() -> list[str]:
         out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
                              encoding="utf-8", errors="replace")
     except FileNotFoundError:
-        print("✗ 找不到 git 命令")
+        print("[FAIL] 找不到 git 命令")
         raise SystemExit(2)
     if out.returncode != 0:
-        print("✗ git ls-files 失败：" + (out.stderr or "").strip())
+        print("[FAIL] git ls-files 失败：" + (out.stderr or "").strip())
         raise SystemExit(2)
     return [x for x in out.stdout.splitlines() if x.strip()]
 
@@ -101,7 +101,7 @@ def untracked_files() -> list[str]:
         ["git", "ls-files", "--others", "--exclude-standard"],
         cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if out.returncode != 0:
-        print("✗ git ls-files --others 失败：" + (out.stderr or "").strip())
+        print("[FAIL] git ls-files --others 失败：" + (out.stderr or "").strip())
         raise SystemExit(2)
     return [x for x in out.stdout.splitlines() if x.strip()]
 
@@ -148,7 +148,7 @@ def main() -> int:
             continue
 
     if bad:
-        print(f"✗ 发现 {len(bad)} 处疑似敏感信息：")
+        print(f"[FAIL] 发现 {len(bad)} 处疑似敏感信息：")
         for rel, lineno, name, text in bad:
             print(f"   {rel}:{lineno}  [{name}]  {text}")
         print()
@@ -156,7 +156,7 @@ def main() -> int:
         print("   位置索引见 docs/SECRETS.md。")
         return 1
 
-    print(f"✓ 已扫描 {len(files)} 个文件，未发现疑似敏感信息")
+    print(f"[OK] 已扫描 {len(files)} 个文件，未发现疑似敏感信息")
     return 0
 
 

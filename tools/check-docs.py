@@ -144,11 +144,11 @@ def main() -> int:
             problems.append(f"{rel}: 孤儿文档 —— 没有被任何文档引用（也未进 docs/README.md 索引）")
 
     if problems:
-        print(f"✗ {len(problems)} 个问题：")
+        print(f"[FAIL] {len(problems)} 个问题：")
         for p in problems:
             print("   ", p)
         return 1
-    print(f"✓ {len(mds)} 篇文档全部通过（链接 / 锚点 / 引言块 / 孤儿）")
+    print(f"[OK] {len(mds)} 篇文档全部通过（链接 / 锚点 / 引言块 / 孤儿）")
     return 0
 
 
