@@ -196,7 +196,7 @@ def update_index(report_name: str, current: dict, changes: dict, baseline: bool)
 
 def git_push(report_name: str, out_dir: Path = REPORT_DIR) -> int:
     def run(args: list[str]) -> int:
-        proc = subprocess.run(args, cwd=ROOT, text=True, capture_output=True)
+        proc = subprocess.run(args, cwd=ROOT, text=True, encoding="utf-8", errors="replace", capture_output=True)
         if proc.returncode != 0:
             print(proc.stdout.strip())
             print(proc.stderr.strip(), file=sys.stderr)

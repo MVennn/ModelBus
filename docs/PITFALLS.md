@@ -419,8 +419,8 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   `retry_after` 与 `wait` 同源）；所有会进入错误收尾的聚合路径显式
   `except RateLimited` → `_rate_limited()`。**不要**在错误处理里用
   `getattr(exc, "status", 502)` 掩盖缺字段：状态码会被悄悄改成 502。
-- **验证**：`python tests/_test_issue71_queue_error_paths.py` 全绿；
-  排队场景实测返回 `HTTP 429` 且日志不再出现 traceback。
+- **验证**：仓库内没有该场景的自动化测试（原记的 `tests/_test_issue71_queue_error_paths.py`
+  从未入库，2026-11-04 订正）；以在线排队场景实测为准 —— 返回 `HTTP 429` 且日志无 traceback。
 
 ---
 

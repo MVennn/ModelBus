@@ -61,7 +61,7 @@ baseUrl 均为 `https://opencode.ai/zen/go/v1`（三种路径都实测可用）�
 - apiKey 实际存放路径：`config.providerConfigRules.providerRules[i].config.access.apiKey`（**不是** `config.api.apiKey`；`config.api` 里只有 type + baseUrl）。`go_model_sync.py` 里 `api_key()` 读的正是 `access.apiKey`，路径正确。
 
 **2026-10-20 00:00 自动收录落地**：
-- 脚本 `providers/opencode-go/ops/go_model_sync.py`（`--apply` 才写配置；先备份 `.bak-gosync-<ts>`，原子替换）；定时任务"每天 10:00 自动收录 Go 套餐新模型"（ZCode cron，automationId `automation-5ad749e3-0d25-4323-afbc-7ae30cdc7288`）。
+- 脚本 `providers/opencode-go/ops/go_model_sync.py`（`--apply` 才写配置；先备份 `.bak-gosync-<ts>`，原子替换）；定时任务"每天 12:00 自动收录 Go 套餐新模型"（ZCode cron，automationId `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`；2026-11-01 重建，旧任务 `automation-5ad749e3-*` 已废弃）。
 - 数据源补全：`https://opencode.ai/v2/docs/console/models` 有**全量目录**（Model→Model ID→Endpoint=协议、公开价、"Free" 标记、**弃用日期表**）；`/v2/docs/console/go/` 有 Go 套餐的模型表 + 定价表（Go $10 档第一张 / Go Plus 第二张）。官方弃用表已过期 18 个（含 minimax-m2.5 2026-08-05、minimax-m2.7 **未**过期）。
 - **鉴权头分协议**：`chat/completions`、`responses` 用 `Authorization: Bearer <apiKey>`；`anthropic/messages` 只认 `x-api-key: <apiKey>`（用 Bearer 会 401 `Go requires a credential`）——这解释了之前 muse-spark 在 messages 上 401 而 responses 200。
 - **ZCode 请求体形态**（从 `resources/glm/zcode.cjs` 读出，探测要照抄）：chat/messages 带思考时是 `thinking:{type:"enabled",budget_tokens:1024}` 且删掉 temperature；responses 用 `reasoning_effort`。

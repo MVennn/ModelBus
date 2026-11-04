@@ -96,7 +96,8 @@ def load_effective_bodies(ids: list[str], max_tokens: int = 24) -> dict[str, dic
                     "--max-output-tokens", str(max_tokens),
                     *missing,
                 ],
-                capture_output=True, text=True, timeout=60, check=True,
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=60, check=True,
             )
             _EFFECTIVE.update(json.loads(out.stdout))
         except Exception as e:  # node missing / script failed

@@ -83,7 +83,8 @@ def is_doc_file(rel: str) -> bool:
 
 def tracked_files() -> list[str]:
     try:
-        out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True)
+        out = subprocess.run(["git", "ls-files"], cwd=ROOT, capture_output=True, text=True,
+                             encoding="utf-8", errors="replace")
     except FileNotFoundError:
         print("✗ 找不到 git 命令")
         raise SystemExit(2)
@@ -98,7 +99,7 @@ def untracked_files() -> list[str]:
     # gitignore 排除的本地文件（vault/、.work/ 等）不进扫描。
     out = subprocess.run(
         ["git", "ls-files", "--others", "--exclude-standard"],
-        cwd=ROOT, capture_output=True, text=True)
+        cwd=ROOT, capture_output=True, text=True, encoding="utf-8", errors="replace")
     if out.returncode != 0:
         print("✗ git ls-files --others 失败：" + (out.stderr or "").strip())
         raise SystemExit(2)
