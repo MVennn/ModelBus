@@ -2054,3 +2054,67 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 - `cn:minimax-m3.1-flash` / `cn:space-bunny` 的五档上游声明未落地到 UI，理由见 §5.4。
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-04 第九轮：DeepSeekHarness 模型自动同步
+
+## 任务目标
+把 DeepSeekRuntime（DSH）纳入模型更新链路：ZCode 最终三组每次由 `model_alias.py --apply` 写入后，自动同步到 DSH 的 `llm-pi-ai` 路由，避免手工重复导入。
+
+## 已完成变更
+- [x] 新增 `tools/dsh_sync.py`：读 ZCode 最终 `provider_config.json`，用 `zcode_effective_body.js` 取有效元数据，重写 `~/.dsh/profiles/desktop/cordis.patch.yml` 的 `llm-pi-ai` 段；保留其他 patch 条目与非 `zcode-*` provider。
+- [x] 思考档位按 ZCode 有效 `reasoningLevel.map` 投影：`map="{}"` 的模型不写 `reasoningEfforts`；`disabled` 档写 `off: disabled` 并配 `thinkingFormat: deepseek`。
+- [x] DSH 凭据只维护 `~/.dsh/.credentials.yaml` 的 `ZCODE_GATEWAY_KEY` 引用；patch 不写明文；写前备份 `*.bak-dshsync-<时间戳>`，`--check` 可做漂移检测。
+- [x] `tools/model_alias.py --apply` 在默认 ZCode 配置路径下自动调用 `dsh_sync.py --apply`；`--config` 沙盒不投影；DSH 未安装跳过，失败只告警不阻断；新增 `--no-dsh` 关闭。
+- [x] 更新每天 12:00 自动化 prompt（`automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）：说明自动投影、WARN 处理与最终回复口径。
+- [x] 文档：`docs/TOOLS.md`、`docs/MAINTENANCE.md`、`CHANGELOG.md` 同步。
+
+## 验收
+- `python -I tools/dsh_sync.py`：3 个 provider / 18 个模型，模型表与凭据引用均「无变化」。
+- `python -I tools/dsh_sync.py --check`：退出码 0。
+- `python -I tools/model_alias.py --check`：退出码 1，仍报 1 处既有漂移（DeepSeek-4.1-Flash 的 OC 跳 0.11→0.22），与本轮 DSH 改动无关；下一轮定时 `--apply` 会收口。
+- 临时 DSH 副本测试：新增模型能写入、移除模型能删除、非 `zcode-*` provider 保留、凭据变更能更新、二次 `--check` 为 0、备份文件不互相覆盖。
+- `python -I -m py_compile tools/dsh_sync.py tools/model_alias.py` 通过；`model_alias.sync_deepseek_harness()` 对真实配置调用输出「DeepSeekHarness 同步：无变化」。
+- DSH 模型选择器已显示 `主力 / 免费 / 省钱` 三组 18 个模型；此前实测 HY3 与 DeepSeek-4.1-Flash（思考开/关）经 7871 均 HTTP 200。
+
+## 待解决 / 注意事项
+- `tools/dsh_sync.py` 新增 PyYAML 依赖（仅该脚本）；`docs/TOOLS.md` 已标明。
+- 自动投影只针对本机 `DSH_HOME` 下的 `desktop` profile；换 profile 用 `DSH_PROFILE`，换 DSH 安装用 `DSH_HOME`。
+- 若 DSH 未运行，写入仍有效，下次启动生效；若 DSH patch 被 DSH UI 同时改写，`--check` 会报漂移，重跑 `--apply` 即可。
+
+## 状态: 已完成
+
+---
+
+# 2026-11-04 第十轮：WorkBuddy2API 升级到 v2026.11.4.1120
+
+## 任务目标
+上游 WorkBuddy2API 更新后，升级本地网关、保留本地补丁、重编替换二进制，并把新模型同步进 ZCode 与 DeepSeekHarness。
+
+## 已完成变更
+- [x] 上游 `misakano/main` 从 `40d98f9` 快进到 `e6dd088`（tag `v2026.11.4.1120`，27 个提交）；分支切到 `misakano-base` 跟踪 `misakano/main`。
+- [x] 保留本地两处补丁：`.gitignore` 本地 secrets/log 忽略；`cmd/server/main.go` 首次生成配置时不打印 api_key。
+- [x] `go test ./...` 全部通过；`go build -trimpath -o wb2api.exe.new ./cmd/server` 成功。
+- [x] 旧二进制备份为 `wb2api.exe.bak-20261104-144556`；停旧进程后用重试替换为 18,821,632 字节新二进制，zgate 已按需拉起新进程。
+- [x] `workbuddy_fetch_pricing.py` 刷新价格表：面板 20 条，新增 `cn:hy4free`（0 分）与 `cn:hy4std`（0.29）；旧表 17 个可调型号经逐条探活保留，价格表 39 行。
+- [x] 探测 4 个 pending：`cn:hy4free` / `cn:hy4std` 均 `ok`；两条图片模型仍 `rate_limited`。
+- [x] `workbuddy_zcode_sync.py --max-rate 0.3 --apply` → `model_alias.py --slot auto --apply`：免费组加入 `HY4-Free`，最终三组 2 / 7 / 10（共 19），`hy4std` 0.29 按省钱档上限跳过。
+- [x] `tools/model_alias.py` 显示名表补 `hy4free → HY4-Free`、`hy4std → HY4-Std`，修掉全小写显示名。
+- [x] `providers/workbuddy/workbuddy_fetch_pricing.py` 最终 `✓` 改为 ASCII `[OK]`，修掉 GBK 控制台写盘后 `UnicodeEncodeError`（fetch 现在退出 0）。
+- [x] DSH 自动投影：`model_alias --apply` 调用 `dsh_sync.py`，DeepSeekHarness 同步为 3 个 provider / 19 个模型。
+
+## 验收
+- `go test ./...` 全通过；新版网关 `/panel/api/overview` 显示 4/4 healthy。
+- 经 7871 实测 `HY3` HTTP 200、`HY4-Free` HTTP 200（max_tokens=32 时内容为空、finish=length，属思考 token 用尽，不是路由错误）。
+- ZCode 三组：主力 2（DeepSeek-4.1-Flash、Qwen-3.8-Max）/ 免费 7（含 HY4-Free）/ 省钱 10；`model_alias --check` 退出 0。
+- `dsh_sync.py --check` 退出 0；DSH 选择器/配置为同一 19 个模型。
+- `workbuddy_fetch_pricing.py` 复跑退出 0，价格表 39 行。
+
+## 待解决 / 注意事项
+- Qoder 8790 当前未运行，`model_alias` 打 WARN 后回落上次倍率快照；不影响本次 WorkBuddy 同步。
+- 面板目录口径仍比实际可调用面窄：旧表 17 个被面板剔除的型号经探活仍 200，按「菜单没有 ≠ 不能用」保留。
+- `cn:hy4std`（0.29）高于省钱档 0.11，未收录；如日后需要，需进人工名单或改档位规则。
+- 本轮未提交/推送；上游 clone 的本地补丁保持未暂存状态。
+
+## 状态: 已完成

@@ -372,7 +372,7 @@ def main() -> int:
         shutil.copy2(out, bak)
         print(f"   旧文件已备份到 {bak.name}")
     out.write_text(json.dumps(rows, ensure_ascii=False, indent=2), encoding="utf-8")
-    print(f"✓ 已写入 {out}（{len(rows)} 条）")
+    print(f"[OK] 已写入 {out}（{len(rows)} 条）")
     return 0
 
 

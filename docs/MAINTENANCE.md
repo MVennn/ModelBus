@@ -181,7 +181,7 @@ WorkBuddy 侧**只能用** `workbuddy_probe_zcode.py`（它先调 `zcode_effecti
 
 ## 4. `--apply` 前的备份与回退
 
-### 4.1 三个脚本都会自动备份
+### 4.1 各脚本都会自动备份
 
 | 脚本 | 备份文件名 | 写入方式 |
 |---|---|---|
@@ -189,6 +189,7 @@ WorkBuddy 侧**只能用** `workbuddy_probe_zcode.py`（它先调 `zcode_effecti
 | `workbuddy_zcode_sync.py --apply` | `provider_config.json.bak-wbproxy-<时间戳>` | 同上（`.tmp-wbproxy` → `os.replace`） |
 | `providers/qoder/qoder_zcode_sync.py --apply` | `provider_config.json.bak-qoder-merge-<时间戳>`（`--separate` 为 `.bak-qoder-<时间戳>`） | 同上（`.tmp-qoder` → `os.replace`） |
 | `tools/model_alias.py --apply` | `provider_config.json.bak-alias-<时间戳>` | 同上（`.tmp-alias` → `os.replace`） |
+| `tools/dsh_sync.py --apply`（通常由 `model_alias.py --apply` 自动调用） | `cordis.patch.yml.bak-dshsync-<时间戳>`、`.credentials.yaml.bak-dshsync-<时间戳>` | 只替换 DSH profile 的 `llm-pi-ai` 段；写临时文件后 `os.replace` |
 
 ### 4.2 手动备份（建议在批量操作前额外做一份）
 
@@ -233,15 +234,17 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | `providerId` 不要随便改 | 旧会话可能引用它；改 `providerName`（显示名）才安全 |
 | 脚本与界面**同一时间只有一个写入者** | 两个写入者会互相覆盖 |
 
+**DeepSeekRuntime 同理**：`tools/dsh_sync.py --apply` 写的是 `~/.dsh/profiles/desktop/cordis.patch.yml`，DSH 会热加载，不需要重启；DSH 没运行也不影响写入，下次启动生效。它只替换 `llm-pi-ai` 段，保留其他 patch 条目和非 `zcode-*` provider。
+
 ---
 
 ## 6. 定期动作清单
 
 | 周期 | 动作 |
 |---|---|
-| **每天 12:00（定时任务 `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）** | 五段顺序：① `python providers/opencode-go/ops/go_model_sync.py --apply`（体检对地区受限型号自动经机场复测，**不要**再用「403 就删」的旧口径判读）；② WorkBuddy（`workbuddy_fetch_pricing.py` → `workbuddy_probe_zcode.py --max-rate 0.3 --sleep 20` → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_probe_zcode.py --timeout 90 --sleep 3` → `qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply`）；④ `python tools/model_alias.py --slot auto --apply` 归一化三组与 alias map；⑤ `python tools/sync_report.py --write --push` 生成 `docs/reports/MODEL-SYNC-<时间>.md`（写明新增 / 移除 / 分组 / 链路变化）、更新报告索引并提交推送。手动补跑也按这个顺序；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
+| **每天 12:00（定时任务 `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）** | 五段顺序：① `python providers/opencode-go/ops/go_model_sync.py --apply`（体检对地区受限型号自动经机场复测，**不要**再用「403 就删」的旧口径判读）；② WorkBuddy（`workbuddy_fetch_pricing.py` → `workbuddy_probe_zcode.py --max-rate 0.3 --sleep 20` → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_probe_zcode.py --timeout 90 --sleep 3` → `qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply`）；④ `python tools/model_alias.py --slot auto --apply` 归一化三组与 alias map，并自动调用 `tools/dsh_sync.py --apply` 把最终三组投影到本机 DeepSeekRuntime（使用默认 ZCode 配置路径时；DSH 未安装自动跳过；失败只告警不阻断；`--no-dsh` 可关闭），随后 `python tools/model_alias.py --check` 确认无漂移；⑤ `python tools/sync_report.py --write --push` 生成 `docs/reports/MODEL-SYNC-<时间>.md`（写明新增 / 移除 / 分组 / 链路变化）、更新报告索引并提交推送。手动补跑也按这个顺序；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
 | **每天（可选，全量体检）** | `python tools/model_probe.py` → `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；定时任务不跑全量 probe，各 sync 自带定向探测。规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6 |
-| **每天 08:00 / 22:00 + 工作日 09:00 / 12:00 / 14:00 / 18:00** | `python providers/workbuddy/workbuddy_fetch_pricing.py` → `python tools/model_alias.py --slot auto --apply`（峰谷价切换，见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1） |
+| **每天 08:00 / 22:00 + 工作日 09:00 / 12:00 / 14:00 / 18:00** | `python providers/workbuddy/workbuddy_fetch_pricing.py` → `python tools/model_alias.py --slot auto --apply`（峰谷价切换，见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1；默认配置路径下也会自动同步 DSH） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
 | **换套餐 / 换账号池后** | 全量重探 WorkBuddy（`--sleep 20`）+ 重跑同步 |
 | **2026-11-30 前后** | 七牛 `qiniu/conatus-free` 的限时免费到期：`QN_FREE_UNTIL` 会让该跳自动消失，只需跑一次 `python tools/model_alias.py --slot auto --apply` 确认免费组只剩 4 条。想续用就换其它 `-free` 模型（[QINIU.md](QINIU.md) §3） | 详见 [QINIU.md](QINIU.md) |

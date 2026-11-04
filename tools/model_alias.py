@@ -56,6 +56,7 @@ import json
 import os
 import re
 import shutil
+import subprocess
 import sys
 import time
 from datetime import datetime, timedelta, timezone
@@ -268,6 +269,8 @@ ABBR = {
     "hy4-preview-ctrl": "HY4-Pre",
     "hy4-preview-exp": "HY4-Pre",
     "hy4-preview-x": "HY4-Pre",
+    "hy4free": "HY4-Free",
+    "hy4std": "HY4-Std",
     "hy3-b": "HY3",
     "hy3-c": "HY3",
     "fast-model": "HY-Fast",
@@ -1235,6 +1238,45 @@ def print_drift(drift: dict[str, list]) -> None:
         print(f"    新：{' -> '.join(new)}")
 
 
+def sync_deepseek_harness(config_path: Path) -> None:
+    """Project the just-written ZCode config into a local DeepSeekRuntime install.
+
+    This is deliberately best-effort: DSH is an optional client on this machine,
+    and a bad DSH profile must never turn a successful ZCode sync into a failed
+    cron run. The standalone ``tools/dsh_sync.py --check`` remains the strict
+    drift check.
+    """
+    dsh_home = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh")))
+    profile = os.environ.get("DSH_PROFILE", "desktop")
+    patch = dsh_home / "profiles" / profile / "cordis.patch.yml"
+    script = REPO / "tools" / "dsh_sync.py"
+    if not patch.exists() or not script.exists():
+        return
+    try:
+        proc = subprocess.run(
+            [sys.executable, str(script), "--apply", "--config", str(config_path)],
+            cwd=str(REPO),
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=180,
+        )
+    except (OSError, subprocess.SubprocessError) as exc:
+        print(f"WARN: DeepSeekHarness 同步未执行：{exc}", file=sys.stderr)
+        return
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip().splitlines()
+        print(
+            "WARN: DeepSeekHarness 同步失败（ZCode 配置已写入）："
+            + (detail[-1] if detail else f"exit {proc.returncode}"),
+            file=sys.stderr,
+        )
+        return
+    lines = [line for line in proc.stdout.splitlines() if line.strip()]
+    print("DeepSeekHarness: " + (lines[-1] if lines else "已同步"))
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--apply", action="store_true", help="写入 provider_config.json 与 alias map")
@@ -1262,6 +1304,8 @@ def main() -> int:
                         help="忽略集合体定义，只生成单型号条目")
     parser.add_argument("--force-unpriced", action="store_true",
                         help="允许在某个渠道全部无价时仍然 --apply（默认拒绝，避免整批剔除）")
+    parser.add_argument("--no-dsh", action="store_true",
+                        help="--apply 时不把最终三组投影到本机 DeepSeekRuntime")
     args = parser.parse_args()
 
     path = config_path(args.config)
@@ -1586,6 +1630,10 @@ def main() -> int:
     os.replace(alias_tmp, alias_file)
     print(f"\n已写入 {path}（备份：{backup.name}）")
     print(f"已写入 {alias_file}")
+    # Only project the real ZCode config by default. A caller using --config for
+    # a fixture/sandbox must not overwrite the local DSH profile.
+    if not args.no_dsh and args.config is None:
+        sync_deepseek_harness(path)
     return 0
 
 

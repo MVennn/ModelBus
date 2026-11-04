@@ -262,6 +262,12 @@ python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder �
 网关：`wb2api` 面板版（MIT），默认 `http://127.0.0.1:7863`，OpenAI 兼容。
 把腾讯 CodeBuddy 账号池变成 OpenAI 兼容 API。模型 id 形如 `cn:xxx` / `global:xxx`。
 
+> **2026-11-04 上游升级**：本地从 `40d98f9` 升到 `e6dd088`（`v2026.11.4.1120`，27 个提交），
+> 保留 `.gitignore` 与 `main.go` 不打印 api_key 两处本地补丁；`go test ./...` 通过后重编并替换
+> `wb2api.exe`。面板目录回到 20 条，新增 `cn:hy4free`（0 分，显示名 `HY4-Free`，进免费组）与
+> `cn:hy4std`（0.29，未收录）；旧表 17 个仍可调型号经探活保留。下文 §4.0/§4.2 的五组分档表是
+> 2026-10 的历史口径，当前最终三组以 §2 与 `tools/model_alias.py` 为准。
+
 网关生命周期由 `gateways/zgate` 托管（WB 按需拉起、空闲回收；Qoder 常驻），
 全部退出 → 停），安装与副作用见 [MAINTENANCE.md](MAINTENANCE.md) §8。
 

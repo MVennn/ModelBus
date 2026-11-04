@@ -17,6 +17,25 @@
 
 ## [未发布]
 
+### DeepSeekHarness 模型自动同步（2026-11-04）
+
+- 新增 `tools/dsh_sync.py`：读取 ZCode 最终三组，重写 DeepSeekRuntime
+  `~/.dsh/profiles/desktop/cordis.patch.yml` 的 `llm-pi-ai` 段；保留其他 patch
+  条目与非 `zcode-*` provider，`reasoningLevel.map="{}"` 的模型不写 reasoningEfforts
+- 使用默认 ZCode 配置路径时，`tools/model_alias.py --apply` 会在写完后自动调用它；
+  DSH 未安装跳过，失败只告警不阻断；`--config` 沙盒不投影，`--no-dsh` 可关闭
+- 日常 12:00 自动化、`docs/TOOLS.md`、`docs/MAINTENANCE.md` 同步更新
+
+### WorkBuddy2API 升到 v2026.11.4.1120（2026-11-04）
+
+- 上游 `40d98f9 → e6dd088`（27 个提交），本地保留 `.gitignore` / `main.go` 脱敏两处补丁；
+  `go test ./...` 全通过后重编并替换 `wb2api.exe`
+- 面板目录回到 20 条：新增 `cn:hy4free`（0 分，显示 `HY4-Free`，进免费组）与
+  `cn:hy4std`（0.29，未收录）；旧表 17 个仍可调型号经探活保留
+- `tools/model_alias.py` 的显示名表补 `hy4free` / `hy4std`，避免 UI 出现全小写 `hy4free`
+- `providers/workbuddy/workbuddy_fetch_pricing.py` 最终 `✓` 改 ASCII `[OK]`，
+  避免 GBK 控制台在写盘后抛 `UnicodeEncodeError`
+
 ### 依赖口径如实化与门面脚本提示（2026-11-04）
 
 - README / docs/TOOLS.md 标明 `tools/make_social_preview.py` 需 numpy + Pillow
