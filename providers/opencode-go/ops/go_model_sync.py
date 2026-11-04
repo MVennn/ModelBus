@@ -691,7 +691,12 @@ def main():
 
     conf = configured_models(cfg)
     probes, non_go = probe_targets(conf, display_alias())
-    candidates = sorted(set(live) | set(hint.keys()))
+    # 新增候选只认实时 /models：文档表（hint）会滞后，还挂着已经下架的型号。
+    # 2026-11-04 实测：/models 28 个、文档表 29 个，多出来的正是 mimo-v2.5 /
+    # mimo-v2.5-pro —— Opencode 后台（个人 → 模型）里 mimo 只剩 MiMo-V2.6-Flash，
+    # 这两个已经不存在。用并集当候选会把它们当新模型加回来。
+    # 保留判定仍用「实时 ∪ 文档」（宁可留），只有新增收紧到实时清单。
+    candidates = sorted(live)
     new_models = [m for m in candidates if m not in probes]
     log("- 已配置 %d 个（Go %d / 非 Go 跳过 %d）; 待评估新模型 %d 个"
         % (len(conf), len(probes), non_go, len(new_models)))
