@@ -458,8 +458,15 @@ def stale_reason(model, st, kind, raw, deprecated_dates, live, hint):
         if st in (401, 429):
             return None
         if region_blocked(st, raw):
-            # 走到这里说明机场也没把它救回来（probe_detail 已经试过）。
-            return "地区受限：直连 HTTP %s，机场复测也不通 %s" % (st, upstream_message(raw))
+            # 地区受限是**出口属性**，不是模型状态：同一个模型从中国 IP 直连 403，
+            # 换个出口就 200，探测结果本身不能证明它已经下架。
+            # 去留只认上游清单（口径：opencode 删掉了才算删，没删就是没删）——
+            # 仍在实时/文档清单里就保留并告警，从清单里消失才移除。
+            # 2026-11-02 / 11-03 / 11-04 各有一次「探测抖动 → 误删 → 下一轮又加回」，
+            # 就是这条分支绕过清单判断直接判死造成的。
+            if model in live or model in hint:
+                return None
+            return "地区受限且已不在上游清单：HTTP %s %s" % (st, upstream_message(raw))
         still_listed = (model in live or model in hint)
         where = "仍在清单但上游不可用" if still_listed else "已不在任何清单"
         return "%s：HTTP %s %s" % (where, st, upstream_message(raw))
