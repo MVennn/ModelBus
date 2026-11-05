@@ -17,6 +17,31 @@
 
 ## [未发布]
 
+### WB 永远是第一消费来源（2026-11-05）
+
+- 起因：15:44 实测 7871 的 `DeepSeek-4.1-Flash` 全部落到 OC（响应里带
+  `opencode.billing_source=go` 与 `X-Opencode-Log-Id`），`GET /health` 显示
+  `children.workbuddy.state=stopped`（policy=ondemand + 窗口制，当前不在窗口内），
+  7863 无人监听；alias map 的链是 `OC -> OC -> WB -> QW` —— 这是当天 12:00 用一个
+  `DEMOTE_HOPS` 集合为躲 6004 模型级限流手工降级的结果，不是 workbuddy 挂了。
+- 定调：WB 的额度是**优先消费**对象，链序不允许被任何临时开关改动，也不看价格。
+  排序键第一维改成 `WB_FIRST_CHANNELS`（`tools/model_alias.py`），第二维才是
+  `TAIL_HOPS`（QW 一年期预付尾跳），其余按价格 / 前缀 / 渠道 / 名称稳定排序。
+- 改动：`DEMOTE_HOPS` 常量与排序分支**整段删除**（不是清空），限流改由 zgate
+  逐跳回落处理；`~/.zcode/v2/model-alias-map.json` 里 `DeepSeek-4.1-Flash` 的链改回
+  `WB -> OC -> OC -> QW`（zgate 按 mtime 每请求热加载别名表，未重启长驻网关）；
+  `~/.dsh/tools/demote-throttled-hop.mjs` 已替换为拒绝执行的废弃桩，原实现留档
+  `~/.dsh/backups/demote-throttled-hop.mjs.disabled-20261105`。
+- 测试：`tests/test_model_alias_demote.py` 换成 `tests/test_model_alias_hop_order.py`，
+  钉住四条：WB 等价比价都打头、贵 3 倍仍打头、QW 与机场孪生跳仍在链尾、
+  `DEMOTE_HOPS` 属性必须不存在；另加磁盘守卫 —— 读真实 alias map，任何含 WB 跳的
+  型号 WB 不在第 0 位即红。全量 44 用例通过。
+- 实测：15:45:11 zgate 按需拉起 `wb2api.exe`（pid 40640），请求改走
+  `WB:cn:deepseek-v4.1-flash` 并返回 200；生成器 dry-run 的 19 条链里 9 条含 WB，
+  9 条全部 `chain: WB:...` 打头。
+- 回退：把 `WB_FIRST_CHANNELS` 从排序键里拿掉（等于让 WB 回到按价格排序）；或直接用
+  备份 `~/.zcode/v2/model-alias-map.json.bak-wbrestore-*` 覆盖别名表。
+
 ### 门禁脚本 GBK 控制台自毁修复（2026-11-04）
 
 - 两个门禁脚本同时补 `if hasattr(sys.stdout, "reconfigure"): sys.stdout.reconfigure(errors="replace")` 兜底，与其余仓口径一致（不再单靠 ASCII 约束）。

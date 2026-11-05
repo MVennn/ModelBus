@@ -150,6 +150,13 @@ MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash"}
 # 顺序来花，所以它必须排在付费跳之后，只有当付费全挂时才轮到。
 TAIL_HOPS = {("QW", "deepseek-v4.1-flash")}
 
+# WB（WorkBuddy）永远是第一消费来源：排序键里给它最高的固定优先级，
+# 不看价格、不受任何「临时降级」开关影响。历史教训 2026-11-05：曾用一个
+# DEMOTE_HOPS 集合把 WB 跳降到 OC 之后躲 6004 限流，结果整条会话在无人察觉
+# 的情况下全部跑在 opencode 上计费。该降级机制已彻底移除 —— 上游限流交给
+# zgate 逐跳回落，不再改链序。
+WB_FIRST_CHANNELS = {"WB"}
+
 # 机场出口：opencode.ai 的「地区受限」型号（gpt / beam / muse）从中国 IP 拿
 # 403 `unsupported_country_region_territory`，必须经机场出去。路由器上这个入站口
 # 绑死 🤖 AI接口 组（ShellcrashRules 的 `config/yamls/user.yaml` → listeners），
@@ -938,7 +945,11 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             groups = [paid, free]
 
         for group in groups:
+            # 第一键：WB 永远链首（不看价格，不受任何降级开关影响）。
+            # 第二键：QW 尾跳永远链尾（一年期预付额度，付费全挂才轮到）。
+            # 其余按价格、前缀、渠道、名称稳定排序。
             group = sorted(group, key=lambda h: (
+                0 if h["channel"] in WB_FIRST_CHANNELS else 1,
                 1 if (h["channel"], h["upstream"]) in TAIL_HOPS else 0,
                 h["price"],
                 0 if h["upstream"].startswith("global:") else 1 if h["upstream"].startswith("cn:") else 2,
@@ -1462,6 +1473,10 @@ def main() -> int:
         print(f"\n## {PROVIDER_NAMES[{'main':PROVIDER_MAIN,'free':PROVIDER_FREE,'low':PROVIDER_LOW}[group]]} ({len(grouped[group])})")
         for item in grouped[group]:
             print(f"  {item['new_id']:<34} {item['original']:<34} {item['protocol']:<10} {item['price']:.2f}")
+            chain = item.get("chain") or []
+            if chain:
+                hops = " -> ".join(f"{h['channel']}:{h['upstream']}" for h in chain)
+                print(f"  {'':<34} chain: {hops}")
     if pool_rows:
         print("## 集合体（%s）" % pool_file.name)
         for pool in pool_rows:
