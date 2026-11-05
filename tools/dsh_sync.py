@@ -12,7 +12,10 @@ the ``llm-pi-ai`` entry in ``~/.dsh/profiles/<profile>/cordis.patch.yml``:
 * ZCode models whose effective ``reasoningLevel.map`` is ``{}`` deliberately
   get no ``reasoningEfforts``, because DSH would otherwise send a
   ``reasoning_effort`` that these upstreams reject;
-* all other patch entries and non-``zcode-*`` DSH providers are preserved.
+* all other patch entries and non-``zcode-*`` DSH providers are preserved;
+* every ``zcode-*`` route carries the module-level ``RETRY_POLICY`` (429
+  fast-fail: one short retry for SERVER/TIMEOUT/TRANSPORT/EMPTY_RESPONSE only),
+  so the daily 12:00 sync regenerates it instead of wiping a hand edit.
 
 The patch never contains a key. The gateway key is written to DSH's managed
 credential store under ``ZCODE_GATEWAY_KEY`` (read from ZCode's provider config).
@@ -30,6 +33,7 @@ so no restart is needed after a write.
 from __future__ import annotations
 
 import argparse
+import copy
 import json
 import os
 import re
@@ -69,6 +73,20 @@ KNOWN_PROVIDER_IDS = {
     "opencode-go-chat": "zcode-main",
     "opencode-go-chat-free": "zcode-free",
     "opencode-go-chat-fast": "zcode-saver",
+}
+
+# 429 快速失败：默认 llm-retry 会给 RATE_LIMIT 重试 5 次、退避上限 10s，
+# 上游额度类 6004 在重置墙钟之前一直失败，重试只会把一次失败放大成 5/5。
+# 其余错误（502/超时/传输抖动/空响应）保留一次短重试。
+RETRY_POLICY: dict[str, Any] = {
+    "mode": "normal",
+    "maxRetries": 1,
+    "retryableCodes": ["EMPTY_RESPONSE", "SERVER", "TIMEOUT", "TRANSPORT"],
+    "backoff": {
+        "initialDelayMs": 500,
+        "maxDelayMs": 3000,
+        "jitterRatio": 0.1,
+    },
 }
 
 
@@ -268,6 +286,8 @@ def _build_route(provider: dict[str, Any], effective: dict[str, Any], rules: dic
         models.append(model)
     route = {
         "displayName": provider["providerName"],
+        # 每条 zcode-* route 独立拷贝，避免改一条污染常量或其它 route。
+        "retryPolicy": copy.deepcopy(RETRY_POLICY),
         "api": "openai-completions",
         "baseURL": provider["baseUrl"] or DEFAULT_BASE,
         "apiKeyEnv": API_KEY_ENV,
@@ -461,6 +481,19 @@ def _main(argv: list[str] | None = None) -> int:
     if args.check:
         return 1 if changed or key_changed else 0
     if not args.apply:
+        # 把投影后的 providers 打出来，定时任务的日志里能直接看到 429 策略。
+        print("retryPolicy（模块级常量）: " + json.dumps(RETRY_POLICY, ensure_ascii=False))
+        print("--- 投影后的 providers（dry-run，不写入）---")
+        print(
+            yaml.safe_dump(
+                (item.get("config") or {}).get("providers") or {},
+                allow_unicode=True,
+                sort_keys=False,
+                default_flow_style=False,
+                width=120,
+            ).rstrip()
+        )
+        print("--- end ---")
         print("dry-run：加 --apply 才会写入")
         return 0
 
