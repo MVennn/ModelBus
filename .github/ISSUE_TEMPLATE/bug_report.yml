@@ -8,8 +8,8 @@ body:
         感谢反馈！请尽量把下面的信息填全，尤其是**脚本、完整命令与输出**——
         模型接入的问题往往和请求体、鉴权方式、套餐状态有关，只写「连不上」定位不了。
 
-        反馈前先查 [docs/TROUBLESHOOTING.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/TROUBLESHOOTING.md)
-        与 [docs/PITFALLS.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/PITFALLS.md)。
+        反馈前先查 [docs/TROUBLESHOOTING.md](https://github.com/MVennn/ModelBus/blob/main/docs/TROUBLESHOOTING.md)
+        与 [docs/PITFALLS.md](https://github.com/MVennn/ModelBus/blob/main/docs/PITFALLS.md)。
 
   - type: checkboxes
     id: acknowledgment

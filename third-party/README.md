@@ -30,7 +30,7 @@
 
 | 仓库 | 自身许可 | 引入的上游 | 是否兼容 |
 | --- | --- | --- | --- |
-| `ZcodeAIModels` | MIT | Apache-2.0（ZCode）、MIT（ZCodium） | ✅ 兼容 —— Apache-2.0 允许再分发进 MIT 项目，要求保留版权声明与 NOTICE（本目录保留了上游 LICENSE 全文） |
+| `ModelBus` | MIT | Apache-2.0（ZCode）、MIT（ZCodium） | ✅ 兼容 —— Apache-2.0 允许再分发进 MIT 项目，要求保留版权声明与 NOTICE（本目录保留了上游 LICENSE 全文） |
 
 > 对比：兄弟仓 `ShellcrashRules` 整仓是 **GPL-3.0**，因为它含 ShellCrash 的 GPL-3.0 派生件，
 > 无法用「自研 MIT + 派生 GPL」拆开。**本仓没有这个问题。**

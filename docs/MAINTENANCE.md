@@ -312,7 +312,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 只重启 Qoder 上游 | `taskkill /IM python.exe /F` 后用下面的 bat 兜底，或重启 zgate |
 | 重新构建 zgate | `python gateways/zgate/build.py` |
 
-自启方式是**启动文件夹快捷方式**（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ZcodeAIModels zgate.lnk`）——
+自启方式是**启动文件夹快捷方式**（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ModelBus zgate.lnk`）——
 `schtasks /create /sc ONLOGON` 在当前权限下会被拒绝（拒绝访问），快捷方式不需要管理员。
 
 zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登录自启

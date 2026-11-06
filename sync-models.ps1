@@ -1,7 +1,7 @@
 ﻿#Requires -Version 5.1
 <#
 .SYNOPSIS
-    ZcodeAIModels 每日模型同步（Windows 计划任务入口）
+    ModelBus 每日模型同步（Windows 计划任务入口）
 
 .DESCRIPTION
     迁移自 DeepSeekRuntime 的定时任务（原 schedule-4467b892-8205-44ec-8e03-fd0f018c1ab4）。
@@ -30,7 +30,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 # ---- 环境 ----------------------------------------------------------------
-$ROOT       = "F:\Project\ZcodeAIModels"
+$ROOT       = "F:\Project\ModelBus"
 $GIT_DIR    = "C:\Program Files\Git\cmd"
 $REPORT_DIR = Join-Path $ROOT "docs\reports"
 
@@ -38,7 +38,7 @@ $REPORT_DIR = Join-Path $ROOT "docs\reports"
 # 一旦被 sync_report.py 的 `git add docs/reports` 带进提交，
 # CI 的 tools/check-secrets.py（[本机用户目录] 规则）就会失败。
 # 放到 LOCALAPPDATA 下，仓库里只留 MODEL-SYNC-*.md 这类不含路径的报告。
-$STATE_DIR = Join-Path $env:LOCALAPPDATA "ZcodeAIModels"
+$STATE_DIR = Join-Path $env:LOCALAPPDATA "ModelBus"
 $LOG_DIR   = Join-Path $STATE_DIR "logs"
 $STAMP     = Get-Date -Format "yyyyMMdd-HHmmss"
 $LOG       = Join-Path $LOG_DIR "sync-$STAMP.log"

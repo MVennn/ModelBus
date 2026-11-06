@@ -178,7 +178,7 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
 ### 4.2 目标结构
 
 ```
-ZcodeAIModels/
+ModelBus/
 ├─ gateways/                    # 【运行层】唯一会产出进程的目录
 │  ├─ zgate/                    #   我们的 Go 入口（源码 + config.json）
 │  ├─ upstream/

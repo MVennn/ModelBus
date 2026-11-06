@@ -65,6 +65,15 @@ if (-not $DryRun) {
 Set-Location $env:TEMP
 
 # ---------- 2. stop gateways ----------
+# Disable the watchdog first: it fires every minute and would restart zgate.exe
+# from inside the directory while we try to rename it -> ERROR_ACCESS_DENIED.
+$Watchdog = Get-ScheduledTask -ErrorAction SilentlyContinue |
+    Where-Object { $_.TaskName -like ($OldToken + '-zgate-watchdog') } | Select-Object -First 1
+Act "disable watchdog task (it would restart zgate mid-rename)"
+if (-not $DryRun -and $Watchdog) {
+    Disable-ScheduledTask -TaskName $Watchdog.TaskName -TaskPath $Watchdog.TaskPath | Out-Null
+}
+
 Act "stop zgate.exe / wb2api.exe"
 if (-not $DryRun) {
     Get-Process -Name 'zgate', 'wb2api' -ErrorAction SilentlyContinue | Stop-Process -Force
@@ -76,8 +85,22 @@ if (-not $DryRun) {
 # ---------- 3. rename directory ----------
 Act "rename dir  $SrcDir -> $DstDir"
 if (-not $DryRun) {
-    try { Move-Item -LiteralPath $SrcDir -Destination $DstDir }
-    catch { Die ("rename failed: " + $_.Exception.Message + " - nothing else was changed") }
+    # A renamed directory gets ERROR_ACCESS_DENIED while any process still maps a
+    # binary inside it (zgate.exe / wb2api.exe) or sits in it as CWD. Retry while
+    # killing stragglers instead of dying on the first attempt.
+    $renamed = $false
+    for ($attempt = 1; $attempt -le 40; $attempt++) {
+        try {
+            Move-Item -LiteralPath $SrcDir -Destination $DstDir -ErrorAction Stop
+            $renamed = $true
+            break
+        } catch {
+            $lastError = $_.Exception.Message
+            Get-Process -Name 'zgate', 'wb2api' -ErrorAction SilentlyContinue | Stop-Process -Force -ErrorAction SilentlyContinue
+            Start-Sleep -Milliseconds 500
+        }
+    }
+    if (-not $renamed) { Die ("rename still blocked after 40 attempts: " + $lastError + " - nothing else was changed") }
 }
 $Root = if ($DryRun) { $SrcDir } else { $DstDir }
 
@@ -206,6 +229,12 @@ if (-not $DryRun) {
         Die "gateway did not come up; directory and junction restored (tasks already re-registered)"
     }
     Say "HEALTH OK"
+    $watchdogNew = Get-ScheduledTask -ErrorAction SilentlyContinue |
+        Where-Object { $_.TaskName -like ($NewToken + '-zgate-watchdog') } | Select-Object -First 1
+    if ($watchdogNew -and $watchdogNew.State -ne 'Ready') {
+        Enable-ScheduledTask -TaskName $watchdogNew.TaskName -TaskPath $watchdogNew.TaskPath | Out-Null
+        Say "      watchdog re-enabled"
+    }
 }
 
 # ---------- 8. text replace in repo ----------

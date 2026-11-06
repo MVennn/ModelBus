@@ -37,7 +37,7 @@ import (
 
 const version = "0.3.0"
 
-const taskName = "ZcodeAIModels-zgate"
+const taskName = "ModelBus-zgate"
 
 func main() {
 	winproc.AttachParentConsole()
@@ -340,7 +340,7 @@ func startupLinkPath() (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	return filepath.Join(dir, "ZcodeAIModels zgate.lnk"), nil
+	return filepath.Join(dir, "ModelBus zgate.lnk"), nil
 }
 
 func install() error {

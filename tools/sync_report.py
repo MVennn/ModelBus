@@ -26,7 +26,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 REPORT_DIR = ROOT / "docs" / "reports"
 INDEX_NAME = "README.md"
-REPO_URL = "https://github.com/MVennn/ZcodeAIModels/blob/main/docs/reports"
+REPO_URL = "https://github.com/MVennn/ModelBus/blob/main/docs/reports"
 
 
 def config_path(explicit: str | None) -> Path:

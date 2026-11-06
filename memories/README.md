@@ -1,7 +1,7 @@
 # memories/ —— 本仓记忆快照
 
 > **一句话**：这里放**只靠读代码和文档读不出来的事实** —— 踩过的坑、根因、实测结论；
-> 它是 dsh-mnemon 中「项目记忆：ZcodeAIModels」Document 的**随 git 版本化快照**，可 diff、可回溯。
+> 它是 dsh-mnemon 中「项目记忆：ModelBus」Document 的**随 git 版本化快照**，可 diff、可回溯。
 
 ## 正本与路由
 

@@ -6,7 +6,7 @@ body:
     attributes:
       value: |
         提建议前可以先翻翻已有的 Issue，并确认
-        [docs/MODEL-PROVIDERS.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/MODEL-PROVIDERS.md)
+        [docs/MODEL-PROVIDERS.md](https://github.com/MVennn/ModelBus/blob/main/docs/MODEL-PROVIDERS.md)
         里「接一个新供应商」的四步已经覆盖了你的场景。
 
   - type: textarea

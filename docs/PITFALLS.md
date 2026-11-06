@@ -349,7 +349,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 ## 20. 裸 `go build` 会把无窗 zgate 覆盖成控制台程序 【通用】
 
 - **现象**：开机自启时弹出一个 cmd 控制台窗口，标题是快捷方式名
-  （「ZcodeAIModels zgate」）；关掉那个窗口等于杀掉网关，模型全挂。
+  （「ModelBus zgate」）；关掉那个窗口等于杀掉网关，模型全挂。
   有时窗口是「可见的」而不是最小化 —— 快捷方式里 `WindowStyle = 7`
   只对**有窗口**的程序生效，对控制台子系统程序不等于隐藏。
 - **根因**：Windows PE 头里的 `Subsystem` 字段决定程序启动时要不要分配控制台。
@@ -523,9 +523,9 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   子系统是 WINDOWS_GUI）→ 用显式参数列表启动：
 
   ```powershell
-  Start-Process -FilePath '<工作区>\ZcodeAIModels\gateways\zgate\zgate.exe' `
+  Start-Process -FilePath '<工作区>\ModelBus\gateways\zgate\zgate.exe' `
     -ArgumentList 'serve' `
-    -WorkingDirectory '<工作区>\ZcodeAIModels\gateways\zgate' -WindowStyle Hidden
+    -WorkingDirectory '<工作区>\ModelBus\gateways\zgate' -WindowStyle Hidden
   ```
 
   起来后必须验证：`netstat -ano | grep 7871` 有 LISTENING，且

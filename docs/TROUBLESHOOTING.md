@@ -475,7 +475,7 @@ python providers/qoder/qoder_zcode_sync.py            # dry run：模型清单�
 
 ## 16. 开机弹 cmd 控制台窗口（zgate 不是无窗版）【实例 B】
 
-**现象**：登录后弹出一个 cmd 控制台窗口，标题是快捷方式名「ZcodeAIModels zgate」；
+**现象**：登录后弹出一个 cmd 控制台窗口，标题是快捷方式名「ModelBus zgate」；
 关掉它网关就死，四个 chat 组全 502。
 
 **排查**
@@ -499,7 +499,7 @@ ls -la gateways/zgate/zgate.exe
 | 产物是控制台程序，但 exe 正被占用改不动 | zgate 在运行时 Windows 会锁住文件。先停掉（zgate 没有 `stop` 子命令）：`Stop-Process -Id <pid> -Force`；再重编、再起 |
 | 快捷方式 `WindowStyle = 7` 没用 | 「最小化」只对有窗口的程序有效，对控制台子系统程序**不等于隐藏**。而且实测那个窗口既没最小化、也是可见的 —— 唯一解法是让产物本身是 GUI 子系统 |
 | 想确认没有别的控制台窗口 | `Get-Process conhost | Where-Object { $_.MainWindowTitle }`；无输出即没有 |
-| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。用 explorer 拉起可存活：`Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ZcodeAIModels zgate.lnk"'` |
+| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。用 explorer 拉起可存活：`Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"'` |
 
 > 机制解释见 [PITFALLS.md](PITFALLS.md) §20；构建命令与脚本见
 > [MAINTENANCE.md](MAINTENANCE.md) §8.1。
