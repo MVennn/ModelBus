@@ -15,6 +15,12 @@ Status vocabulary (same as the Qoder probe):
 previously working model through a transient queue/timeout and removes a model
 that has never answered.
 
+Each record also carries `resp_model` / `quota_model` / `credit` taken from the
+upstream reply: one display id can hide different real models (hy4-free vs hy4 vs
+hy4-preview), and the WB channel marks its quota pool there. Fields the upstream
+did not send are written as null and never retried — a reader must tolerate both
+a missing key (results written by an older probe) and a null value.
+
 Usage
 -----
     python tools/model_probe.py
@@ -155,6 +161,43 @@ def classify(http: int | None, detail: str, error: str) -> str:
     return "error"
 
 
+def pick(obj: object, *names: str):
+    """Return the first present, non-null value; 0 and "" are real answers here."""
+    if not isinstance(obj, dict):
+        return None
+    for name in names:
+        value = obj.get(name)
+        if value is not None:
+            return value
+    return None
+
+
+def identity(detail: str) -> dict:
+    """Pull resp_model / quota_model / credit out of the raw reply body.
+
+    Scanned at top level plus the `usage` / `metadata` sub-objects, because a
+    chat-completions reply puts them on top while the WB gateway nests them.
+    Unparsable bodies (error pages, empty timeouts) just yield an all-null record.
+    """
+    out = {"resp_model": None, "quota_model": None, "credit": None}
+    try:
+        payload = json.loads(detail) if detail else None
+    except Exception:
+        payload = None
+    if not isinstance(payload, dict):
+        return out
+    scopes = [payload]
+    for holder in ("usage", "metadata"):
+        nested = payload.get(holder)
+        if isinstance(nested, dict):
+            scopes.append(nested)
+    for scope in scopes:
+        out["resp_model"] = out["resp_model"] or pick(scope, "model")
+        out["quota_model"] = out["quota_model"] or pick(scope.get("quota"), "model")
+        out["credit"] = out["credit"] if out["credit"] is not None else pick(scope, "credit", "credits")
+    return out
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--config")
@@ -188,6 +231,7 @@ def main() -> int:
         started = time.time()
         http, detail, error = post(model, build_body(model, extra, args.max_tokens), args.timeout)
         status = classify(http, detail, error)
+        ident = identity(detail)
         key = original or model
         previous = results.get(key) or {}
         results[key] = {
@@ -196,14 +240,25 @@ def main() -> int:
             "http": http,
             "ms": int((time.time() - started) * 1000),
             "detail": (detail or error)[:300],
+            "resp_model": ident["resp_model"],
+            "quota_model": ident["quota_model"],
+            "credit": ident["credit"],
             "provider": provider_id,
             "body_keys": sorted(extra.keys()),
             "ever_ok": bool(previous.get("ever_ok")) or previous.get("status") == "ok" or status == "ok",
             "ok_at": time.strftime("%Y-%m-%d %H:%M:%S") if status == "ok" else previous.get("ok_at"),
+            # model_alias._fresh_probe 按 checked_at 判新鲜度。之前只写 ok_at，
+            # 非 ok 的记录没有时间戳 → 整份结果一律被当「未知」，下架的型号
+            # 永远删不掉（2026-11-06 第一次接通探活时踩到）。
+            "checked_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
         }
         out_path.parent.mkdir(parents=True, exist_ok=True)
         out_path.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"  {status:<12} http={http} {results[key]['detail'][:120]}", flush=True)
+        # 只在真实型号和显示名不一致时才多打一段，免得噪音盖住状态
+        shown = ""
+        if ident["resp_model"] and ident["resp_model"] != model:
+            shown = f" resp_model={ident['resp_model']}"
+        print(f"  {status:<12} http={http} {results[key]['detail'][:120]}{shown}", flush=True)
         if index + 1 < len(models) and args.sleep > 0:
             time.sleep(args.sleep)
 

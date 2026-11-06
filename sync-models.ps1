@@ -270,17 +270,54 @@ Invoke-Py "竞技榜分数" @("tools\model_score.py", "--write", "--quiet") -Sof
 if ($script:LastCode -ne 0) {
     Say "分数换算失败，本次不带分数选型"
 }
+$scoresOn = ($script:LastCode -eq 0)
 $scoreArgs = @("tools\model_alias.py", "--slot", "auto", "--apply", "--arena")
-if ($script:LastCode -eq 0) { $scoreArgs += "--scores" }
+if ($scoresOn) { $scoreArgs += "--scores" }
 Invoke-Py "统一命名写入" $scoreArgs
 $applyCode = $script:LastCode
 
+# 探活：把上游已下架或持续不可用的型号从清单里摘掉。
+# moonshotai/kimi-k3-free 在 2026-10-27 就 retired 了，却一直占着免费组的位置 ——
+# 因为 --probe-file 从来没被传过、探测结果文件根本不存在，剔除逻辑一直是死代码。
+# 必须放在第一轮 apply 之后：本轮新补进配置的型号（如 cn:hy4std）此时才有探测记录，
+# 否则会被当成 "not probed" 直接跳过。
+Invoke-Py "模型探活" @("tools\model_probe.py", "--timeout", "45", "--sleep", "0.5") -Soft
+$probeArgs = @()
+$probeOut = Join-Path $env:USERPROFILE ".zcode\v2\model_probe.json"
+$probeAll = 0
+$probeOk = 0
+if (Test-Path $probeOut) {
+    try {
+        $probeJson = Get-Content -Raw -Encoding UTF8 $probeOut | ConvertFrom-Json
+        $probeAll = @($probeJson.PSObject.Properties).Count
+        $probeOk = @($probeJson.PSObject.Properties | Where-Object { $_.Value.status -eq 'ok' }).Count
+    } catch {
+        Say "探测结果解析失败：$($_.Exception.Message)"
+    }
+}
+# 过半才算可信：大面积失败更可能是网关或某个渠道整体挂了，这时按探活摘模型
+# 会把好型号一起删掉，宁可这一轮不动。
+if ($probeAll -gt 0 -and ($probeOk * 2 -ge $probeAll)) {
+    $probeArgs = @("--probe-file", $probeOut)
+    Say ("探活 $probeOk/$probeAll 可用，本轮按探测结果摘除死型号")
+} else {
+    Say ("探活 $probeOk/$probeAll 可用，成功率过低，本轮不据此摘模型")
+}
+$scoreArgs2 = $scoreArgs + $probeArgs
+
+# --check 必须和 --apply 用同一组参数（--arena/--scores/--probe-file）。
+# 只用 --check 的话，arena 把 MiMo-2.6-Flash、Space-Bunny 提到主力这件事
+# 会被当成漂移，每天都要二轮重写、复查看起来仍「有漂移」，实际是参数不对称。
+$checkArgs = @("tools\model_alias.py", "--check", "--arena")
+if ($scoresOn) { $checkArgs += "--scores" }
+$checkArgs += $probeArgs
+
 # --check 在「有漂移」时返回 1，这是本脚本要处理的正常分支，不算失败
-Invoke-Py "漂移检查" @("tools\model_alias.py", "--check") -Soft
+Invoke-Py "漂移检查" $checkArgs -Soft
 if ($script:LastCode -ne 0) {
     Say "检测到漂移，收缩名单要两轮才收敛，再写一次"
-    Invoke-Py "统一命名二轮" $scoreArgs
-    Invoke-Py "漂移复查" @("tools\model_alias.py", "--check")
+    Invoke-Py "统一命名二轮" $scoreArgs2
+    Invoke-Py "漂移复查" $checkArgs
     if ($script:LastCode -ne 0) {
         Say "复查仍有漂移，需要人工看"
     } else {

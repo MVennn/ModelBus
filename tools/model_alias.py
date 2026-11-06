@@ -104,7 +104,13 @@ QN_FREE_UNTIL = "2026-11-30"
 # 主力顺序：组内按此顺序排（DeepSeek 置顶，Qwen 贵备份次之，千问尾跳最后）。
 # 组内排序的权威来源；MAIN_IDS 由它派生，避免"按厂商最低价排序把便宜厂商顶到前面"。
 MAIN_ORDER = [
-    # 日常主力：唯一的付费心智负担
+    # 竞技榜第一梯队（2026-11-06 实测）：hy4 在「建模」分区排 #8、「静态网页」#10，
+    # 是我们渠道里唯一进前十的型号（基准 deepseek-v4.1-flash 只到 #52）。
+    # 它 0.29 积分、比基准贵 2.6 倍，所以历史上一直被 LOW_MAX=0.11 挡在省钱档之外，
+    # 配置里留下的是 hy4-preview（#58）——等于把最好的模型换成了同族的弱变体。
+    # 用户 2026-11-06 拍板：主力第一位给 hy4std，价格差认了。
+    "chat:cn:hy4std",
+    # 日常主力：最便宜的付费档，兜住 hy4 的额度/限流
     "chat:cn:deepseek-v4.1-flash",
     "chat:deepseek-v4.1-flash",
     # 贵备份：AA 榜上唯一高于 DeepSeek 基准的模型（2026-10-28 1122 vs 1093，
@@ -169,6 +175,22 @@ TAIL_HOPS = {("QW", "deepseek-v4.1-flash")}
 # 的情况下全部跑在 opencode 上计费。该降级机制已彻底移除 —— 上游限流交给
 # zgate 逐跳回落，不再改链序。
 WB_FIRST_CHANNELS = {"WB"}
+
+# 渠道消费优先级 —— 链内跳排序的**第一维**（用户 2026-11-06 口径：
+# WB → OC → 千问 ¥300 额度 → 七牛限免）。取代原来「WB 布尔特判 + TAIL_HOPS 布尔特判」
+# 两段并列逻辑，让「哪个渠道先烧」变成一个可读的表，而不是两条 if。
+#   · WB=0：额度优先消费，固定链首，不看价格、不受任何降级开关影响（历史教训见上）
+#   · OC / QD=1：平价付费档，同档内按价格排
+#   · QW=2：一年期预付额度，必须排在所有付费跳之后（原 TAIL_HOPS 的等价表达）
+#   · QN=3：限免渠道排最后 —— 免费不等于该优先烧，它的价值是兜底
+# 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
+# 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
+CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3}
+CHANNEL_RANK_DEFAULT = 4
+
+# 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
+# 试用池到期后边际成本从 0 变真钱，所以它比额度本身更早需要预警 —— 见 write_quota_windows。
+QW_TRIAL_UNTIL = "2026-12-15"
 
 # 机场出口：opencode.ai 的「地区受限」型号（gpt / beam / muse）从中国 IP 拿
 # 403 `unsupported_country_region_territory`，必须经机场出去。路由器上这个入站口
@@ -513,6 +535,15 @@ def _fresh_probe(probe: dict, max_age_hours: float) -> tuple[dict, list[str]]:
     return fresh, stale
 
 
+def wb_family_key(model: str) -> str:
+    """同一型号变体的归并键：抹掉 `-f` / `-ctrl` / `-exp<N>` 这类同族后缀。
+
+    `cn:hy4-preview` / `-f` / `-ctrl` / `-exp1..3` 是同一上游的多个入口，
+    挂牌价相同；用它给缺 credits 的变体回填价格（见 wb_prices）。
+    """
+    return re.sub(r"(?i)(-(ctrl|exp\d*|f))+$", "", model)
+
+
 def wb_prices() -> dict[str, dict]:
     try:
         rows = json.loads(WB_PRICING.read_text(encoding="utf-8"))
@@ -520,7 +551,17 @@ def wb_prices() -> dict[str, dict]:
         _warn_price_once("WB", f"{WB_PRICING}: {exc}")
         return {}
     _warn_stale_cache(WB_PRICING, "WB 价格表", "providers/workbuddy/workbuddy_fetch_pricing.py")
-    out = {}
+    # 上游偶发漏填 credits —— 2026-11-06 实测 cn:hy4-preview-f：credits 是空串、
+    # list_rate 与 eff_rate 同时为 0。旧逻辑据此把它判成「免费」放进免费组，
+    # 而它在 usage.json 里累计 2420 次请求扣了 6601 积分（均值 2.73/次）。
+    # 判据改成「credits 字段权威」：
+    #   · credits 有值（x0.29 / x0.00）→ 以它为准，这是上游自己的挂牌价
+    #   · credits 空但 list_rate > 0 → 用 list_rate（老字段兜底）
+    #   · 两者都缺 → 用「同族已知价」回填（同族 = 去掉 -f / -ctrl / -exp<N> 后缀）
+    # 宁可高估也不能让付费型号冒充免费：冒充免费会进免费组被当无限兜底烧掉。
+    claims: dict[str, float] = {}
+    family_rate: dict[str, float] = {}
+    parsed: list[tuple[str, dict, float | None]] = []
     for row in rows:
         model = str(row.get("id") or "")
         if not model:
@@ -530,11 +571,43 @@ def wb_prices() -> dict[str, dict]:
             eff_rate = float(row.get("eff_rate") if row.get("eff_rate") is not None else list_rate)
         except (TypeError, ValueError):
             continue
+        raw_credits = str(row.get("credits") or "").strip()
+        claim = None
+        if raw_credits:
+            match = re.match(r"[x×]?\s*([0-9]*\.?[0-9]+)", raw_credits)
+            if match:
+                claim = float(match.group(1))
+        parsed.append((model, row, claim))
+        rate = claim if claim is not None else (list_rate if list_rate > 0 else None)
+        if rate is not None and rate > 0:
+            key = wb_family_key(model)
+            if rate > family_rate.get(key, 0.0):
+                family_rate[key] = rate
+    out = {}
+    for model, row, claim in parsed:
+        list_rate = float(row.get("list_rate") or 0.0)
+        eff_rate = float(row.get("eff_rate") or 0.0)
+        if claim is not None:
+            list_rate = claim
+            eff_rate = claim if eff_rate <= 0 else eff_rate
+        elif list_rate <= 0:
+            backfill = family_rate.get(wb_family_key(model), 0.0)
+            if backfill > 0:
+                list_rate = backfill
+                eff_rate = backfill
+                print(
+                    f"WARN: {model} 的 credits/list_rate 都缺失，按同族挂牌价 {backfill:g} 计费"
+                    "（不当作免费；见 tools/model_alias.py wb_prices）",
+                    file=sys.stderr,
+                )
+            else:
+                eff_rate = eff_rate if eff_rate > 0 else 0.0
         out[model] = {
             "list": list_rate,
             "eff": eff_rate,
             "promo": str(row.get("promo") or ""),
             "label": str(row.get("promo_label") or ""),
+            "credits": claim,
         }
     return out
 
@@ -860,6 +933,29 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
     }
 
 
+def whitelist_items(order: list[str]) -> list[dict]:
+    """把白名单里点名、但当前配置里已经没有的型号补成候选条目。
+
+    为什么需要：条目列表只来自 provider_config 的 personalModelIds（见 inventory）
+    与池子文件，所以某型号一旦因为价格闸被裁出配置，第二天就再也不会被考虑 ——
+    白名单写了等于没写。2026-11-06 的 cn:hy4std（竞技榜建模 #8、0.29 积分）就是
+    这样被静默丢掉的：名单里加了它，dry run 却一条都生成不出来。
+    """
+    out: list[dict] = []
+    for spec in order:
+        protocol, _, model = str(spec).partition(":")
+        model = model.strip()
+        if not model:
+            continue
+        item = classify(model, protocol or "chat", {}, {})
+        if item is None:
+            print(f"WARN: 白名单条目 {spec} 认不出渠道，已忽略", file=sys.stderr)
+            continue
+        item["whitelisted"] = True
+        out.append(item)
+    return out
+
+
 def inventory(cfg: dict, alias_models: dict, legacy: dict) -> list[dict]:
     """Collect unique models from the current provider config."""
     seen: dict[tuple[str, str, str], dict] = {}
@@ -1026,14 +1122,17 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             groups = [paid, free]
 
         for group in groups:
-            # 第一键：WB 永远链首（不看价格，不受任何降级开关影响）。
-            # 第二键：QW 尾跳永远链尾（一年期预付额度，付费全挂才轮到）。
-            # 其余按价格、前缀、渠道、名称稳定排序。
+            # 第一键：渠道消费优先级（CHANNEL_RANK）—— WB 链首、OC/QD 其次、
+            # QW 预付额度垫后、QN 限免兜底。原「WB 布尔特判 + TAIL_HOPS 布尔特判」
+            # 两段并列逻辑已并入这张表，行为等价性见 CHANNEL_RANK 的注释。
+            # 其后按价格、GB/CN 前缀、渠道、名称稳定排序。
             group = sorted(group, key=lambda h: (
-                0 if h["channel"] in WB_FIRST_CHANNELS else 1,
-                1 if (h["channel"], h["upstream"]) in TAIL_HOPS else 0,
+                CHANNEL_RANK.get(h["channel"], CHANNEL_RANK_DEFAULT),
                 h["price"],
                 0 if h["upstream"].startswith("global:") else 1 if h["upstream"].startswith("cn:") else 2,
+                # 同 rank 内的渠道先后保持历史顺序（QD 先于 OC）：CHANNEL_RANK 只
+                # 决定「哪个渠道先烧」，同一 rank 的平价付费档仍按 QD→OC 的旧口径，
+                # 避免这次重构顺手改了已有链序。
                 0 if h["channel"] == "WB" else 1 if h["channel"] == "QD" else 2,
                 h["upstream"],
             ))
@@ -1375,6 +1474,54 @@ def print_drift(drift: dict[str, list]) -> None:
         print(f"    新：{' -> '.join(new)}")
 
 
+QUOTA_WINDOWS = Path.home() / ".zcode" / "v2" / "quota-windows.json"
+
+
+def write_quota_windows(path: Path = QUOTA_WINDOWS) -> None:
+    """把渠道额度窗口落成独立文件，供 sync_report.py 与客户端只读消费。
+
+    为什么单独落一份：这两个日期不影响今天的分组，不该参与选模计算（否则每天
+    都报漂移）；但也不能只躺在代码常量里 —— 2026-11-06 之前 QN 限免只剩 24 天、
+    QW 试用池只剩 39 天，全仓没有任何地方提醒过。
+    """
+    today = datetime.now().date()
+    rows = [
+        ("QN", QN_FREE_UNTIL,
+         "七牛限免（conatus-free / kimi-k3-free），到期后这两条直接从配置消失"),
+        ("QW", QW_TRIAL_UNTIL,
+         "千问每模型 1M tokens 试用池，到期后边际成本从 0 变真钱"),
+        ("QW", QW_CREDIT_UNTIL,
+         "千问 ¥300 预付额度，到期作废、用不完不退"),
+    ]
+    windows = []
+    for channel, until, note in rows:
+        try:
+            end = datetime.strptime(until, "%Y-%m-%d").date()
+        except ValueError:
+            continue
+        windows.append({
+            "channel": channel,
+            "until": until,
+            "days_left": (end - today).days,
+            "note": note,
+        })
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(
+        json.dumps({"generated_at": time.strftime("%Y-%m-%d %H:%M:%S"), "windows": windows},
+                   ensure_ascii=False, indent=2) + "\n",
+        encoding="utf-8",
+    )
+    os.replace(tmp, path)
+    for item in windows:
+        if item["days_left"] <= 30:
+            mark = "已过期" if item["days_left"] < 0 else f"剩 {item['days_left']} 天"
+            print(
+                f"WARN: {item['channel']} 额度窗口 {item['until']}（{mark}）—— {item['note']}",
+                file=sys.stderr,
+            )
+
+
 def sync_deepseek_harness(config_path: Path) -> None:
     """Project the just-written ZCode config into a local DeepSeekRuntime install.
 
@@ -1464,6 +1611,21 @@ def main() -> int:
     legacy = dict(existing.get("legacy") or {})
     wb, qd = wb_prices(), qd_prices()
     items = inventory(cfg, existing_models, legacy)
+    # 白名单是权威：名单点名但当前配置里没有的型号，从价格源补一条候选。
+    # 不补的话「把 hy4std 提进主力」这类改动永远只改名单、不产条目。
+    # 按「裸型号名」比对而不是 (channel, upstream)：白名单里的 `chat:Qwen3.8-Max`
+    # 没写渠道前缀，classify 只能猜 OC，会和已在 QD 下的同一条重复。
+    have = {_bare(str(item.get("upstream") or "")) for item in items}
+    have |= {str(item.get("base_model") or "") for item in items}
+    extra = [item for item in whitelist_items(MAIN_ORDER + LOW_ORDER)
+             if _bare(str(item.get("upstream") or "")) not in have
+             and str(item.get("base_model") or "") not in have]
+    if extra:
+        print(
+            "白名单补入未配置型号：" + "、".join(str(item.get("raw")) for item in extra),
+            file=sys.stderr,
+        )
+        items.extend(extra)
     entries = family_entries(items, wb, qd, args.slot)
     pool_file = Path(args.pools).expanduser() if args.pools else POOLS_FILE
     pool_rows = [] if args.no_pools else pool_entries(load_pools(pool_file), args.slot)
@@ -1779,6 +1941,7 @@ def main() -> int:
         "legacy": legacy,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(alias_tmp, alias_file)
+    write_quota_windows()
     print(f"\n已写入 {path.name}（备份：{backup.name}）")
     print(f"已写入 {alias_file}")
     # Only project the real ZCode config by default. A caller using --config for

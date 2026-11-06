@@ -28,6 +28,18 @@ REPORT_DIR = ROOT / "docs" / "reports"
 INDEX_NAME = "README.md"
 REPO_URL = "https://github.com/MVennn/ModelBus/blob/main/docs/reports"
 
+# 两个可选输入由 model_alias.py 那一侧写。本脚本是自动化的最后一步，
+# 少一个文件只该少一段正文，不能把整轮同步判成失败。
+SCORES_FILE = Path.home() / ".zcode" / "v2" / "model-scores.json"
+QUOTA_FILE = Path.home() / ".zcode" / "v2" / "quota-windows.json"
+
+# 阈值与 model_alias.py 的 SCORE_MIN_INTEL / SCORE_MIN_VALUE 同口径：
+# 报告和生成器必须挑中同一批「不划算」的模型，否则两边给出相反结论。
+SCORE_MIN_INTEL = 85.0
+SCORE_MIN_VALUE = 1.0
+DRIFT_MAX_ROWS = 10
+QUOTA_WARN_DAYS = 30
+
 
 def config_path(explicit: str | None) -> Path:
     if explicit:
@@ -112,7 +124,135 @@ def diff(previous: dict, current: dict) -> dict:
 GROUP_NAMES = ("主力", "免费", "省钱")
 
 
-def render_report(current: dict, changes: dict, baseline: bool) -> str:
+def load_optional(path: Path) -> dict | None:
+    """读可选输入；文件缺失、内容坏掉都返回 None，由调用方整段跳过。"""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _num(value) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _fmt(value: float | None, digits: int = 2) -> str:
+    return "-" if value is None else f"{value:.{digits}f}"
+
+
+def _days(value: float) -> str:
+    return str(int(value)) if float(value).is_integer() else f"{value:g}"
+
+
+def name_index(models: dict) -> dict[str, str]:
+    """scores 的键是 `CHANNEL|upstream`，这里反查回显示名；查不到就照原键打印。"""
+    out: dict[str, str] = {}
+    for display, entry in models.items():
+        for hop in entry.get("chain") or []:
+            pair = str(hop).rsplit("@", 1)[0]
+            if ":" in pair:
+                channel, _, upstream = pair.partition(":")
+                # 分隔符两种写法都认：scores 用 CHANNEL|upstream，链路串用 CHANNEL:upstream
+                out.setdefault(f"{channel}|{upstream}", display)
+                out.setdefault(pair, display)
+    return out
+
+
+def score_entries(scores: dict) -> dict:
+    """两种落盘形状都认：直接平铺，或包在 models 下（现网 model-scores.json 是后者）。
+
+    上游换个包装就整段空白，比多写四行判空更糟。
+    """
+    nested = scores.get("models")
+    if isinstance(nested, dict) and nested:
+        return nested
+    return scores
+
+
+def render_score_drift(models: dict, scores: dict | None) -> list[str] | None:
+    """性价比漂移：只列 intel 偏低或 value 偏低的那一侧，其余不占版面。
+
+    免费条目 value 为 null，没有性价比可谈，直接跳过而不是当成 0 ——
+    否则整段免费模型会刷屏，把真正变差的付费条目挤掉。
+    """
+    if scores is None:
+        return None
+    names = name_index(models)
+    rows: list[tuple[float, float, str, float | None, float | None, str]] = []
+    for key, item in score_entries(scores).items():
+        if not isinstance(item, dict) or item.get("value") is None:
+            continue
+        intel = _num(item.get("intel"))
+        value = _num(item.get("value"))
+        low_intel = intel is not None and intel < SCORE_MIN_INTEL
+        low_value = value is not None and value < SCORE_MIN_VALUE
+        if not (low_intel or low_value):
+            continue
+        rows.append((
+            value if value is not None else float("inf"),
+            intel if intel is not None else float("inf"),
+            names.get(str(key), str(key)), intel, value,
+            str(item.get("basis") or "-"),
+        ))
+    if not rows:
+        return ["（无）"]
+    rows.sort(key=lambda row: (row[0], row[1]))
+    body = ["| 显示名 | intel | value | basis |", "|---|---|---|---|"]
+    for _, _, name, intel, value, basis in rows[:DRIFT_MAX_ROWS]:
+        # 反查不到显示名时打印的是 CHANNEL|upstream，竖线必须转义否则整行表格错列
+        cell = name.replace("|", "\\|")
+        body.append(f"| `{cell}` | {_fmt(intel, 1)} | {_fmt(value)} | {basis} |")
+    if len(rows) > DRIFT_MAX_ROWS:
+        body += ["", f"…另 {len(rows) - DRIFT_MAX_ROWS} 条"]
+    # 条目自己不带 basis 时把整份分数的标定基准挂到表下，免得每一行都是 "-"
+    anchor = scores.get("basis")
+    if isinstance(anchor, dict):
+        parts = [str(anchor[key]) for key in ("source", "model") if anchor.get(key)]
+        if parts:
+            body += ["", f"基准：{' / '.join(parts)}"]
+    return body
+
+
+def render_quota_windows(quota: dict | None) -> list[str] | None:
+    """额度窗口：只列 30 天内到期和已经过期的，远期窗口不占版面。
+
+    days_left 由写入方算好，这里不重新计时 —— 报告是快照，
+    重算会让同一份报告在不同时间重跑出不同内容。
+    """
+    if quota is None:
+        return None
+    windows = quota.get("windows")
+    if not isinstance(windows, list):
+        return ["（无）"]
+    rows = []
+    for item in windows:
+        if not isinstance(item, dict):
+            continue
+        days = _num(item.get("days_left"))
+        if days is not None:
+            rows.append((days, item))
+    rows.sort(key=lambda row: row[0])
+    body: list[str] = []
+    for days, item in rows:
+        channel = str(item.get("channel") or "-")
+        until = str(item.get("until") or "-")
+        note = str(item.get("note") or "").strip()
+        if days < 0:
+            line = f"- ❌ **{channel}** 已于 {until} 过期（超期 {_days(-days)} 天）"
+        elif days <= QUOTA_WARN_DAYS:
+            line = f"- ⚠️ **{channel}** 剩 {_days(days)} 天（{until}）"
+        else:
+            continue
+        body.append(line + (f" —— {note}" if note else ""))
+    return body or ["（无）"]
+
+
+def render_report(current: dict, changes: dict, baseline: bool,
+                  scores: dict | None = None, quota: dict | None = None) -> str:
     models = current["models"]
     groups = GROUP_NAMES
     counts = {g: sum(1 for m in models.values() if m.get("group") == g) for g in groups}
@@ -180,6 +320,14 @@ def render_report(current: dict, changes: dict, baseline: bool) -> str:
         chain = " → ".join(entry.get("chain") or [])
         lines.append(f"| `{name}` | {entry.get('group')} | {entry.get('price')} | {chain} |")
     lines.append("")
+
+    # 可选段放在正文末尾：文件不在时整段消失，上面的分组统计与概览不受影响
+    drift = render_score_drift(models, scores)
+    if drift is not None:
+        lines += ["### 性价比漂移", ""] + drift + [""]
+    windows = render_quota_windows(quota)
+    if windows is not None:
+        lines += ["### 额度窗口", ""] + windows + [""]
     return "\n".join(lines)
 
 
@@ -282,7 +430,10 @@ def main() -> int:
     out_dir = Path(args.out_dir).expanduser() if args.out_dir else REPORT_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     name = f"MODEL-SYNC-{datetime.now().strftime('%Y%m%d-%H%M')}.md"
-    (out_dir / name).write_text(render_report(current, changes, baseline), encoding="utf-8")
+    scores = load_optional(SCORES_FILE)
+    quota = load_optional(QUOTA_FILE)
+    (out_dir / name).write_text(
+        render_report(current, changes, baseline, scores, quota), encoding="utf-8")
     if out_dir == REPORT_DIR:
         update_index(name, current, changes, baseline)
     spath.parent.mkdir(parents=True, exist_ok=True)
