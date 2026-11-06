@@ -45,6 +45,38 @@
 
 ---
 
+### zgate：桥接流式不再限制在链尾跳（2026-11-06）
+
+- 起因：用户问「输出速度 TPS 还有优化空间吗」。实测经 7871 连打五个模型（stream=true, max_tokens=200）：
+  Beam ttfb 0.670s / total 4.280s（88 条 data 行）、GLM-5.3-Flash 1.353s / 5.514s（203 条）、
+  MiMo-2.6-Pro 1.788s / 8.354s（61 条）、Iceman 2.594s / 4.787s（199 条），而
+  **Claude-Haiku-5.5 ttfb 1.739s / total 1.739s、只有 4 条 data 行** —— 首字节等于总耗时，整段被缓冲。
+
+- 根因：`router.go` 桥接分支把流式门控写成 `wantsStream(body) && index == len(t.Chain)-1`。
+  alias map 里所有 OC messages 型号（Claude-Haiku-5.5 / Qwen-3.8-Flash / Muse-Spark1.3 / GPT-6-Luna / Beam）
+  都是 2 跳链（直连 + 机场孪生），首跳永远不是链尾 → 走桥接时被强制非流式，要等上游整段生成完才写回。
+  chat 协议的跳没有这个问题（`doForwardWith` 一直是边收边发：32KB 读缓冲 + 每次 Read 后 Flush）。
+
+- 改动（`gateways/zgate/internal/router/router.go`）：门控改为 `streaming := wantsStream(body)`。
+  安全性不变：非 2xx 在任何字节写出之前就以 `Result` 返回，回落逻辑照旧；200 之后断流本来也回不了落。
+- 顺带修（`gateways/zgate/internal/bridge/bridge.go`）：非流式路径的空闲看门狗用的是流式那档 `DefaultIdle = 30s`。
+  非流式上游只有整段生成完才吐字节，生成超过 30 秒的正常回答会被误判成 `upstream silent ... 504`；
+  新增 `DefaultIdleNonStream = DefaultTimeout`（120s），让总超时当唯一硬闸。
+- 测试：新增 `gateways/zgate/internal/router/stream_test.go` —— `TestBridgeStreamsOnNonTailHop`
+  （首跳上游先吐 A 再阻塞，客户端必须在上游完成前收到第一个 chunk）、
+  `TestBridgeRegionBlockedFallsBackWithStream`（流式上行撞 403 RegionError 仍要回落孪生跳并冷却）。
+- 候选二进制 md5 `c96615631f3a52baf5adaa1a17375064`，等用户执行 `swap-zgate.ps1` 生效。
+- 回落护栏：`attemptChain` 的回落条件加 `!cw.written &&`。`bridge` 目前在「已写过 chunk」之后
+  一律返回 `Status: 200`（`bridge.go` 的 `if !emitted` 之外分支），所以这条分支今天是防御性的；
+  留着是为了将来桥接改状态码时不会把第二个响应体写进同一条 SSE 流。
+- 测试补第三条：`TestBridgeNoFallbackAfterStreamStarted`（首跳写出一个 delta 后发 RST 断链，
+  客户端必须只看到「流内报错 + 收口」、下一跳零命中、状态码仍 200）。
+- 现网已于 21:10:28 换上流式修复版 `c9661563…`（`gateways/zgate/zgate.exe`，上一版存为
+  `%LOCALAPPDATA%\ZCodeGateway\zgate.exe.bak-20261106-211027`）；同题实测 Claude-Haiku-5.5
+  `ttfb 2.227s / total 3.676s`、46 条 data 行（改动前 `1.739s / 1.739s`、4 条）。
+- 含回落护栏的新候选是 `f66ef8f97f992caad1eb248ae928cdde`（`%LOCALAPPDATA%\ZCodeGateway\zgate-0.3.0-cand.exe`）。
+  护栏分支今日不可达，与现网行为等价，等下次换二进制时一并生效，无需为此单独重启网关。
+
 ## [0.6.0] — 2026-11-06
 
 ### WB 永远是第一消费来源（2026-11-05）

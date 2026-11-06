@@ -492,15 +492,23 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   流式时改调 `forwardStream`——上游按 `stream: true` 请求，边解析 SSE 边通过
   `OnChunk` 抛出 chat chunk。文本、`thinking`、`tool_use`（`input_json_delta`）、
   Responses 的 `function_call` 增量都要各自翻译。
-- **代价与边界**：**只有链尾跳走流式**。前面某跳一旦写出半截 SSE 就收不回来、
-  无法再回落；非尾跳仍整段缓冲。另外上游在写出任何 chunk 前报错时，必须把
-  真实错误码经 JSON 回给客户端（`finishBridge` 用 `cw.written` 判断），否则
-  客户端会挂在一个空流上。
+- **代价与边界**：**每一跳都走流式**（2026-11-06 起；此前只允许链尾跳，于是「首跳就能成」
+  的 messages 型号全被整段缓冲 —— 实测 Claude-Haiku-5.5 首字节 1.739s == 总耗时 1.739s、
+  只有 4 条 data 行，放开后同题 2.227s / 3.676s、46 条 data 行）。回落安全靠三层兜住：
+  ① 非 2xx 一定在写出任何字节之前以 JSON 返回（`finishBridge` 用 `cw.written` 判断）；
+  ② 上游在流中途失败时，`bridge` 已在流内补 `[bridge stream error: …]` + `[DONE]` 并返回
+  `Status: 200`（`bridge.go` 里 `if !emitted` 之外的分支），所以本来就走不到回落；
+  ③ `router.attemptChain` 的回落条件加了 `!cw.written &&`，将来桥接若改了状态码，也写不出
+  第二个响应体。
+- **非流式那条路别再套流式的空闲上限**：非流式上游是整段生成完才吐字节，用
+  `DefaultIdle = 30s` 判静默会把 >30s 的正常回答误判成 `upstream silent` 504；
+  非流式改用 `DefaultIdleNonStream = DefaultTimeout`（120s），让总超时当唯一硬闸。
 - **上游自己不流式就没办法**：Qoder 渠道直连实测首字 32.6s（`stream: true` 也
   一样），这是上游整段缓冲，桥接器改不了——这类模型别放主力。
-- **验证**：`go test ./internal/bridge/...`（含流式文本、流式工具调用、上游报错
-  三条用例）；实测 `claude-haiku-5-5` / `gpt-6-luna` 工具调用流式返回
-  `finish_reason: tool_calls` 且参数完整。
+- **验证**：`go test ./internal/bridge/...`（含流式文本、流式工具调用、上游报错三条用例）；
+  `go test ./internal/router/ -run 'TestBridge'` 另覆盖三条：非链尾跳必须在上游完成前送出
+  首个 chunk、地区 403 未写字节仍回落孪生跳、流已开始后断流（RST）只收口不回落。
+  实测 `claude-haiku-5-5` / `gpt-6-luna` 工具调用流式返回 `finish_reason: tool_calls` 且参数完整。
 
 ## 28. zgate 停掉后忘了拉起来 = 全站模型不可用；启动必须带 `serve` 【通用】
 

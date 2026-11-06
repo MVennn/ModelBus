@@ -2147,3 +2147,44 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 ## 待解决 / 注意事项
 - 重启后每 30 分钟窗口仍会有 1 次直连 403（首个请求学到之后走机场），面板上不再成片；想要零 403 得让 alias 生成器把孪生跳排前，但只有 beam-free 被证实机场可用，静态清单会误伤 gpt-6-luna/muse-spark，故不做。
 - 未改 `tools/model_alias.py` 链序；未重启网关（AGENTS：长驻网关由用户重启）；本轮未提交/推送。
+
+# 2026-11-06 第十二轮：zgate 桥接流式（TTFB / TPS）
+
+- 用户问：输出速度 TPS 还有优化空间吗。实测五个模型经 7871（stream=true, max_tokens=200）：
+  Beam ttfb 0.670s / total 4.280s（88 条 data）、GLM-5.3-Flash 1.353s / 5.514s（203 条）、
+  MiMo-2.6-Pro 1.788s / 8.354s（61 条）、Iceman 2.594s / 4.787s（199 条），
+  **Claude-Haiku-5.5 ttfb 1.739s / total 1.739s / 4 条 data** —— 首字节 = 总耗时。
+- 根因：`internal/router/router.go` 桥接分支 `streaming := wantsStream(body) && index == len(t.Chain)-1`。
+  alias map 里 5 个 OC messages 型号（Claude-Haiku-5.5 / Qwen-3.8-Flash / Muse-Spark1.3 / GPT-6-Luna / Beam）
+  全是 2 跳链（直连 + 机场孪生），首跳永远非链尾 → 走桥接时被强制非流式，整段生成完才写回。
+  chat 协议的跳不受影响（`doForwardWith` 一直边收边发，32KB 缓冲 + 每次 Read 后 Flush）。
+- 次生缺陷：`internal/bridge/bridge.go` 非流式路径 `postJSON` 用 `DefaultIdle = 30s` 判静默；
+  非流式上游整段生成完才有字节，>30s 的回答必被判 `upstream silent ... 504`。
+
+## 已完成变更
+- [x] `router.go` 桥接分支门控改为 `streaming := wantsStream(body)`（非 2xx 在写任何字节前返回 Result，回落不变）。
+- [x] `bridge.go` 新增 `DefaultIdleNonStream = DefaultTimeout`（120s），`postJSON` 改用它。
+- [x] 新增 `internal/router/stream_test.go`：`TestBridgeStreamsOnNonTailHop`、`TestBridgeRegionBlockedFallsBackWithStream`。
+- [x] 候选二进制 `%LOCALAPPDATA%\ZCodeGateway\zgate-0.3.0-cand.exe` md5 `c96615631f3a52baf5adaa1a17375064`；等用户跑 `swap-zgate.ps1`。
+
+## 验收
+- `gofmt -l .` 无输出；`go vet ./...` 退出 0；`go test ./...` 全 ok（alias / bridge / router / supervisor）。
+- `go test ./internal/router/ -run "TestBridge|TestRegion" -v`：两个新测试 PASS，既有 region 测试不回归。
+
+## 未采纳
+- 不动 `tools/model_alias.py` 的链序（只有 beam-free 被证实机场可用，gpt-6-luna / muse-spark 机场同样 400）。
+- 不加大 regionCooldown（30min 已够；过长会在出口恢复后仍跳过直连）。
+
+## 收尾自审（第十二轮）
+
+- 自审发现并补掉一个放任式缺口：`attemptChain` 的回落条件对「流已开始」这种情形没有护栏。
+  查证 `bridge.go` 的 `if !emitted` 分支后确认：上游流中途失败时 bridge 已在流内补
+  `[bridge stream error: …]` + `[DONE]` 并返回 `Status: 200`，所以回落本来就走不到；
+  护栏 `!cw.written &&` 属防御性代码，加注释说明今天不可达。
+- 新增 `TestBridgeNoFallbackAfterStreamStarted`：首跳写出一个 delta 后发 RST（普通 Close 只会让
+  客户端看到干净 EOF，Scanner 不报错，测不出东西），断言只收口、下一跳零命中、状态码 200。
+- PITFALLS §27「桥接模型整段缓冲」的「只有链尾跳走流式」已过时，改写为「每跳都流式 + 三层回落安全」
+  并补上非流式空闲上限的坑。
+- 现网核对：`gateways/zgate/zgate.exe` md5 `c9661563…`、进程 21:10:28 起、/health 200 —— 用户已跑过
+  `swap-zgate.ps1`，流式修复已在线上。同题实测 Claude-Haiku-5.5 `ttfb 2.227s / total 3.676s`、46 条 data。
+- 新候选（含护栏）md5 `f66ef8f97f992caad1eb248ae928cdde`；护栏不可达，与现网行为等价，不为此重启。
