@@ -102,8 +102,13 @@ func loadConfig() (*config.Config, keys.Set, error) {
 	cfgPath := ""
 	fs := flag.NewFlagSet("zgate", flag.ContinueOnError)
 	fs.StringVar(&cfgPath, "config", "", "zgate.json 路径")
-	// os.Args[0] is the subcommand here; ignore parse errors so flags after it work.
-	_ = fs.Parse(os.Args[2:])
+	// os.Args[1] is the subcommand, so flags start at os.Args[2]. 无参数启动（双击 exe）
+	// 时 os.Args[2:] 是越界切片，会 panic 而不是打 usage —— 先兜住长度。
+	var rest []string
+	if len(os.Args) > 2 {
+		rest = os.Args[2:]
+	}
+	_ = fs.Parse(rest)
 
 	cfg, err := config.Load(cfgPath)
 	if err != nil {
