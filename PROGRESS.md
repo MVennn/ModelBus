@@ -2118,3 +2118,32 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 - 本轮未提交/推送；上游 clone 的本地补丁保持未暂存状态。
 
 ## 状态: 已完成
+
+---
+
+# 2026-11-06 第十一轮：zgate 地区受限 403 冷却（Beam 403/200 抖动）
+
+## 任务目标
+面板上 Beam 请求一片「403 Rejected / inference_fail」与零星 200 交替，用户描述为「一会走 guangdong 一会走机场」。定位路由逻辑缺陷并修掉，同类 OC 型号一并覆盖。
+
+## 根因（实况取证）
+- 链路：`~/.zcode/v2/model-alias-map.json` → `Beam` 的 chain = `[beam-free 直连, beam-free 机场(proxy http://10.0.0.1:7896)]`，直连排在前面（`tools/model_alias.py:168 with_airport_fallback` 就是这么补孪生跳的）。
+- 直连出口实测永远 `403 {"type":"error","error":{"type":"RegionError","message":"This model is not available in your country"}}`，机场出口 200（复测两次一致）。
+- `zgate.log` 尾部 4000 行：hop1=367、hop2=367、`403 fallback`=359 —— 几乎每个 beam 请求都先白撞一次直连 403。
+- 缺陷在 router：`regionBlocked()` 只让 `chainAccept` 返回 false（回落），从不冷却该跳；同一跳于是每次都重新尝试。11 个 OC 型号里 beam-free 是唯一「直连 403 / 机场 200」可修的；gpt-6-luna、muse-spark-1.3-contributor 机场同样 400（并非机场节点漂移，是上游整体不收），其余 8 个直连机场都 200。
+
+## 已完成变更
+- [x] `gateways/zgate/internal/router/router.go`：新增 `regionCooldown = 30 * time.Minute`；chat 路径 `accept` 闭包与桥接路径都改为「地区受限 403 且链里存在同 channel+同 upstream 的带出口孪生跳（`proxyTwinAfter`）→ 冷却这一跳 30min」，日志写明「同上游机场孪生跳继续可用」。冷却键 `hopKey` 带 proxy，所以孪生跳是另一个键，不会被一起吃。
+- [x] 只在有孪生跳时冷却：单跳链或无同上游出口跳时不冷却，避免把真实 403 变成即时 `502 all upstreams failed`。
+- [x] `router_test.go` 新增 `TestRegionBlocked403CoolsTheDirectHopOnly`（复刻 beam 实况：直连 403 RegionError→孪生 200，第二请求必须跳过直连）与 `TestRegionBlockedDoesNotCoolALoneHop`（单跳不被冷却、每次都要真试）。
+- [x] `main.go`：无参数启动（双击 exe）时 `os.Args[2:]` 越界 panic，改成先判长度再 `flag.Parse`，现在正常打 usage/报缺配置。
+- [x] 候选二进制 `%LOCALAPPDATA%\ZCodeGateway\zgate-0.3.0-cand.exe`（md5 `b3903b20ce6296d0e7fa18196eed639c`，10,465,792 B）；现网 `gateways/zgate/zgate.exe` 仍是 11-02 13:16 的构建（md5 `5e0bac151a5cbd50a0aa3050b2a809ad`），**等用户执行 `swap-zgate.ps1` 受控重启**（脚本自带备份/健康轮询/失败回滚）。
+
+## 验收
+- `gofmt -l .` 无输出；`go vet ./...` 退出 0；`go test ./...` 全通过（alias / bridge / router / supervisor 全 ok）。
+- `go test ./internal/router/ -run Region -v`：`TestRegionBlocked403CoolsTheDirectHopOnly` PASS、`TestRegionBlockedDoesNotCoolALoneHop` PASS。
+- 候选二进制烟测：`version` → `zgate 0.3.0`；无参数 → 报缺配置后退出，不再 panic。
+
+## 待解决 / 注意事项
+- 重启后每 30 分钟窗口仍会有 1 次直连 403（首个请求学到之后走机场），面板上不再成片；想要零 403 得让 alias 生成器把孪生跳排前，但只有 beam-free 被证实机场可用，静态清单会误伤 gpt-6-luna/muse-spark，故不做。
+- 未改 `tools/model_alias.py` 链序；未重启网关（AGENTS：长驻网关由用户重启）；本轮未提交/推送。

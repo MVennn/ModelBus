@@ -15,6 +15,36 @@
 
 ---
 
+## [未发布]
+
+### zgate：地区受限 403 冷却该跳（2026-11-06）
+
+- 起因：请求面板上 Beam 一片「403 Rejected」，与零星 200 交替。实测 alias map 里
+  `Beam` 的链是 `[beam-free 直连, beam-free 机场(proxy)]`，直连出口永远
+  `403 RegionError: This model is not available in your country`、机场出口 200；
+  `zgate.log` 尾部 4000 行里 hop1=367 / hop2=367 / `403 fallback`=359 —— 每个请求都先
+  白撞一次直连 403 再回落。原因是 `regionBlocked()` 只让 `chainAccept` 返回 false（回落），
+  从不冷却该跳，于是同一跳每次都要重试。
+- 改动（`gateways/zgate/internal/router/router.go`）：新增 `regionCooldown = 30m`；
+  chat 路径 `accept` 闭包与桥接路径都改为「地区受限 403 **且** 链里存在同 channel + 同
+  upstream 的带 proxy 孪生跳（`proxyTwinAfter`）→ 冷却这一跳 30min」。冷却键 `hopKey`
+  带 proxy，所以机场孪生跳是另一个键，兜底不会被吃掉；单跳链或无同上游出口跳时**不冷却**，
+  否则唯一一跳被冷却会让后续请求连尝试都省掉，把真实 403 变成即时
+  `502 all upstreams failed`。
+- 同时修 `main.go` 无参数启动（双击 exe）时 `os.Args[2:]` 越界 panic —— 现在正常打 usage
+  或报缺配置。
+- 测试：`internal/router` 新增 `TestRegionBlocked403CoolsTheDirectHopOnly`（复刻 beam
+  实况：直连 403 RegionError → 孪生跳 200，第二个请求必须跳过直连）与
+  `TestRegionBlockedDoesNotCoolALoneHop`；`go vet ./...` 与 `go test ./...` 全通过。
+- 覆盖面：11 个 OC 型号逐个探过，只有 `beam-free` 是「直连 403 / 机场 200」可修；
+  `gpt-6-luna`、`muse-spark-1.3-contributor` 机场同样 400（上游整体不收这个地区），
+  其余 8 个两边都 200。因此**不改** `tools/model_alias.py` 的链序 —— 静态清单只认得
+  beam，硬排会把两个坏型号的 403 提前；运行期学习更准。
+- 生效：候选二进制 `%LOCALAPPDATA%\ZCodeGateway\zgate-0.3.0-cand.exe`，需要用户执行
+  `swap-zgate.ps1` 受控重启后生效（长驻网关不由会话重启）。
+
+---
+
 ## [0.6.0] — 2026-11-06
 
 ### WB 永远是第一消费来源（2026-11-05）
