@@ -1,6 +1,7 @@
 # Qoder（qoder2api-hub）
 
-> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入四组（主力/免费/低耗/高耗），经 `127.0.0.1:7871` 的 alias map 分流；WorkBuddy2API 与 OpenCode-Go 不动。
+> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入四组（主力/免费/低耗/高耗；2026-10-28 起低耗与高耗
+> 已并为「省钱」，共三组），经 `127.0.0.1:7871` 的 alias map 分流；WorkBuddy2API 与 OpenCode-Go 不动。
 >
 > **2026-10-23 起**：下文 §4 的 `qoder:` 前缀与独立 provider 是上一版合并模式；
 > 当前命名/分组以 [MODEL-ALIAS.md](MODEL-ALIAS.md) 为准。统一探测/写入用
@@ -15,7 +16,7 @@
 
 | 上游 | 适配器 | 端口 | 在 ZCode 里的形态 |
 |---|---|---|---|
-| OpenCode-Go | 直连 / 统一路由 | — / 7871 | 四组（主力/免费/低耗/高耗） |
+| OpenCode-Go | 直连 / 统一路由 | — / 7871 | 三组（主力/免费/省钱；旧文档写的四组已并组） |
 | WorkBuddy | WorkBuddy2API Panel | 7863 | 模型并入四组（经 7871） |
 | Qoder | **qoder2api-hub** | **8790** | 并入四组（`Q/积分/型号`，alias map） |
 
@@ -87,12 +88,16 @@ Qoder 现在由 `gateways/zgate` 以 `always` 策略托管（见 [MAINTENANCE.md
 
 `--separate` 才写独立的 `qoder` provider（旧模式，bare model id）。
 
-当前收录 8 个模型（按 `price_factor` 从免费到贵排序）：
+> **时效（2026-11-07 00:00 复核）**：下表是 2026-10-23 的快照。当前 `/v1/models` 已
+> 返回 12 条，分组也早从四组并成三组（主力 / 免费 / 省钱）。现役状态一律以
+> `~/.zcode/v2/model-alias-map.json` 为准，本表只作历史依据。
+
+当前收录 8 个模型（按 `price_factor` 从免费到贵排序，2026-10-23 快照）：
 
 | 模型（旧 `qoder:` / 现 `Q/积分/型号`） | price_factor | 落到 | 思考档位 | 备注 |
 |---|---:|---|---|---|
 | `DeepSeek-Flash` | 0.0 | 免费（谷价）/ 低耗（峰价） | low/high/max | 免费；平时 1.1s，排队时 64s 后 200，也可能 90s+ 后 502（10605） |
-| `Qwen3.8-Flash` | 0.0 | 免费（谷价）/ 低耗（峰价） | low/high/max | 2026-10-23 19:24 复通（HTTP 200）后自动加回；谷价 0 积分、峰价 0.09 |
+| `Qwen3.8-Flash` | 0.0 → **0.04** | 免费（谷价）/ 低耗（峰价） | low/high/max | 2026-10-23 19:24 复通后自动加回；2026-11-06 23:59 免费窗口关闭（`price_factor` 0.04、`usage.billable` true），现落省钱组 0.03 |
 | `GLM-5.3-Flash` | 0.1 | 低耗 | high/max | |
 | `MiniMax-M3.1-Flash` | 0.1 | 低耗 | — | |
 | `DeepSeek-V4-Pro` | 0.5 | 高耗 | high/max | |
