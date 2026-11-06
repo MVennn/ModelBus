@@ -63,6 +63,14 @@ const transportRetryDelay = 300 * time.Millisecond
 // 实测 Conatus 会静默到总超时，不冷却就会每个请求都再等一次。
 const timeoutCooldown = 5 * time.Minute
 
+// regionCooldown 是「地区受限」403 的冷却时长。这一跳没坏，是这条出口在这个国家
+// 进不去（opencode.ai 按出口国拦 beam / gpt / muse）。出口归属地不会在几十秒内变，
+// 所以按死跳同档冷却。2026-11-06 实况：beam-free 的链是 [直连, 机场孪生]，
+// 直连那跳每次都 403 RegionError —— 10 分钟 359 个请求全先撞一次 403 再回落，
+// 面板上就是一片「403 Rejected」。冷却键带 proxy（见 hopKey），同上游的机场孪生跳
+// 是另一个键，兜底不会被吃掉；只有链里真有这条孪生跳时才冷却直连跳（proxyTwinAfter）。
+const regionCooldown = 30 * time.Minute
+
 // New wires the server. client is shared with the bridge.
 func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervisor, client *http.Client, log *logx.Logger) *Server {
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
@@ -722,6 +730,12 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		s.coolBridgeFailure(hop, result)
 		// 地区受限按失败处理：桥接路径不走 chainAccept，必须单独判，
 		// 否则 gpt-6-luna 这类 responses 模型会拿 403 直接返回给客户端。
+		// 冷却规则与 chat 路径一致：有同上游的出口孪生跳才冷却这一跳。
+		if regionBlocked(result.Status, result.Body) && proxyTwinAfter(t.Chain, index) {
+			s.log.Infof("[router] %s 地区受限（HTTP %d），冷却 %v；同上游机场孪生跳继续可用",
+				hopKeyForLog(hop), result.Status, regionCooldown)
+			s.markCoolingFor(hop, regionCooldown)
+		}
 		if (result.Status >= 500 || result.Status == 429 || regionBlocked(result.Status, result.Body)) && index+1 < len(t.Chain) {
 			s.log.Infof("[router] %s -> HTTP %d, fallback %s", hop.Upstream, result.Status, nextHopName(t.Chain, index))
 			s.attemptChain(w, r, body, model, t, path, search, index+1)
@@ -741,6 +755,13 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		if hopFatal(status, head) {
 			s.markCooling(hop)
 			return false
+		}
+		if regionBlocked(status, head) && proxyTwinAfter(t.Chain, index) {
+			// 地区受限不是这跳坏了，是这条出口进不去。不冷却就会每个请求都先撞一遍
+			// 直连跳的 403 再走机场孪生跳，白付一次往返。
+			s.log.Infof("[router] %s 地区受限（HTTP %d），冷却 %v；同上游机场孪生跳继续可用",
+				hopKeyForLog(hop), status, regionCooldown)
+			s.markCoolingFor(hop, regionCooldown)
 		}
 		if status == 504 {
 			// 与桥接路径的 coolBridgeFailure 对齐：上游静默超时（连上不说话）
@@ -819,6 +840,26 @@ func regionBlocked(status int, head []byte) bool {
 		[]byte("region, or territory not supported"),
 	} {
 		if bytes.Contains(head, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// proxyTwinAfter 判断 index 之后还有没有「同 channel、同上游、带出口」的孪生跳。
+// 只有存在这条兜底跳，冷却一个地区受限的直连跳才是纯收益：下一个请求直接落到机场
+// 孪生跳上。否则（唯一一跳、或后面没有同上游出口跳）冷却会把真实的 403 变成
+// 「all upstreams failed」502 —— 连尝试都省掉，用户看到的错误还变了。
+func proxyTwinAfter(chain []alias.Hop, index int) bool {
+	if index >= len(chain) {
+		return false
+	}
+	hop := chain[index]
+	if hop.Proxy != "" {
+		return false
+	}
+	for _, next := range chain[index+1:] {
+		if next.Channel == hop.Channel && next.Upstream == hop.Upstream && next.Proxy != "" {
 			return true
 		}
 	}

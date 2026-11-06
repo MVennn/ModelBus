@@ -489,3 +489,112 @@ func TestChatPath504CoolsTheHop(t *testing.T) {
 		t.Fatalf("dead hop must be skipped while cooling, live got %d requests", n)
 	}
 }
+
+// TestRegionBlocked403CoolsTheDirectHopOnly 复刻 2026-11-06 的 beam-free 实况：
+// 直连出口 403 RegionError（"This model is not available in your country"），
+// 机场孪生跳出 200。链序是 [直连, 机场孪生]，原来每个请求都先撞一次 403 再回落
+// （10 分钟 359 次，面板一片 403 Rejected）。地区受限必须把直连那一跳冷却掉，
+// 让下一个请求直接落到孪生跳；孪生跳是另一个冷却键，不能被顺手吃掉。
+func TestRegionBlocked403CoolsTheDirectHopOnly(t *testing.T) {
+	var mu sync.Mutex
+	directHits := 0
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		directHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"RegionError","message":"This model is not available in your country"}}`))
+	}))
+	defer blocked.Close()
+	cap := &capture{}
+	airport := httptest.NewServer(cap.handler(nil))
+	defer airport.Close()
+
+	srv, _ := newServer(t, `{
+		"models":{"Beam":{"channel":"OC","upstream":"beam-free","protocol":"chat",
+			"chain":[
+				{"upstream":"beam-free","base":"`+blocked.URL+`","channel":"OC","protocol":"chat","price":0},
+				{"upstream":"beam-free","base":"`+airport.URL+`","channel":"OC","protocol":"chat","price":0,"proxy":"http://10.0.0.1:7896"}
+			]}},
+		"legacy":{}
+	}`, airport.URL)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	resp, raw := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"Beam","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	if resp.StatusCode != 200 {
+		t.Fatalf("region 403 should fall back to the airport twin, got %d %s", resp.StatusCode, raw)
+	}
+
+	direct := alias.Hop{Channel: "OC", Upstream: "beam-free"}
+	twin := alias.Hop{Channel: "OC", Upstream: "beam-free", Proxy: "http://10.0.0.1:7896"}
+	if !srv.cooling(direct) {
+		t.Fatal("region-blocked direct hop must be cooled")
+	}
+	if srv.cooling(twin) {
+		t.Fatal("the airport twin must stay usable (its hopKey carries the proxy)")
+	}
+
+	resp2, raw2 := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"Beam","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("second request failed: %d %s", resp2.StatusCode, raw2)
+	}
+	mu.Lock()
+	n := directHits
+	mu.Unlock()
+	cap.mu.Lock()
+	m := len(cap.requests)
+	cap.mu.Unlock()
+	if n != 1 {
+		t.Fatalf("cooled direct hop must be skipped, it got %d requests", n)
+	}
+	if m != 2 {
+		t.Fatalf("airport twin should serve both requests, got %d", m)
+	}
+}
+
+// TestRegionBlockedDoesNotCoolALoneHop：链里没有同上游的出口孪生跳时不能冷却。
+// 冷却唯一一跳会让后续请求连尝试都省掉，把真实的 403 变成「all upstreams failed」502。
+func TestRegionBlockedDoesNotCoolALoneHop(t *testing.T) {
+	var mu sync.Mutex
+	hits := 0
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		hits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"type":"error","error":{"type":"RegionError","message":"This model is not available in your country"}}`))
+	}))
+	defer blocked.Close()
+
+	srv, _ := newServer(t, `{
+		"models":{"Beam":{"channel":"OC","upstream":"beam-free","protocol":"chat",
+			"chain":[{"upstream":"beam-free","base":"`+blocked.URL+`","channel":"OC","protocol":"chat","price":0}]}},
+		"legacy":{}
+	}`, blocked.URL)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	for i := 0; i < 2; i++ {
+		// 单跳链的 403 本来就会走到链耗尽（502 all upstreams failed），这与本次改动无关；
+		// 这里只钉住「每次都要真的再试一遍」，不被冷却省掉。
+		resp, _ := postJSON(t, front.URL+"/v1/chat/completions",
+			`{"model":"Beam","messages":[{"role":"user","content":"hi"}],"max_tokens":8}`)
+		if resp.StatusCode == 200 {
+			t.Fatalf("attempt %d: region-blocked upstream must not answer 200", i+1)
+		}
+	}
+	if srv.cooling(alias.Hop{Channel: "OC", Upstream: "beam-free"}) {
+		t.Fatal("a lone hop must not be cooled: it would turn the real 403 into an instant 502")
+	}
+	mu.Lock()
+	n := hits
+	mu.Unlock()
+	if n != 2 {
+		t.Fatalf("lone hop must still be attempted every time, got %d hits", n)
+	}
+}
