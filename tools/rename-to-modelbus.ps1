@@ -103,30 +103,79 @@ foreach ($task in $taskList) {
     Unregister-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -Confirm:$false | Out-Null
 }
 
-# ---------- 6. launchers outside the repo ----------
-Act "patch launchers in $LocalDir"
+# ---------- 6. launchers / configs / shortcuts outside the repo ----------
+# Any text file that hardcodes the old path or the old token gets rewritten.
+# ZcodeAIModels -> ModelBus keeps the drive/prefix, so token replacement alone
+# already fixes every JSON-escaped form (F:\\Project\\ZcodeAIModels) too.
+function PatchTextFile([string]$Path) {
+    $enc = New-Object System.Text.UTF8Encoding($false)
+    $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)
+    $orig = $text
+    $text = $text.Replace($SrcDir, $DstDir).Replace($OldToken, $NewToken)
+    if ($text -eq $orig) { return $false }
+    [System.IO.File]::WriteAllText($Path, $text, $enc)
+    return $true
+}
+
+function PatchShortcut([string]$Path) {
+    $shell = New-Object -ComObject WScript.Shell
+    $lnk = $shell.CreateShortcut($Path)
+    $changed = $false
+    if ($lnk.TargetPath -and $lnk.TargetPath.Contains($OldToken)) {
+        $lnk.TargetPath = $lnk.TargetPath.Replace($OldToken, $NewToken)
+        $changed = $true
+    }
+    if ($lnk.WorkingDirectory -and $lnk.WorkingDirectory.Contains($OldToken)) {
+        $lnk.WorkingDirectory = $lnk.WorkingDirectory.Replace($OldToken, $NewToken)
+        $changed = $true
+    }
+    if ($changed) { $lnk.Save() }
+    return $changed
+}
+
+$LauncherExts = @('.ps1', '.vbs', '.bat', '.cmd')
+Act "patch launchers in $LocalDir (.ps1 .vbs .bat .cmd)"
 if (-not $DryRun) {
-    foreach ($name in @('ensure-zgate.ps1', 'zgate-daemon.ps1', 'swap-zgate.ps1')) {
-        $full = Join-Path $LocalDir $name
-        if (-not (Test-Path -LiteralPath $full)) { continue }
-        $text = [System.IO.File]::ReadAllText($full, [System.Text.Encoding]::UTF8)
-        if ($text.Contains($SrcDir)) {
-            [System.IO.File]::WriteAllText($full, $text.Replace($SrcDir, $DstDir), (New-Object System.Text.UTF8Encoding($false)))
-            Say "      patched $name"
-        }
+    foreach ($file in (Get-ChildItem -LiteralPath $LocalDir -File -Force -ErrorAction SilentlyContinue)) {
+        if ($LauncherExts -notcontains $file.Extension.ToLower()) { continue }
+        if (PatchTextFile $file.FullName) { Say ("      patched " + $file.Name) }
     }
 }
+
+$ZcodeSetting = Join-Path $env:USERPROFILE '.zcode\v2\setting.json'
+Act "patch $ZcodeSetting (workspacePath)"
+if (-not $DryRun -and (Test-Path -LiteralPath $ZcodeSetting)) {
+    if (PatchTextFile $ZcodeSetting) { Say "      patched setting.json" }
+}
+
 Act "patch $LinkRoot\AGENTS.md"
 if (-not $DryRun) {
     $agentsMd = Join-Path $LinkRoot 'AGENTS.md'
     if (Test-Path -LiteralPath $agentsMd) {
-        $text = [System.IO.File]::ReadAllText($agentsMd, [System.Text.Encoding]::UTF8)
-        if ($text.Contains($OldToken)) {
-            [System.IO.File]::WriteAllText($agentsMd, $text.Replace($OldToken, $NewToken), (New-Object System.Text.UTF8Encoding($false)))
-            Say "      patched AGENTS.md"
+        if (PatchTextFile $agentsMd) { Say "      patched AGENTS.md" }
+    }
+}
+
+$ShortcutDirs = @(
+    (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs'),
+    (Join-Path $env:APPDATA 'Microsoft\Internet Explorer\Quick Launch\User Pinned'),
+    [Environment]::GetFolderPath('Desktop')
+)
+Act "repair shortcuts pointing at $OldToken (start menu / taskbar pins / desktop)"
+if (-not $DryRun) {
+    foreach ($dir in $ShortcutDirs) {
+        if (-not (Test-Path -LiteralPath $dir)) { continue }
+        foreach ($lnkFile in (Get-ChildItem -LiteralPath $dir -Filter '*.lnk' -File -Recurse -ErrorAction SilentlyContinue)) {
+            if (PatchShortcut $lnkFile.FullName) { Say ("      retargeted " + $lnkFile.Name) }
+            if ($lnkFile.Name.Contains($OldToken)) {
+                $newName = $lnkFile.Name.Replace($OldToken, $NewToken)
+                Rename-Item -LiteralPath $lnkFile.FullName -NewName $newName
+                Say ("      renamed " + $lnkFile.Name + " -> " + $newName)
+            }
         }
     }
 }
+
 Act "move state dir $StateOld -> $StateNew"
 if (-not $DryRun -and (Test-Path -LiteralPath $StateOld) -and -not (Test-Path -LiteralPath $StateNew)) {
     Move-Item -LiteralPath $StateOld -Destination $StateNew
@@ -163,7 +212,7 @@ if (-not $DryRun) {
 Act "replace '$OldToken' -> '$NewToken' in text files"
 if (-not $DryRun) {
     $files = Get-ChildItem -LiteralPath $Root -Recurse -File -Force |
-        Where-Object { $Exts -contains $_.Extension.ToLower() -and $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\node_modules\\' }
+        Where-Object { $Exts -contains $_.Extension.ToLower() -and $_.Name -ne 'rename-to-modelbus.ps1' -and $_.FullName -notmatch '\\\.git\\' -and $_.FullName -notmatch '\\node_modules\\' }
     $hits = 0
     foreach ($file in $files) {
         try { $body = [System.IO.File]::ReadAllText($file.FullName, [System.Text.Encoding]::UTF8) } catch { continue }
