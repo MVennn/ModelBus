@@ -1,0 +1,16 @@
+#!/usr/bin/env sh
+# 提交前敏感信息闸门：默认扫工作树（含未忽略的新文件），失败即拒绝提交。
+# 启用：git config core.hooksPath .githooks
+cd "$(git rev-parse --show-toplevel)" || exit 2
+# Windows 上 python3 可能是 Microsoft Store 别名（存在但运行失败），
+# 先做一次真实版本探测再决定解释器。
+if python3 -c "import sys" >/dev/null 2>&1; then
+  PY=python3
+elif python -c "import sys" >/dev/null 2>&1; then
+  PY=python
+else
+  echo "[FAIL] 找不到可用的 Python，提交已阻止" >&2
+  exit 2
+fi
+"$PY" tools/check-secrets.py || exit 1
+exit 0

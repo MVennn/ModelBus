@@ -136,9 +136,9 @@ def main() -> int:
     print(f"\n存活 {alive}/{len(results)}")
     out = Path(args.output).expanduser()
     out.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    print(f"已写入 {out}")
+    print(f"已写入 {out.name}")
     print("下一步：python providers/qwen/qwen_zcode_sync.py --write-pools "
-          f"--probe-file {out}")
+          f"--probe-file {out.name}")
     return 0
 
 

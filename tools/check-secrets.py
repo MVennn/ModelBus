@@ -4,8 +4,8 @@
 """公开仓敏感信息扫描：凭据 + 本机路径 + 真实邮箱。
 
 用法：
-    python tools/check-secrets.py            # 扫描已跟踪文件
-    python tools/check-secrets.py --all      # 已跟踪 + 未跟踪一起扫（遵循 .gitignore）
+    python tools/check-secrets.py            # 扫描工作树（已跟踪 + 未跟踪，遵循 .gitignore）
+    python tools/check-secrets.py --tracked-only  # 只扫已跟踪文件（CI / 历史脚本用）
 
 退出码：0 通过 / 1 发现疑似敏感信息 / 2 自身故障（git 不可用或失败）。
 这是 `docs/SECRETS.md` 的可执行版本 —— 文档说「本仓不保存凭据与本机路径」，
@@ -110,10 +110,13 @@ def untracked_files() -> list[str]:
 
 
 def main() -> int:
-    if "--all" in sys.argv:
-        files = sorted(set(tracked_files()) | set(untracked_files()))
-    else:
+    # 默认扫工作树：历史事故是「新写的 evidence/ 分片带本机绝对路径、
+    # 还没 git add，默认只扫 tracked 时报告全绿，push 后 CI 才红」。
+    # --all 作为同义参数保留；--tracked-only 给 CI / 历史脚本用。
+    if "--tracked-only" in sys.argv:
         files = tracked_files()
+    else:
+        files = sorted(set(tracked_files()) | set(untracked_files()))
     bad = []
     for rel in files:
         rel_norm = rel.replace("\\", "/")

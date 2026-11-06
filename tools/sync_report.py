@@ -202,6 +202,17 @@ def git_push(report_name: str, out_dir: Path = REPORT_DIR) -> int:
             print(proc.stderr.strip(), file=sys.stderr)
         return proc.returncode
 
+    # 推送前门禁：自动同步历史上把本机绝对路径写进 evidence/ 分片并直接 push，
+    # CI 的「敏感信息扫描」连续三次因此红。这里在 add/commit/push 之前堵住。
+    gate = subprocess.run(
+        [sys.executable, str(ROOT / "tools" / "check-secrets.py")],
+        cwd=ROOT, text=True, encoding="utf-8", errors="replace", capture_output=True)
+    if gate.returncode != 0:
+        print(gate.stdout.strip())
+        print(gate.stderr.strip(), file=sys.stderr)
+        print("敏感信息门禁未通过，已终止自动提交与推送", file=sys.stderr)
+        return gate.returncode
+
     # Commit the directory the report was actually written to: with
     # --out-dir the fixed "docs/reports" add staged nothing and git reported
     # "nothing to commit" as success.

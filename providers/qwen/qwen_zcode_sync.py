@@ -423,7 +423,7 @@ def main() -> int:
                               f"（{before} → {len(pool['hops'])}）")
         out = HERE / "pools.json"
         out.write_text(json.dumps(plan, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-        print(f"已写入 {out}")
+        print(f"已写入 {out.name}")
         for pool in plan["pools"]:
             print(f"  {pool['name']:<14} {pool['label']}  {len(pool['hops'])} 跳")
             print("    " + " -> ".join(pool["hops"][:8]) + (" …" if len(pool["hops"]) > 8 else ""))
@@ -496,7 +496,7 @@ def main() -> int:
     tmp = path.with_name(path.name + ".tmp-qwen")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
-    print(f"已写入 {path}（备份：{backup.name}）")
+    print(f"已写入 {path.name}（备份：{backup.name}）")
     print("下一步：python tools/model_alias.py --slot auto --apply")
     return 0
 

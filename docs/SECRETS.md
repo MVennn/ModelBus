@@ -299,18 +299,23 @@ git diff --cached | grep -nE 'oc_sk_|apiKey|api_key|Bearer [A-Za-z0-9]'
 ## 5. 推送前怎么做
 
 ```sh
-# 1) 扫已跟踪文件（CI 跑的就是这个，退出码 0 才能推）
+# 1) 默认扫工作树：已跟踪 + 未跟踪且未被 .gitignore 排除的文件
 python tools/check-secrets.py
 
-# 2) 扫工作树，含未跟踪文件（提交前自查用）
-python tools/check-secrets.py --all
+# 2) 只扫已跟踪文件（CI 与历史脚本口径）
+python tools/check-secrets.py --tracked-only
 ```
 
-`--all` 模式**遵循 `.gitignore`** —— 本机配置（如 `config.local.json`）设计上
-就不入库，报出来只是噪音。但它仍会扫**未跟踪且未被忽略**的新文件，所以能抓住
-「新建了个文件忘了加 .gitignore」这种情况。
+默认口径覆盖工作树，是 2026-11-04 ~ 11-06 三次 CI 红的直接结论：
+本机绝对路径出现在**还没 git add 的 evidence/ 分片**里，只扫 tracked 时全绿，
+push 之后 CI 才拦下来。`--all` 是默认口径的同义参数，保留兼容。
+本机配置（如 `config.local.json`）设计上就不入库，被 `.gitignore` 排除后
+不会报出来；但**未忽略的新文件一律扫**，抓住「新建了文件忘了加规则」这种情况。
 
-**CI 里有「敏感信息扫描」步骤**，推上去会自动跑。本地先跑一遍，别等 CI 报错。
+`tools/sync_report.py --write --push` 在 `git add` 之前会先跑本脚本，
+门禁非 0 就不提交、不推送；CI 把「敏感信息扫描」放在检出源码之后的第一步，
+失败立即停，不再等前面十几步构建测试白跑。
+装本地闸门：`git config core.hooksPath .githooks`（见 `.githooks/pre-commit`）。
 
 ---
 

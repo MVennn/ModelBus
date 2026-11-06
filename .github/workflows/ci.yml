@@ -24,6 +24,12 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: 敏感信息扫描（工作树 + 已跟踪）
+        # 放在所有构建步骤之前：历史事故里构建/测试全绿，最后一步才因本机路径失败。
+        run: |
+          python3 tools/check-secrets.py
+          python3 tools/check-secrets.py --tracked-only
+
       - name: 装 Node.js
         uses: actions/setup-node@v4
         with:
@@ -65,6 +71,3 @@ jobs:
 
       - name: 文档自检
         run: python3 tools/check-docs.py
-
-      - name: 敏感信息扫描
-        run: python3 tools/check-secrets.py

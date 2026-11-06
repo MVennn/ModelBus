@@ -244,7 +244,7 @@ def status(out: Path) -> int:
     if not data:
         print(f"没有候选文件：{out}")
         return 1
-    print(f"候选文件：{out}")
+    print(f"候选文件：{out.name}")
     print(f"  检查时间 {data.get('checked_at')}  榜单更新 {data.get('leaderboard_updated_at')}")
     base = data.get("baseline") or {}
     print(f"  基准 {base.get('model')} #{base.get('rank')} {base.get('score')}")
@@ -365,7 +365,7 @@ def main() -> int:
         return 0
 
     write_json(out, document)
-    print(f"\n已写入 {out}")
+    print(f"\n已写入 {out.name}")
 
     if args.apply:
         command = [sys.executable, str(HERE / "model_alias.py"),

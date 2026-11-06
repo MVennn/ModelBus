@@ -445,7 +445,7 @@ def main() -> int:
     tmp = path.with_name(path.name + ".tmp-qoder")
     tmp.write_text(json.dumps(cfg, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(tmp, path)
-    print(f"已写入 {path}（备份：{backup.name}）")
+    print(f"已写入 {path.name}（备份：{backup.name}）")
     return 0
 
 

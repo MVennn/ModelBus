@@ -152,8 +152,8 @@ docs/reports/sync-20261104-185256.log:326: [18:55:37] 失败段数: 0
 ### 3.7 ZCode 日志目录 / .work 缺失原始报错
 
 ```text
-glob "**/*" C:/Users/SansK/.zcode/v2/logs → rg: ... IO error for operation on ...: 系统找不到指定的文件。 (os error 2)
-glob "**/*" C:/Users/SansK/.zcode/cli/log → rg: ... IO error for operation on ...: 系统找不到指定的文件。 (os error 2)
+glob "**/*" <home>/.zcode/v2/logs → rg: ... IO error for operation on ...: 系统找不到指定的文件。 (os error 2)
+glob "**/*" <home>/.zcode/cli/log → rg: ... IO error for operation on ...: 系统找不到指定的文件。 (os error 2)
 glob "**/*" ZcodeAIModels/.work          → rg: ZcodeAIModels/.work: IO error ... 系统找不到指定的文件。 (os error 2)
 Node fs.readdirSync 同证：.zcode/v2/logs / cli/log / cli/logs 各 files=0
 ~/.zcode/cli 今日仅 01:20~01:23 的 config.json / installed_plugins.json / known_marketplaces.json（非同步日志）
@@ -182,7 +182,7 @@ skipped     : 8 次 scheduled，error = computer_asleep_or_app_not_running
 Windows 查询（lead 环境）: CIM 0x80070003 / schtasks 找不到路径
 ```
 
-本路环境差异（如实记录）：`ops_bash` 里 `Get-ScheduledTask` 报 `HRESULT 0x80070003`、`schtasks.exe` 经 git-bash 路径转换报 `错误: 无效参数/选项 - 'C:/Users/SansK/.dsh/profiles/desktop/node_modules/@dsh-ops/bash-win32-x64/query'`；改用 Node `child_process.execFileSync("schtasks.exe", ["/query", "/fo", "CSV", "/v"])` 直调 + `TextDecoder("gbk")` 解码后成功取得 §3.1 原文。两条链路结论一致。
+本路环境差异（如实记录）：`ops_bash` 里 `Get-ScheduledTask` 报 `HRESULT 0x80070003`、`schtasks.exe` 经 git-bash 路径转换报 `错误: 无效参数/选项 - '<home>/.dsh/profiles/desktop/node_modules/@dsh-ops/bash-win32-x64/query'`；改用 Node `child_process.execFileSync("schtasks.exe", ["/query", "/fo", "CSV", "/v"])` 直调 + `TextDecoder("gbk")` 解码后成功取得 §3.1 原文。两条链路结论一致。
 
 复现命令（CMD）：
 

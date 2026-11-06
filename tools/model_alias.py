@@ -1643,7 +1643,7 @@ def main() -> int:
         "legacy": legacy,
     }, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     os.replace(alias_tmp, alias_file)
-    print(f"\n已写入 {path}（备份：{backup.name}）")
+    print(f"\n已写入 {path.name}（备份：{backup.name}）")
     print(f"已写入 {alias_file}")
     # Only project the real ZCode config by default. A caller using --config for
     # a fixture/sandbox must not overwrite the local DSH profile.
