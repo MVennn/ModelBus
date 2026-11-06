@@ -135,6 +135,9 @@ MAIN_IDS = set(MAIN_ORDER)
 # 各行尾注释说明「为什么这家留这个型号」：
 LOW_ORDER = [
     "messages:qwen3.8-flash",        # Qwen：中文 / 长输出（AA 基准附近）
+    "chat:qoder:Qwen3.8-Flash",      # Qwen：Qoder 侧错峰免费（pf 0.0；白天 0.1×0.86≈0.086）。
+                                     # 与上一条同族，靠 MERGE_ACROSS_PROTOCOL 并成一条链：
+                                     # QD 首跳（免费）→ OC messages 跳（0.09）。
     "chat:cn:glm-5.3-flash",         # 智谱：工具调用稳（AA 993）
     "chat:cn:minimax-m3.1-flash",    # MiniMax：1M 上下文
     "chat:mimo-v2.6-flash",          # 小米：每积分最耐用（AA 1087）
@@ -162,9 +165,9 @@ SCORE_MIN_VALUE = 1.0
 # Base models whose free GB tier is folded into the paid entry instead of being
 # listed separately: the paid entry tries the free upstream first, then the paid
 # one, then CN. Display name keeps the paid price.
-MERGE_FREE_GB = {"deepseek-v4.1-flash"}
+MERGE_FREE_GB = {"deepseek-v4.1-flash", "qwen3.8-flash"}
 # 同一型号允许 chat 与 messages 跳并进同一条链（路由按每跳自己的协议派发）。
-MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash"}
+MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash", "qwen3.8-flash"}
 # 这些跳排到链尾，不看价格：千问的额度是一年期预付，按「OC 先用完再用它」的
 # 顺序来花，所以它必须排在付费跳之后，只有当付费全挂时才轮到。
 TAIL_HOPS = {("QW", "deepseek-v4.1-flash")}
@@ -952,6 +955,12 @@ def whitelist_items(order: list[str]) -> list[dict]:
             print(f"WARN: 白名单条目 {spec} 认不出渠道，已忽略", file=sys.stderr)
             continue
         item["whitelisted"] = True
+        # 白名单是否显式写了渠道前缀（qoder: / qwen: / cn: / global: / WB: …）。
+        # 只有显式的才按 (渠道, 裸名) 去重，否则 classify 猜出来的渠道会把
+        # 「同一个 upstream 名在另一个渠道的跳」误判成重复（见 main 里的补建过滤）。
+        item["explicit_channel"] = str(model).lower().startswith(
+            ("qoder:", "qwen:", "cn:", "global:", "wb:", "oc:", "qd:")
+        )
         out.append(item)
     return out
 
@@ -1613,13 +1622,28 @@ def main() -> int:
     items = inventory(cfg, existing_models, legacy)
     # 白名单是权威：名单点名但当前配置里没有的型号，从价格源补一条候选。
     # 不补的话「把 hy4std 提进主力」这类改动永远只改名单、不产条目。
-    # 按「裸型号名」比对而不是 (channel, upstream)：白名单里的 `chat:Qwen3.8-Max`
-    # 没写渠道前缀，classify 只能猜 OC，会和已在 QD 下的同一条重复。
+    # 比对口径分两种：
+    #   · 白名单显式写了渠道（`chat:qoder:Qwen3.8-Flash`、`chat:cn:hy3`）→ 按
+    #     (渠道, 裸名) 比。同一 upstream 名在不同渠道是不同的跳，只按裸名比会把新
+    #     渠道的跳当重复丢掉 —— 2026-11-06 Qoder 免费 qwen3.8-flash 就是这样被吞的。
+    #   · 没写渠道（`chat:Qwen3.8-Max`）→ 仍按裸名比：classify 只能猜 OC，会和
+    #     已在 QD 下的同一条重复。
     have = {_bare(str(item.get("upstream") or "")) for item in items}
     have |= {str(item.get("base_model") or "") for item in items}
-    extra = [item for item in whitelist_items(MAIN_ORDER + LOW_ORDER)
-             if _bare(str(item.get("upstream") or "")) not in have
-             and str(item.get("base_model") or "") not in have]
+    have_ch = {
+        (str(item.get("channel") or ""), _bare(str(item.get("upstream") or "")))
+        for item in items
+    }
+    extra = []
+    for item in whitelist_items(MAIN_ORDER + LOW_ORDER):
+        bare = _bare(str(item.get("upstream") or ""))
+        base = str(item.get("base_model") or "")
+        if item.get("explicit_channel"):
+            if (str(item.get("channel") or ""), bare) in have_ch:
+                continue
+        elif bare in have or base in have:
+            continue
+        extra.append(item)
     if extra:
         print(
             "白名单补入未配置型号：" + "、".join(str(item.get("raw")) for item in extra),

@@ -192,6 +192,42 @@ DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
 > 同轮还抓出 MiMo-2.6-Pro（0.18 应为 0.13）和一条 Qoder 源故障时吃静态回退
 > 留下的 0.0 假免费条目。
 
+### 3.2 白名单显式渠道 + 跨协议合并：Qoder 免费 Qwen3.8-Flash（2026-11-06）
+
+Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里是
+`price_factor 0.0 / original_price_factor 0.1 / is_free true`，错峰规则
+`idle_time_model_credit_discount`（22:00–08:00 UTC+8 四折）之外，`/v1/models`
+回的是 `price 0.0 / peak 0.1 / valley 0.0`。实测经 8790 打 6 次，usage 里
+`billable: false`，账号额度 `remain 1400 / used 0` 纹丝不动 —— 确实不扣积分。
+
+但它进不了链，卡在两处：
+
+1. **裸名去重把新渠道的跳吞了**。条目只来自 `provider_config` 的
+   `personalModelIds`，白名单补建按「裸型号名」比对（因为 `chat:Qwen3.8-Max`
+   没写渠道时 classify 只能猜 OC）。`Qwen3.8-Flash` 已被 OC 的 messages 条目占位，
+   于是 `chat:qoder:Qwen3.8-Flash` 补出来也被判重复丢掉。
+   现在 `whitelist_items()` 会给条目打 `explicit_channel`（spec 里显式写了
+   `qoder:` / `qwen:` / `cn:` / `global:` / `WB:` 等），main 里按
+   `(渠道, 裸名)` 比对；没写渠道的仍走裸名，旧行为不变。
+2. **QD 是 chat、OC 的 `qwen3.8-flash` 是 messages**，不跨协议合并就会拆成
+   `Qwen-3.8-Flash` 与 `Qwen-3.8-Flash-Msg` 两个分身。现在
+   `MERGE_ACROSS_PROTOCOL` 与 `MERGE_FREE_GB` 都加了 `qwen3.8-flash`。
+
+结果是一条链、一个显示名，落免费组：
+
+```
+Qwen-3.8-Flash   chain: QD:Qwen3.8-Flash -> OC:qwen3.8-flash -> OC:qwen3.8-flash(机场孪生)   price 0.00
+```
+
+白天 QD 按 peak 0.1 计（×`QD_FACTOR` 0.86 ≈ 0.086），仍略低于 OC 的 0.09，
+但排序第一键是渠道 rank（OC/QD 同为 1），第二键是价格 —— 白天 OC 0.09 会排到
+QD 前面自己拿首跳，夜里 QD 0.0 再回到链首。同步固定在 12:00 跑，所以分组稳定
+落在「省钱」；夜里手动 apply 才会看到它进免费组。
+
+回归：`tests/test_model_alias_qd_free.py`（显式渠道标记 3 条 + 链首 QD / 无分身 2 条）。
+回退：删掉 `LOW_ORDER` 里的 `chat:qoder:Qwen3.8-Flash` 与两个 `MERGE_*` 常量里的
+`qwen3.8-flash`，再跑一次 `--apply`。
+
 ---
 
 ## 4. 三组规则（2026-10-28 起）
@@ -203,7 +239,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 |---|---|---|
 | **主力** `opencode-go-chat` | `HY4-Std`（WB 单跳 0.29，竞技榜建模 #8 / 网页 #10）+ `DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份）+ 竞技榜达标的两条（`MiMo-2.6-Flash` / `Space-Bunny`） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束**；白名单点名但配置里没有的型号会补建条目（见 §6） |
 | **免费** `opencode-go-chat-free` | 真免费条目（当前 6 条） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
-| **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 10 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.19 能在组里）；名单外另有一条 **自动补位**（见下） |
+| **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 7 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.19 能在组里）；名单外另有一条 **自动补位**（见下） |
 | ~~高耗~~ | 已删除 | 不在两个名单里且价格 > 0.11 → **不收录** |
 
 为什么这么切：用户的实际选择只有「DeepSeek」和「免费」。按价格四档会让
@@ -213,9 +249,9 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 
 - **名单的键必须带协议**（`chat:cn:deepseek-v4.1-flash`）。同一型号会以 chat 与
   messages 两种形态同时存在（千问桥接版），只写型号名会把两条一起吸进主力。
-- **跨协议合并是例外而非默认**：`MERGE_ACROSS_PROTOCOL` 里的型号（目前只有
-  `deepseek-v4.1-flash`）把 chat 与 messages 跳并成一条链，每跳自带 `protocol`，
-  路由逐跳派发。`TAIL_HOPS` 再把指定跳钉到链尾，实现「先把月度额度用完，再用
+- **跨协议合并是例外而非默认**：`MERGE_ACROSS_PROTOCOL` 里的型号（目前
+  `deepseek-v4.1-flash` 与 `qwen3.8-flash`）把 chat 与 messages 跳并成一条链，
+  每跳自带 `protocol`，路由逐跳派发。`TAIL_HOPS` 再把指定跳钉到链尾，实现「先把月度额度用完，再用
   一年期预付额度」。
 - **主力豁免价格上限**：贵备份 `Qwen-3.8-Max` 现价 0.17，其余超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。

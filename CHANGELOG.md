@@ -17,6 +17,21 @@
 
 ## [未发布]
 
+### 选型：Qoder 免费 Qwen3.8-Flash 进链（2026-11-06）
+
+- 事实：Qoder 官方目录里 `Qwen3.8-Flash`（key `qfmodel`）`price_factor 0.0 / is_free true`，
+  `/v1/models` 回 `price 0.0 / peak 0.1 / valley 0.0`；经 8790 实测 `usage.billable=false`，
+  账号额度 `remain 1400 / used 0` 不变。白天按 peak 0.1 计（×0.86 ≈ 0.086），仍低于 OC 的 0.09。
+- 修 `tools/model_alias.py` 两处：`whitelist_items()` 给条目打 `explicit_channel`
+  （spec 显式写了 `qoder:` / `cn:` / `global:` 等），main 里显式渠道按 `(渠道, 裸名)`
+  去重 —— 原来只按裸名，`Qwen3.8-Flash` 已被 OC messages 条目占位，QD 免费跳被静默吞掉。
+- `MERGE_ACROSS_PROTOCOL` 与 `MERGE_FREE_GB` 加 `qwen3.8-flash`（QD chat + OC messages
+  并成一条链，避免 `Qwen-3.8-Flash-Msg` 分身）。
+- 结果：`Qwen-3.8-Flash` = `QD:Qwen3.8-Flash@0.00 -> OC:qwen3.8-flash@0.09 -> OC@机场`，
+  免费组 6 条、省钱组 7 条；`--check` 无漂移，经 7871 实测日志 `model=Qwen-3.8-Flash -> QD:Qwen3.8-Flash (1/3)`。
+- 回归：`tests/test_model_alias_qd_free.py`（5 条）。回退：删 `LOW_ORDER` 的
+  `chat:qoder:Qwen3.8-Flash` 与两个 `MERGE_*` 里的 `qwen3.8-flash`，重跑 `--apply`。
+
 ### 选型修三处硬伤：HY4 归位、探活真正生效、渠道排序表（2026-11-06）
 
 - 起因（三个实锤，共同点是「看起来在自动选型，实际是死代码」）：

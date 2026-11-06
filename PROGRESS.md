@@ -2320,3 +2320,51 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 - `--check --arena --scores --probe-file` → 无漂移。
 - 报告 `docs/reports/MODEL-SYNC-20261106-2320.md`：18 个，新增 HY4-Std / MiMo-2.6-Pro，
   移除 HY4-Pre / Kimi-K3，链路变化 0。
+
+# 2026-11-06 第十五轮：Qoder 免费 Qwen3.8-Flash 进免费组
+
+## 起因
+
+用户指出 Qoder 现在可以免费用 qwen3.8-flash（此前 Qwen-3.8-Flash 只有 OC 的 messages 跳，0.09，在省钱组）。
+
+## 核实
+
+- Qoder 本机反代 8790 的 /v1/models（Bearer key 取自 gateways/upstream/qoder/accounts/settings.json）：
+  Qwen3.8-Flash price 0.0 / peak 0.1 / valley 0.0 / is_free true；同表 Qwen3.8-Max 0.2（free true）、
+  GLM-5.3-Flash 0.1、MiniMax-M3.1-Flash 0.1、DeepSeek-Flash 0.1、Step-5-Preview 0.3、GLM-5.3 0.8、
+  Kimi-K2.8-Preview 0.8、Kimi-K3.1-Pro 1.0、DeepSeek-V4-Pro 0.5、Auto 0.5、Fast 0.8。
+- gateways/upstream/qoder/qoder_catalog.py:375 起 qfmodel 条目：display_name Qwen3.8-Flash、format openai、
+  price_factor 0.0、original_price_factor 0.1、is_free true、max_input_tokens 180000。
+  :340 起是错峰规则 idle_time_model_credit_discount（22:00-08:00 UTC+8、discount_factor 0.4）。
+- 实测经 8790：Qwen3.8-Flash 与 qfmodel 都 200，usage.billable=false（Auto 是 billable=true）；
+  6 次请求后账号额度 remain 1400 / used 0 不变 ⇒ 真免费，不是「免费档记得 0 实际扣费」。
+- 传不存在的模型名报 HTTP 429「上游瞬时故障…All backends failed」⇒ 代理确实按模型名路由，不是一律走 auto。
+
+## 卡点（两处）
+
+1. 条目只来自 provider_config 的 personalModelIds（tools/model_alias.py:959 inventory），白名单补建
+   （:936 whitelist_items）按「裸型号名」去重（main :1618-1622 的 have / extra），而 Qwen3.8-Flash 已被
+   OC messages 条目占位 ⇒ QD 那条免费跳被静默吞掉。
+2. QD 是 chat、OC 的 qwen3.8-flash 是 messages，不跨协议合并会拆成 Qwen-3.8-Flash 与 Qwen-3.8-Flash-Msg。
+
+## 改动
+
+- tools/model_alias.py：
+  · LOW_ORDER 新增 "chat:qoder:Qwen3.8-Flash"（注释写明 pf 0.0 / 白天 0.1×0.86≈0.086）。
+  · MERGE_FREE_GB 与 MERGE_ACROSS_PROTOCOL 各加 "qwen3.8-flash"。
+  · whitelist_items() 给条目打 explicit_channel（spec 显式写了 qoder: / qwen: / cn: / global: / WB: 等）。
+  · main() 的补建过滤：explicit_channel 为真时按 (渠道, 裸名) 查 have_ch，否则维持裸名比对
+    （否则 chat:Qwen3.8-Max 又会补出一条 OC 重复）。
+- tests/test_model_alias_qd_free.py：5 条（显式渠道标记 3 + 链首 QD / 无同型号分身 2）。
+- 文档：docs/MODEL-ALIAS.md 新增 §3.2（事实 + 两处卡点 + 链序 + 回归 + 回退），
+  §4 表格省钱组条数 10→7，跨协议合并那句「目前只有 deepseek-v4.1-flash」改成两个型号；
+  CHANGELOG 未发布段新增本条目。
+
+## 实测
+
+- dry run → apply（备份 provider_config.json.bak-alias-20261106-234433-541800）：
+  免费 6（HY3 / HY4-Free / Beam / Conatus / Iceman / Qwen-3.8-Flash）、省钱 7、主力 5，合计 18。
+  Qwen-3.8-Flash 链：QD:Qwen3.8-Flash@0.00 -> OC:qwen3.8-flash@0.09 -> OC@机场。
+- 经 7871 实测 200（2.07s），网关日志 model=Qwen-3.8-Flash -> QD:Qwen3.8-Flash (1/3)
+  ⇒ alias map 热更新生效，不需要重启 zgate。
+- --check --arena --scores → 无漂移（exit 0）；unittest 49 passed（44 + 新增 5）。
