@@ -219,10 +219,15 @@ Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里是
 Qwen-3.8-Flash   chain: QD:Qwen3.8-Flash -> OC:qwen3.8-flash -> OC:qwen3.8-flash(机场孪生)   price 0.00
 ```
 
-白天 QD 按 peak 0.1 计（×`QD_FACTOR` 0.86 ≈ 0.086），仍略低于 OC 的 0.09，
-但排序第一键是渠道 rank（OC/QD 同为 1），第二键是价格 —— 白天 OC 0.09 会排到
-QD 前面自己拿首跳，夜里 QD 0.0 再回到链首。同步固定在 12:00 跑，所以分组稳定
-落在「省钱」；夜里手动 apply 才会看到它进免费组。
+白天 QD 按 peak 0.1 计（×`QD_FACTOR` 0.86 ≈ 0.086），仍略低于 OC 的 0.09；渠道 rank
+OC 与 QD 同为 1，第二键是价格 —— 所以**白天夜里链首都还是 QD**，只是价格不同：
+
+- 错峰窗口（22:00–08:00）= 0.0 → `--apply` 时落**免费组**；
+- 白天（12:00 的每日同步）= 0.086 → 落**省钱组**，同一条链，同一个显示名。
+
+也就是说分组每天会在这两组之间摆一次，属于预期，不是漂移（`--check` 用同参数复算，
+白天算白天、夜里算夜里，两边都自洽）。白天的 0.086 是否真扣积分**未实测**（本轮
+只在 23:44 测过夜间），下一个白天再打几发核 `usage.billable` 与 `credits.remain`。
 
 回归：`tests/test_model_alias_qd_free.py`（显式渠道标记 3 条 + 链首 QD / 无分身 2 条）。
 回退：删掉 `LOW_ORDER` 里的 `chat:qoder:Qwen3.8-Flash` 与两个 `MERGE_*` 常量里的
