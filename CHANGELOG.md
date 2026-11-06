@@ -1008,7 +1008,7 @@ WorkBuddy2API 三个 provider 的模型顺序改为「主力置顶 → CN 优先
 - 变更 分档 —— WorkBuddy 收价上限从 0.80 收到 **0.30**（以主力 x0.11 锚定）：
   低代只留 ≤0.16 的主力价位；0.17–0.30 归高代；原高代 x0.50–0.79（4.5–7.2 倍）
   整组移出，自动收录也不再引进
-- 修复 自动化 —— 旧任务 `automation-5ad749e3…` 指向已删除的 `F:\Project\Openwrt`，
+- 修复 自动化 —— 旧任务 `automation-5ad749e3…` 指向已删除的旧目录 `Openwrt/`，
   已停用；新任务 `automation-cfcb5c6d…` 绑定当前仓库
 - 调整 文档 —— MAINTENANCE §6 定期动作同步为双线
 
@@ -1033,7 +1033,7 @@ WorkBuddy2API 三个 provider 的模型顺序改为「主力置顶 → CN 优先
 
 反代网关的整个 clone 搬进仓库，不再维护两个目录：
 
-- 变更 目录 —— `E:\Tool\AITool\workbuddy2api-panel` → `workbuddy/gateway/`
+- 变更 目录 —— 旧网关目录 `<旧网关安装目录>` → `workbuddy/gateway/`
   （含上游 `.git`、`config.json`、`auths/`、`data/`、`wb2api.exe`）；旧目录已删除
 - 变更 忽略 —— 主仓 `.gitignore` 整目录排除 `workbuddy/gateway/`（账号凭据、密钥、
   运行时状态、二进制都不进公开仓库）；网关仍可用

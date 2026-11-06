@@ -12,9 +12,9 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、ZCode 配置落点、三组 provider（OpenCode-Go / WorkBuddy / Qoder）的分组 / 协议 / 工具调用 / 关思考参数 |
-| [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（chain）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
+| [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（WB 固定链首、其余按价格稳定排序）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
 | [QODER.md](QODER.md) | **Qoder 接入正本**：qoder2api-hub 的 8790 进程、OAuth/签到、`qoder` provider 的模型与同步/探测命令、边界与故障处理 |
-| [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个、用完即停与桥接非流式的边界 |
+| [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与桥接非流式的边界 |
 | [QINIU.md](QINIU.md) | **七牛云 AI 网关接入正本**：`QN` 渠道、只认 Anthropic Messages、`qiniu/conatus-free` 限免到 2026-11-30、同网关其它免费模型的实测结论 |
 | [MODEL-QUICK-REF.md](MODEL-QUICK-REF.md) | 早期速查（2026-10-20）：价格、额度与实测首字。**结论已并入 MODEL-PROVIDERS.md**，本篇保留作历史快照 |
 | [archive/OPENCODE-GO-ANALYSIS.md](archive/OPENCODE-GO-ANALYSIS.md) | 2026-10-19 的阶段性分析（归档只读）：协议归属实测、价格带筛选、出口方案 |
@@ -24,7 +24,7 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [DOC-RULES.md](DOC-RULES.md) | **文档规则正本**：文件命名（全大写连字符）、分类定位、单一正本映射表、链接纪律、变更触发矩阵、体量预算 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合提案（待确认）**：四个常驻进程 293 MB 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：四个常驻进程 293 MB 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
 | [MAINTENANCE.md](MAINTENANCE.md) | 日常维护：刷价格表、探测限速、快照保留、`--apply` 备份与回退、热重载注意事项 |
 | [TOOLS.md](TOOLS.md) | **工具清单正本**：运行环境、每个脚本的产物与去留标记、统一模式与 `--separate` 的区别 |
 | [VERSIONING.md](VERSIONING.md) | **版本晋升正本**：三段式进位、仓库发布号在哪维护、什么时候不动版本号。发版规则并入本篇 |
@@ -51,7 +51,7 @@
 | [BENCHMARKS.md](BENCHMARKS.md) | **外部跑分参考**：AI 能力专项测试（2026-09-11 快照）+ ArenaGalleri 实时榜；主力自动扩充的基准、窗口与候选表 |
 | 仓库根 [third-party/](../third-party/README.md) | 随仓分发的上游文件：ZCode 规则数据与引擎源码、ZCodium 规则切片，各带来源凭证 |
 | 仓库根 [LICENSE](../LICENSE) | 许可证全文（**MIT**），与 [NOTICE](../NOTICE) 配套 |
-| [reports/](reports/README.md) | **同步报告索引**：每次自动化结束后的模型清单快照与变化（新增 / 移除 / 分组 / 链路），最新在最上面 |
+| [reports/](reports/README.md) | **同步报告索引**：只保留最近一次自动化结束后的模型清单快照与变化（新增 / 移除 / 分组 / 链路）；2026-11-06 之前的历次一次性快照已清理 |
 | [release-notes/](release-notes/README.md) | 面向使用者的 Release 说明，文件名 = `versionName`；格式规范在它的 README。最近一份 Release 说明：[0.6.0.md](release-notes/0.6.0.md)。已发布：[0.5.0.md](release-notes/0.5.0.md) / [0.4.0.md](release-notes/0.4.0.md) / [0.3.0.md](release-notes/0.3.0.md) / [0.2.0.md](release-notes/0.2.0.md) / [0.1.0.md](release-notes/0.1.0.md) |
 | `../evidence/` | 证据快照：网关模型目录、自动收录报告、WorkBuddy 接入线历史台账（只读） |
 | [../.githooks/pre-commit](../.githooks/pre-commit) | 提交前敏感信息闸门：启用 `git config core.hooksPath .githooks` |

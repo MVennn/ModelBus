@@ -174,7 +174,7 @@ WorkBuddy 侧**只能用** `workbuddy_probe_zcode.py`（它先调 `zcode_effecti
   凭据与活数据缓存在哪、怎么取，见 [SECRETS.md](SECRETS.md)。
 - **结论随仓库走** —— 结论写进 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md)，
   原始快照放 `evidence/`。
-- **历史报告不要全留** —— 保留「首次写入版」与「最近一版」即可，中间版本价值低。
+- **一次性报告只留最近一版** —— 2026-11-06 起按「精简、只留最新一份」清理，索引 `docs/reports/README.md` 只登记现役报告；历史变化以 `CHANGELOG.md` / `PROGRESS.md` 为准。
 - 快照文件名带日期（`results/<YYYYMMDD>/`），**不要覆盖**。
 
 ---

@@ -108,9 +108,9 @@ ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
 - **子进程用 Windows Job Object 托管**：`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，
   zgate 崩了/被结束，子进程一起收掉，不会留孤儿（现在靠 PowerShell 启动时对账清理）。
 - **单飞（single-flight）拉起**：同一通道并发首请求只触发一次启动，其余请求排队等
-  健康检查就绪（上限可配，默认 15 s，超时返回 503 而不是挂死）。
-- **崩溃重启**：带指数退避（1s → 2s → 4s，上限 30s），连续失败 5 次后标记通道降级，
-  `/health` 里可见，但**不影响其他通道**。
+  健康检查就绪（`zgate.json` 的 `startTimeoutSeconds`：WB 30 s / Qoder 40 s，源码缺省 25 s，超时返回 503 而不是挂死）。
+- **崩溃重启**：带指数退避（1s → 2s → 4s → … → 60s，见 `internal/supervisor/supervisor.go`）；
+  `failCount` 只喂给退避计算，**没有降级标记**，`/health` 的 `States()` 也不含降级字段。
 
 ### 3.3 子进程回收策略（三档，可配置）
 

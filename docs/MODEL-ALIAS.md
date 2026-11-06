@@ -1,7 +1,7 @@
 # 统一模型命名与分组
 
 > **一句话**：模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同一型号跨渠道合并成一条
-> 按价格升序的链路；**2026-10-28 起只保留三组**——主力（人工两条）、免费、
+> 链路（WB 跳固定链首，其余按价格 / 前缀 / 渠道稳定排序）；**2026-10-28 起只保留三组**——主力（人工两条）、免费、
 > 省钱（每厂商 1–2 个代表作；新厂商/新一代 ≤0.11 自动补位）。
 
 ---
@@ -58,8 +58,7 @@ alias map **不含凭据**；上游 key 仍由路由按渠道从 `provider_confi
 
 ## 3. 跨渠道合并（chain）
 
-同一型号、同一协议的所有渠道按**价格升序**排成一条链路；同价时 GB 优先于 CN，
-CN 优先于其它渠道。以 DeepSeek 为例：
+链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `TAIL_HOPS` 钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：
 
 ```
 DeepSeek-4.1-Flash
@@ -83,17 +82,17 @@ opencode 的型号共用 `opencode.ai`，规则层分不开，只有 `gpt-*` / `
 `muse-spark-*` 拿 403 地区限制（`unsupported_country_region_territory` / `RegionError`）。
 
 生成器给每条 OC 直连跳补一条**同上游的孪生跳**（`AIRPORT_PROXY`，默认
-`http://10.0.0.1:7896` —— 路由器上的入站固定绑 🤖 AI接口 组），**排在链尾**：
+`<AIRPORT_PROXY>` —— 路由器上的入站固定绑 🤖 AI接口 组），**排在 `QW` 尾跳之前**：
 
 ```
 GPT-6-Luna         1. OC gpt-6-luna 直连
                    2. OC gpt-6-luna @机场   ← 直连 403 才走它
-DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. QW 直连 → 4. OC @机场
+DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
 ```
 
 - zgate 把地区受限的 403 当「换出口」处理，不是「这一跳坏了」；冷却键 `hopKey`
   里含 proxy，否则直连那跳的 403 会把机场跳一起冷却掉（= 兜底被吃掉）。
-- 机场跳排链尾而不是紧跟直连跳：前面还有免费的国内跳（千问尾跳）时先试它们。
+- 机场孪生跳排在 `QW` 尾跳之前、紧跟 OC 直连跳；磁盘活数据链为 `WB → OC → OC@机场 → QW`。
 - 改 `AIRPORT_PROXY` 时路由器侧必须同时有对应的 `listeners` 入站，
   否则这一跳直接连不上（见 ShellcrashRules `docs/ARCHITECTURE.md` §2.2）。
 - **这个出口只对经过 zgate 的请求生效**。同步脚本（`go_model_sync.py`）自己发探测、
@@ -128,7 +127,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 
 | 组（providerId） | 装什么 | 判定 |
 |---|---|---|
-| **主力** `opencode-go-chat` | 两条：`DeepSeek-4.1-Flash`（三跳链：WB → OC → 千问兜底）+ `Qwen-3.8-Max`（贵备份） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束** |
+| **主力** `opencode-go-chat` | 两条：`DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束** |
 | **免费** `opencode-go-chat-free` | 真免费条目（当前 6 条） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
 | **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 10 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.19 能在组里）；名单外另有一条 **自动补位**（见下） |
 | ~~高耗~~ | 已删除 | 不在两个名单里且价格 > 0.11 → **不收录** |

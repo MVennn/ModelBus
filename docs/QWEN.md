@@ -194,20 +194,21 @@ python tools/model_alias.py --no-pools --apply           # 只要单型号，不
 
 ### 4.6.1 免费 DeepSeek 并进主力（2026-10-28）
 
-`DeepSeek-4.1-Flash` 现在是**一条三跳的链**，不是两个显示名：
+`DeepSeek-4.1-Flash` 现在是**一条四跳的链**（磁盘活数据口径），不是两个显示名：
 
 ```
 DeepSeek-4.1-Flash
-  1. WB  cn:deepseek-v4.1-flash   chat      0.11   ← 日常先用它（月度额度，用不完就浪费）
+  1. WB  cn:deepseek-v4.1-flash   chat      0.11   ← WB 固定链首（额度优先消费）
   2. OC  deepseek-v4.1-flash      chat      0.11   ← WB 挂了 / 限流时
-  3. QW  deepseek-v4.1-flash      messages  0.00   ← ¥300 预付额度，兜底
+  3. OC@机场 deepseek-v4.1-flash  chat      0.11   ← 直连 403 才走它
+  4. QW  deepseek-v4.1-flash      messages  0.00   ← ¥300 预付额度，`TAIL_HOPS` 钉在所有付费跳之后
 ```
 
-- 第 3 跳排在**链尾**而不是按价格排第一：`TAIL_HOPS` 显式指定。因为 OC 的额度
+- 第 4 跳（QW）排在**所有付费跳之后**：`TAIL_HOPS` 显式指定，机场孪生跳排在第 3 位。因为 OC 的额度
   每月重置（不用就浪费），而 ¥300 是一年期，所以顺序是「先把 OC 用完，再动 300」。
 - 链里**允许混协议**：路由按每跳自己的 `protocol` 派发，chat 跳直转、messages 跳过桥。
   这是 2026-10-28 新加的能力，之前一条链只能是同一种协议。
-- 代价：第 3 跳是**非流式桥接**，真轮到它时首字会等整段生成。只在兜底时发生。
+- 代价：第 4 跳是**非流式桥接**，真轮到它时首字会等整段生成。只在兜底时发生。
 
 ### 4.7 控制台列了但 API 调不通的三个
 

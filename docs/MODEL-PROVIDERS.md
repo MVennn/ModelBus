@@ -3,23 +3,17 @@
 > **一句话**：ZCode 里现在有哪几个 provider、每个 provider 走什么协议、每个模型属哪一档、
 > 工具调用能不能用、思考参数怎么关 —— 这篇是正本，其它文档只引用不重述。
 >
-> **范围**：本篇列的是**本仓已配置的两组 provider** ——
-> OpenCode-Go 七个（§2）与 WorkBuddy2API 四个（§4.2，分离模式）。Qoder 不是
-> 独立 provider：模型加 `qoder:` 前缀后并入五个 chat 组（§4.9）。
-> **接别的供应商**：方法见 §0；本篇的表是**快照**，不是通用规则。
+> **范围**：本篇是**数据源快照**（价格 / 协议 / 思考参数 / 倍率），不是分组规则正本。
+> 当前分组口径与命名以 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4 为准；接别的供应商方法见 §0。
+> §2 / §4 里按 provider 列的模型清单是采集时点的记录，允许带历史口径。
 
 数据快照：**2026-10-20**（§4 WorkBuddy 的倍率与分档于 **2026-10-22** 复核，倍率 / 分档无变化；
 §4.9 Qoder 的模型与价格于 **2026-10-23** 实测）。
 
-> **2026-10-29 起为三组**（主力 / 免费 / 省钱），且新增 `QN`（七牛云）渠道；
-> 四组口径保留作历史；**2026-10-28 起现行口径是三组**（主力 / 免费 / 省钱），
-> 分组正本见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4。
-
-> **2026-10-23 起 provider 结构统一为四组**（主力 / 免费 / 低耗 / 高耗；2026-10-28
-> 起压缩为三组，低耗与高耗合并为省钱组），模型 ID 改为
-> 型号名（如 `DeepSeek-4.1-Fs`），跨渠道与跨协议由本地入口桥接。**当前分组与命名以
-> [MODEL-ALIAS.md](MODEL-ALIAS.md) 为准**；本文 §2 / §4 的价格、协议与思考参数仍是
-> 数据来源，旧的七组 provider 口径保留作历史。
+> **分组沿革（历史，不约束现役）**：七组 provider → 2026-10-23 四组（主力 / 免费 / 低耗 / 高耗）
+> → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并，新增 `QN` 七牛云渠道）
+> → 模型 ID 改为型号名（如 `DeepSeek-4.1-Fs`），跨渠道 / 跨协议由本地入口桥接。
+> 逐次变更见根 `CHANGELOG.md`；**现役三组与命名的唯一正本是 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4**。
 价格 / 额度 / 倍率随服务商变动，改之前先看 [MAINTENANCE.md](MAINTENANCE.md) §1。
 
 ---
@@ -56,7 +50,7 @@
 | 账号池限制 | 套餐额度按模型分别计算 | 账号池有类型限制（`personal_free_user`，见 §4.7） |
 
 第三个实例（Qoder）的计价单位是 `price_factor`（免费 = 0，越小越便宜），目录接口
-是 `/v1/models`；它**并入** OpenCode 的五个 chat 组，模型 id 加 `qoder:` 前缀，
+是 `/v1/models`；它**并入** OpenCode 的五个 chat 组（历史口径），模型 id 加 `qoder:` 前缀，
 由 7871 路由剥前缀转发，见 §4.9。
 
 第四个实例（千问）只有 **Anthropic Messages** 端点、没有 `/v1/models`，所以目录靠
@@ -95,8 +89,8 @@
 | 脚本 | 默认行为 | 风险 |
 |---|---|---|
 | `providers/opencode-go/ops/go_model_sync.py --apply` | 只**追加**模型 + 备用档重排（`BACKUP_MODEL_IDS`）+ 改一个 provider 显示名（"备用"→"响应"） | 低。已有模型的**组内顺序**可能被打乱（新模型追加到组尾） |
-| `providers/workbuddy/workbuddy_zcode_sync.py --apply` | 默认**合并** WorkBuddy 模型到五个 OpenCode chat 组（不改 OpenCode 模型与顺序）；`--separate` 才整条替换四个 `workbuddy-*` provider | 低（统一）/ 中（分离）。统一模式只动 WorkBuddy 模型与五个 chat 组的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 |
-| `providers/qoder/qoder_zcode_sync.py --apply` | 默认**合并**：拉 `/v1/models`，按 `price_factor` 把 `qoder:` 前缀模型并入免费/低耗/高耗三个 chat 组；`--separate` 才写独立 `qoder` provider；默认 `--max-price 0.8`；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流） | 低。只增删 `qoder:` 条目与（separate 模式的）`qoder` provider，不碰其它模型 |
+| `providers/workbuddy/workbuddy_zcode_sync.py --apply` | 默认**合并** WorkBuddy 模型到五个 OpenCode chat 组（历史口径）（不改 OpenCode 模型与顺序）；`--separate` 才整条替换四个 `workbuddy-*` provider | 低（统一）/ 中（分离）。统一模式只动 WorkBuddy 模型与五个 chat 组（历史口径）的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 |
+| `providers/qoder/qoder_zcode_sync.py --apply` | 默认**合并**：拉 `/v1/models`，按 `price_factor` 把 `qoder:` 前缀模型并入三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写独立 `qoder` provider；默认 `--max-price 0.8`；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流） | 低。只增删 `qoder:` 条目与（separate 模式的）`qoder` provider，不碰其它模型 |
 
 **正确姿势**：先不带 `--apply` 跑一遍，看清它要写什么，再决定。
 
@@ -271,10 +265,10 @@ python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder �
 网关生命周期由 `gateways/zgate` 托管（WB 按需拉起、空闲回收；Qoder 常驻），
 全部退出 → 停），安装与副作用见 [MAINTENANCE.md](MAINTENANCE.md) §8。
 
-### 4.0 统一模式（默认，2026-10-21 起）
+### 4.0 统一模式（历史兼容，2026-10-21 起；现役分组见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4）
 
 默认**不再创建** `workbuddy-*` 四个 provider。18 个 WorkBuddy 模型并入 §2 的五个
-chat 组，四个 chat 组的 `api.baseUrl` 指向本地入口 `gateways/zgate`
+chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口 `gateways/zgate`
 （`http://127.0.0.1:7871/v1`）。路由按 model 分流：
 
 - `cn:` / `global:` → 网关 `http://127.0.0.1:7863/v1`
@@ -305,7 +299,7 @@ chat 组，四个 chat 组的 `api.baseUrl` 指向本地入口 `gateways/zgate`
 ### 4.2 分离模式：倍率与四档（`--separate`）
 
 > 以下四档只在 `workbuddy_zcode_sync.py --separate --apply` 时出现；默认统一模式
-> 不创建 `workbuddy-*`，WorkBuddy 模型并入 §4.0 的五个 chat 组。
+> 不创建 `workbuddy-*`，WorkBuddy 模型并入 §4.0 的五个 chat 组（历史口径）。
 
 `credits` = 牌价，`promo_credits` = 生效价（取 `promo_credits` 优先）。
 **倍率越小越便宜**。
@@ -435,7 +429,7 @@ glm-5v-turbo 0.454、kimi-k3-1 0.901、gpt-5.3-codex 0.976。
 ### 4.9 Qoder（qoder2api-hub，本次实例三）
 
 网关：qoder2api-hub（MIT），`http://127.0.0.1:8790/v1`，OpenAI Chat Completions。
-它**并入** §2 的五个 chat 组：模型 id 加 `qoder:` 前缀，由 7871 路由剥前缀后转给
+它**并入** §2 的五个 chat 组（历史口径）：模型 id 加 `qoder:` 前缀，由 7871 路由剥前缀后转给
 8790；WorkBuddy2API 与 OpenCode-Go 不受影响。完整操作见 [QODER.md](QODER.md)。
 
 **目录与计价**：`GET /v1/models` 直接给 `price_factor`、峰谷价、`reasoning_efforts`、
@@ -666,7 +660,7 @@ muse 系）。同步日志会分别打印「未声明档位」和「声明了但
 | 备用 | `minimax-m3`、`cn:deepseek-v4-flash`、`cn:minimax-m3`（`opencode-go-chat-backup`） |
 
 > 统一模式下 WorkBuddy 模型已在同一 provider 内，不再是独立组；providerId 仍是
-> 五个 chat 组（见 §4.0）。`cn:hy4-preview` 的实时价已回到 x0.29，2026-10-21
+> 五个 chat 组（历史口径）（见 §4.0）。`cn:hy4-preview` 的实时价已回到 x0.29，2026-10-21
 > 全量同步把它从免代移到高耗。价格与分数的口径见 BENCHMARKS §5.4。
 >
 > **2026-10-23 起以 [MODEL-ALIAS.md](MODEL-ALIAS.md) 的四组为准**：`备用` 已解散，
@@ -679,7 +673,7 @@ muse 系）。同步日志会分别打印「未声明档位」和「声明了但
 - **分组 / 协议 / 参数矩阵**变了 → 同步本篇 + [PITFALLS.md](PITFALLS.md)。
 - **数值要带时点**。价格、额度、倍率、实测首字都是某一时刻的快照，
   换新快照时把日期一起改掉。
-- **区分通用与实例**。§0 是方法（跨供应商成立），§2 / §4 是本仓两组 provider 的数据快照。
+- **区分通用与实例**。§0 是方法（跨供应商成立），§2 / §4 是本仓 provider 的数据快照。
   新增供应商时**加一节数据 + 在 §0 的表里补一行**，不要把实例数据混进 §0。
 - **不要在本篇写排查步骤** —— 那是 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) 的事；
   **也不要写「为什么会这样」** —— 那是 [PITFALLS.md](PITFALLS.md) 的事。

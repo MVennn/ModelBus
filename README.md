@@ -24,7 +24,7 @@
 
 仓里的 `providers/opencode-go/`、`providers/workbuddy/` 与 `providers/qoder/` 是三个跑通的**完整示例**（OpenCode-Go 套餐、
 WorkBuddy2API 网关、qoder2api-hub 网关）；现在统一成**三组**（主力 / 免费 / 省钱），
-模型 ID 只用型号名（如 `DeepSeek-4.1-Fs`），同型号跨渠道合并成一条按价格升序的链路，由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程）按 alias map 分流并托管两个本地网关。方法本身与供应商无关，接一个新供应商要做的四步见
+模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同型号跨渠道合并成一条链路（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程）按 alias map 分流并托管两个本地网关。方法本身与供应商无关，接一个新供应商要做的四步见
 [docs/MODEL-PROVIDERS.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/MODEL-PROVIDERS.md) §0。
 
 **边界**：本仓库**不含 ZCode 客户端**，只读写它的配置文件 `provider_config.json`，
@@ -38,7 +38,7 @@ WorkBuddy2API 网关、qoder2api-hub 网关）；现在统一成**三组**（主
 | 客户端 | ZCode 桌面端（Windows） |
 | 运行时 | Python 3（脚本只用标准库；门面重生成脚本 `tools/make_social_preview.py` 例外，需 numpy + Pillow）、Node.js 18+（跑探测/旧版路由）；统一入口 `gateways/zgate` 是**单个 Go 二进制**，日常运行不需要 Go（只有自行构建时需要 Go 1.22+，见 [docs/TOOLS.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/TOOLS.md) §0） |
 | 配置与凭据 | ZCode 的 `provider_config.json`（默认在 `~/.zcode/v2/`）；凭据只走环境变量，变量名与取值见 [docs/SECRETS.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/SECRETS.md) |
-| 网络 | 能直连你的供应商；四个 chat 组统一指向 `127.0.0.1:7871`（`zgate`），由它按需拉起 WorkBuddy 网关（`7863`）与 Qoder hub（`8790`）。生命周期与自启见 [docs/MAINTENANCE.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/MAINTENANCE.md) §8 |
+| 网络 | 能直连你的供应商；三个 chat 组统一指向 `127.0.0.1:7871`（`zgate`），由它按需拉起 WorkBuddy 网关（`7863`）与 Qoder hub（`8790`）。生命周期与自启见 [docs/MAINTENANCE.md](https://github.com/MVennn/ZcodeAIModels/blob/main/docs/MAINTENANCE.md) §8 |
 
 ## 使用
 

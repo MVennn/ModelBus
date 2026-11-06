@@ -31,6 +31,18 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ZcodeAIModels zgate
 长期驻留靠**登录自启快捷方式**（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\`），
 不要靠 agent 起的进程。
 
+## 自启三层与被 dsh 重启连带杀死（2026-11-06 实测）
+
+| 事实 | 证据 / 说明 |
+|---|---|
+| 自启是**三层**，不是一层 | ① 启动文件夹 `ZcodeAIModels zgate.lnk`（Target=zgate.exe，Args=serve）；② 计划任务 `ZcodeAIModels-zgate`（LogonTrigger + PT30S）；③ 看门狗 `ZcodeAIModels-zgate-watchdog`（每 5 分钟，2026-11-06 已改 **PT1M**，动作 wscript → ensure-zgate.ps1） |
+| 自启只在**登录那一刻**触发一次 | 它不是守护进程。登录之后任何一次「会话内 Start-Process / start-zgate.bat / swap-zgate.ps1」起的 zgate 都会顶替它，父链落到 dsh 的 Job Object 里 |
+| dsh 重启为什么连坐 | dsh 退出时 TerminateJobObject 终止整棵子进程树；实测 13:27 被杀的那台，是 11:49 在会话里手工起的，不是 lnk 起的 |
+| 自愈实测 | 13:30:46 看门狗拉起（13:30:49 日志「已启动」）；手动 Stop-Process 后 25s 由看门狗拉回。新 zgate 父进程是 Task Scheduler 下的 powershell，随后成孤儿，与 dsh 无关 |
+| 结论 | 只要 zgate 由**登录自启 / 计划任务 / 看门狗**产生，重启 dsh 杀不到它；由会话产生就会陪葬 |
+| 禁 | 会话里禁止 `Start-Process zgate.exe`、`start-zgate.bat`、`swap-zgate.ps1`。需要它起来用 `schtasks /run /tn ZcodeAIModels-zgate`（父链走 Task Scheduler）或等看门狗 |
+| 秒级守护（尽力而为） | `%LOCALAPPDATA%\ZCodeGateway\zgate-daemon.ps1` + HKCU Run 键 `ZcodeAIModels-zgate-daemon`，登录时由 explorer 拉起、10s 轮询；实测该脚本从无控制台上下文（WMI Create / EncodedCommand）启动会秒退，只有交互式登录态能常驻，故看门狗仍是兜底 |
+
 ## 排错速查
 
 ```bash
