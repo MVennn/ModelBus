@@ -2197,3 +2197,41 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 - 计划任务：ModelBus 模型同步、ModelBus-zgate-watchdog 已建（Disabled）；旧 ZcodeAIModels-zgate 已由管理员删除，ModelBus-zgate 已建（ONLOGON、Interactive only、Run As SansK，已关掉电池限制与 72h 时长上限）；配置按可执行文件同目录解析，所以 Start In 为空不影响；与启动项快捷方式并存时，后起者卡 net.Listen 失败即退出、不会起重复子进程。
 - 仓库：17 个文件把 ZcodeAIModels 换成 ModelBus（历史文档 CHANGELOG/PROGRESS/evidence/release-notes 保留原名）；go vet / go build 通过；tools/check-docs.py exit 0。
 - 提交 8b40078 已推送；gh repo rename → MVennn/ModelBus；remote 已 set-url。
+
+# 2026-11-06 第十三轮：选型接上性能（竞技榜分数进同步 + 每厂商配额）
+
+## 背景
+
+用户问「每天更新的模型是否智能」，并以 DeepSeek-4.1（价格与性能）为参考重建选模口径：
+每家公司 1–2 个特色型号，调用优先级 WB → OC → 千问额度 → 其它。查证结果：每日同步
+消费的是**人工白名单 + 价格阈值**，性能维度零引用；arena 是死代码（同步脚本从不传
+`--arena`），报告概览把组名写死成「主力/免费/低耗/高耗」，10 条省钱组模型从概览消失。
+
+## 落地六项
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | `tools/sync_report.py` | 组名 `GROUP_NAMES = ("主力","免费","省钱")`；概览补「其他」兜底 + `合计 N / 清单 M` 校验；终端摘要同源生成 |
+| 2 | `sync-models.ps1` | 第四步加「竞技榜刷新」(`--refresh --force --write`) 与「竞技榜分数」(`model_score.py --write --quiet`)，生成器带 `--arena --scores`，两步 `-Soft` |
+| 3 | `tools/model_score.py`（新） | 竞技榜 → `~/.zcode/v2/model-scores.json`（intel / price_idx / value + basis），原子写 |
+| 4 | `tools/arena_leaderboard.py` | 落盘补 `near`，让「接近但未入选」也参与折算（否则只认识 3 个模型） |
+| 5 | `tools/model_alias.py` | `--scores` / `--no-scores`、`pick_scores_dropped`（只降不升）、`VENDOR_QUOTA = 2` + `pick_quota_dropped` |
+| 6 | `gateways/zgate/internal/router/router.go` | `quotaCooldown = 24h` + `quotaExhausted`：额度烧光类 4xx 按一天冷却，不再每 30 分钟重撞 |
+
+## 实测
+
+- `arena_leaderboard.py --refresh --force --write`：3 候选 + 4 近似，`checked_at 2026-11-06 22:39:43`。
+- `model_score.py --write`：7 条分数；基准 `WB|cn:deepseek-v4.1-flash` 智力 100.0 / 价格 100.0 / 性价比 1.00。
+- `model_alias.py --check`（不带 scores）：仍是 2 处漂移（Qwen-3.8-Max 价格源变化，本次未动）。
+- `model_alias.py --check --scores`：多出「按竞技榜分数裁剪：MiMo-2.6-Pro(智力95.5/价值0.81)」。
+- `model_alias.py --slot auto --apply --arena --scores`：主力 2→4（MiMo-2.6-Flash 99.8%、Space-Bunny 98.8%），
+  省钱 10→7；备份 `provider_config.json.bak-alias-20261106-225008-493800`。
+- 探活（经 7871）：`MiMo-2.6-Flash` / `Space-Bunny` / `HY3-X` 全 200。
+- 配额函数单元验证：4 个腾讯付费条目 → 保留 `HY4-Free`/`HY4-Pre`，裁剪 `HY3-X`/`HY3`（`配额裁剪：HY 4→2`）。
+- `go vet ./...` exit 0；`go test ./...` 全 ok（router 含新增 `quota_test.go` 三条：额度按天冷却、
+  普通死跳仍 30 分钟、冷却按跳隔离）。
+
+## 留痕
+
+- 口径全文写进 `docs/BENCHMARKS.md` §9（三段链路 / 三档分数 / 门槛与只降不升 / 配额 / 首次生效变化 / 回退）。
+- 「体能分」与 AA 两套量纲不混算：竞技榜基准是 1094 分 + 0.11 积分，不是 342.40 + 1.20。

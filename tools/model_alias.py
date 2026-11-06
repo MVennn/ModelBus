@@ -140,6 +140,19 @@ LOW_ORDER = [
 ]
 LOW_PICKS = set(LOW_ORDER)
 
+# 每厂商在省钱组最多保留几个代表（用户 2026-11-06 口径：每家公司 1–2 个特色型号）。
+# 超出的按「版本号高者优先、同版本贵者优先（旗舰先行）」裁掉，人工名单里被裁掉的
+# 留在原名单但不进组 —— 名单本身不改，只影响分组。
+VENDOR_QUOTA = 2
+
+# 竞技榜分数文件（tools/model_score.py 产出）：{ "CHANNEL|upstream": {intel, price_idx, value} }
+# 只有带 --scores 时才读；口径见 docs/BENCHMARKS.md 5.4 与 tools/model_score.py 模块注释。
+DEFAULT_SCORES = Path.home() / ".zcode" / "v2" / "model-scores.json"
+# 白名单条目被分数替代的最低门槛：智力指数不低于锚定型号的这么多，
+# 且性价比不低于锚定型号的这么多 —— 低于它才裁（只降不升）。
+SCORE_MIN_INTEL = 85.0
+SCORE_MIN_VALUE = 1.0
+
 # Base models whose free GB tier is folded into the paid entry instead of being
 # listed separately: the paid entry tries the free upstream first, then the paid
 # one, then CN. Display name keeps the paid price.
@@ -345,6 +358,74 @@ def load_arena_targets(path: Path) -> dict[tuple[str, str], dict]:
             targets[(channel, upstream)] = entry
     return targets
 
+
+def load_scores(path: Path) -> dict[str, dict]:
+    """读 model-scores.json（tools/model_score.py 产出）。
+
+    键是 CHANNEL|upstream，与 hop 一一对应 —— 不按显示名，因为显示名会随分组
+    改名，按名字对会在改名当天全部失配。
+    """
+    try:
+        data = json.loads(path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:  # noqa: BLE001
+        print(f'warning: 读不了分数文件 {path}（{exc}），本次不参与选型', file=sys.stderr)
+        return {}
+    models = data.get('models') or {}
+    out: dict[str, dict] = {}
+    for key, row in models.items():
+        if isinstance(row, dict) and row.get('intel') is not None:
+            out[str(key)] = row
+    return out
+
+
+def score_of_entry(entry: dict, scores: dict[str, dict]) -> dict | None:
+    """条目的最佳分数：取链上分数最高的一跳。"""
+    best = None
+    for hop in entry['chain']:
+        row = scores.get(f"{hop['channel']}|{hop['upstream']}")
+        if not row:
+            continue
+        if best is None or float(row['intel']) > float(best['intel']):
+            best = row
+    return best
+
+
+def pick_scores_dropped(entries: list[dict], scores: dict[str, dict],
+                        arena_targets: dict[tuple[str, str], dict]) -> set[int]:
+    """按竞技榜分数裁掉「白名单里但明显更差」的省钱条目，返回要裁掉的 entry id。
+
+    口径（用户 2026-11-06：以 DeepSeek-4.1 为参考，价格与性能一起看）：
+      · 只动人工白名单命中的条目，主力 / 免费 / 自动补位一律不动；
+      · 只降不升：分数只能用来裁，不能把没写进白名单的型号提拔进省钱组 ——
+        那会绕过人工名单，也会让每日同步在分数抖动时反复改名；
+      · 没有分数的条目（榜上没跑过）保持原状，不因为查不到被裁；
+      · 低于门槛（智力 < SCORE_MIN_INTEL 或 性价比 < SCORE_MIN_VALUE）才裁。
+    """
+    dropped: set[int] = set()
+    report = []
+    for entry in entries:
+        if entry.get('is_pool'):
+            continue
+        if not any(_picked(entry, hop, LOW_PICKS) for hop in entry['chain']):
+            continue
+        if any((hop['channel'], hop['upstream']) in arena_targets for hop in entry['chain']):
+            continue
+        row = score_of_entry(entry, scores)
+        if not row:
+            continue
+        value = row.get('value')
+        intel = float(row['intel'])
+        weak = intel < SCORE_MIN_INTEL or (value is not None and float(value) < SCORE_MIN_VALUE)
+        if not weak:
+            continue
+        dropped.add(id(entry))
+        shown = 'free' if value is None else f'{float(value):.2f}'
+        report.append(f"{entry['name']}(智力{intel:.1f}/价值{shown})")
+    if report:
+        print('按竞技榜分数裁剪：' + '，'.join(report), file=sys.stderr)
+    return dropped
 
 def read_env(path: Path) -> dict[str, str]:
     out: dict[str, str] = {}
@@ -1144,8 +1225,49 @@ def pick_auto_low(entries: list[dict], arena_targets: dict[tuple[str, str], dict
     return picked
 
 
+def pick_quota_dropped(entries: list[dict], arena_targets: dict[tuple[str, str], dict],
+                       auto_ids: set[int] | None = None) -> set[int]:
+    """每厂商最多留 VENDOR_QUOTA 个省钱组代表，返回要裁掉的那批 entry id。
+
+    只针对「人工白名单命中」的条目（主力与自动补位不动）：白名单是严格有序的
+    LOW_ORDER，历史上按「先想到谁写谁」随手加，腾讯一口气占了 4 个
+    （cn:hy3-x / cn:hy3 / cn:hy4free / cn:hy4-preview-f）。用户口径是每家 1–2 个
+    特色型号，所以超出的必须裁。裁谁：版本号高者优先，同版本贵者优先 ——
+    贵的那个通常是这家旗舰，能在组里代表厂商。
+    """
+    buckets: dict[str, list[tuple[tuple[int, ...], float, int]]] = {}
+    for entry in entries:
+        if entry.get("is_pool"):
+            continue
+        if not any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"]):
+            continue
+        if float(entry["price"]) <= 0:
+            # 免费组不占配額：那里的多家型号是额度体系的产物，不是「特色型号」。
+            continue
+        vendor = _vendor_of_entry(entry)
+        if not vendor:
+            continue
+        buckets.setdefault(vendor, []).append(
+            (_version_of(entry), float(entry["price"]), id(entry))
+        )
+
+    dropped: set[int] = set()
+    report = []
+    for vendor, rows in buckets.items():
+        if len(rows) <= VENDOR_QUOTA:
+            continue
+        rows.sort(key=lambda r: (r[0], r[1]), reverse=True)
+        for _, _, entry_id in rows[VENDOR_QUOTA:]:
+            dropped.add(entry_id)
+        report.append(f"{vendor} {len(rows)}→{VENDOR_QUOTA}")
+    if report:
+        print("配额裁剪：" + "，".join(report), file=sys.stderr)
+    return dropped
+
+
 def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
-                auto_ids: set[int] | None = None) -> tuple[str, str]:
+                auto_ids: set[int] | None = None,
+                quota_dropped: set[int] | None = None) -> tuple[str, str]:
     """Return (group, reason) for a merged entry. `drop` = 不收录。"""
     # 集合体是「一整串上游」的人造条目：它的跳会包含很多被单型号名单点名的 id，
     # 按跳匹配会把它误吸进主力（91 跳的快速池命中 deepseek-v4.1-flash 的桥接版）。
@@ -1164,6 +1286,10 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
     if any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"]):
         # 严格白名单命中即进省钱组，不受 LOW_MAX 价格上限约束
         # （小米 MiMo-2.6-Pro 0.19 也借此留在组里当厂商旗舰）。
+        # 但每厂商最多 VENDOR_QUOTA 个：腾讯在白名单里堆了 4 个（cn:hy3-x / hy3 /
+        # hy4free / hy4-preview-f），超出部分降级为 drop，名单交给 _quota_dropped 裁定。
+        if quota_dropped and id(entry) in quota_dropped:
+            return "drop", "quota"
         return "low", ""
     if auto_ids and id(entry) in auto_ids:
         # 名单外但价格在省钱档、且是该厂商的新公司/新一代 —— 见 pick_auto_low。
@@ -1307,6 +1433,10 @@ def main() -> int:
                         help=f"榜单候选文件（默认 {DEFAULT_ARENA}）")
     parser.add_argument("--arena", action="store_true",
                         help="允许榜单自动扩主力（默认关闭：它会把主力越塞越肿）")
+
+    parser.add_argument("--scores", nargs="?", const=str(DEFAULT_SCORES),
+                        help="读竞技榜分数文件（默认 ~/.zcode/v2/model-scores.json）；低于门槛的白名单条目降级为不收录，只降不升")
+    parser.add_argument("--no-scores", action="store_true", help="忽略分数文件")
     parser.add_argument("--no-arena", action="store_true",
                         help="兼容旧参数：榜单本来就是默认关闭的")
     parser.add_argument("--pools",
@@ -1366,8 +1496,14 @@ def main() -> int:
             prev_names.setdefault(key, prev_name)
     # 省钱组的自动补位：新公司/新一代型号即使没写进 LOW_ORDER 也收录一条。
     auto_low = pick_auto_low(entries, arena_targets)
+    # 每厂商配额：先裁定要裁谁，再交给 entry_group 分组（同一份名单只算一次）
+    quota_dropped = pick_quota_dropped(entries, arena_targets, auto_low)
+    # 竞技榜分数：只降不升，把明显落后于锚定型号的白名单条目也裁掉
+    if args.scores and not args.no_scores:
+        quota_dropped |= pick_scores_dropped(
+            entries, load_scores(Path(args.scores).expanduser()), arena_targets)
     for entry in entries:
-        group, main_reason = entry_group(entry, arena_targets, auto_low)
+        group, main_reason = entry_group(entry, arena_targets, auto_low, quota_dropped)
         if group == "drop":
             if float(entry["price"]) <= LOW_MAX:
                 skipped.append(

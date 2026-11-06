@@ -17,6 +17,38 @@
 
 ## [未发布]
 
+### 选型接上性能：竞技榜分数进每日同步 + 每厂商配额（2026-11-06）
+
+- 起因：`docs/BENCHMARKS.md` §5.4 定义了三档换算，但 `model_alias.py` 零引用 ——
+  选型只看人工白名单 + 价格阈值。同时每日同步从不传 `--arena`，`arena-main.json`
+  停在 2026-10-23 的 5 个候选，文档写「主力 7 个」而实际只有 2 个。
+  另一个实锤：`sync_report.py` 的概览把组名写死成「主力/免费/低耗/高耗」，真实组名是
+  「主力/免费/省钱」，于是 10 条省钱组模型从概览里凭空消失、合计 9≠19。
+- 改动：
+  1. `tools/sync_report.py` —— 组名改为 `GROUP_NAMES = ("主力", "免费", "省钱")`，
+     概览补「其他」兜底与合计校验（`合计 N / 清单 M`，对不上显式告警）；
+     终端摘要同步改为按 `GROUP_NAMES` 生成。
+  2. `sync-models.ps1` —— 第四步新增「竞技榜刷新」
+     （`arena_leaderboard.py --refresh --force --write`）与「竞技榜分数」
+     （`model_score.py --write --quiet`），生成器改带 `--arena --scores`；
+     两步都 `-Soft`，失败只降级不阻断。
+  3. 新增 `tools/model_score.py` —— 把 `arena-main.json` 折算成
+     `~/.zcode/v2/model-scores.json`（`CHANNEL|upstream` → intel / price_idx / value，
+     带 `basis` 写明基准）。同时 `arena_leaderboard.py` 落盘补 `near` 字段，
+     让「接近但未入选」也参与折算。
+  4. `tools/model_alias.py` —— 新增 `--scores [路径]` / `--no-scores`、`load_scores` /
+     `score_of_entry` / `pick_scores_dropped`（**只降不升**，无分数的条目不动）、
+     `VENDOR_QUOTA = 2` 与 `pick_quota_dropped`（每厂商省钱组最多 2 个，
+     版本高者优先、同版本贵者优先；免费组不占配额）。
+  5. `gateways/zgate/internal/router/router.go` —— 新增 `quotaCooldown = 24h` 与
+     `quotaExhausted`：额度烧光类的 4xx（`Free quota exhausted` / `AllocationQuota` /
+     `insufficient_quota` …）按一天冷却，不再每 30 分钟重撞一次；普通死跳仍是 30 分钟。
+- 效果（2026-11-06 22:50 实测）：主力 2 → 4（`MiMo-2.6-Flash` 99.8%、`Space-Bunny` 98.8%
+  重新进窗口），省钱 10 → 7（`MiMo-2.6-Pro` 0.13 超价且性价比 0.81 被裁，其余靠价格闸），
+  经 7871 探活 `MiMo-2.6-Flash` / `Space-Bunny` / `HY3-X` 全 200。
+- 回退：`model_alias.py --slot auto --apply --no-scores --no-arena`，或删
+  `~/.zcode/v2/model-scores.json`。口径全文见 `docs/BENCHMARKS.md` §9。
+
 ### zgate：地区受限 403 冷却该跳（2026-11-06）
 
 - 起因：请求面板上 Beam 一片「403 Rejected」，与零星 200 交替。实测 alias map 里

@@ -107,9 +107,14 @@ def diff(previous: dict, current: dict) -> dict:
     }
 
 
+# 分组名与 model_alias.PROVIDER_NAMES 保持一致（主力/免费/省钱）。
+# 2026-11-06 之前这里是主力/免费/低耗/高耗四个组名，后两个在生成器里根本不存在，导致 10 条省钱组模型在概览里凭空消失、合计 9≠19。
+GROUP_NAMES = ("主力", "免费", "省钱")
+
+
 def render_report(current: dict, changes: dict, baseline: bool) -> str:
     models = current["models"]
-    groups = ("主力", "免费", "低耗", "高耗")
+    groups = GROUP_NAMES
     counts = {g: sum(1 for m in models.values() if m.get("group") == g) for g in groups}
     stamp = current["generated_at"]
     added = 0 if baseline else len(changes["added"])
@@ -130,7 +135,14 @@ def render_report(current: dict, changes: dict, baseline: bool) -> str:
     ]
     for group in groups:
         lines.append(f"| {group} | {counts[group]} |")
-    lines += ["", f"生成时间：{stamp}；alias map：{current.get('alias_generated_at') or '-'}", ""]
+    other = sum(1 for m in models.values() if m.get("group") not in groups)
+    if other:
+        # 兜底：生成器加了新分组却没人改这份清单时，宁可显式暴露也不静默吞掉
+        lines.append(f"| 其他（未在 GROUP_NAMES 登记） | {other} |")
+    total = sum(counts.values()) + other
+    lines += ["", f"合计 {total} / 清单 {len(models)}"
+              + ("" if total == len(models) else " ⚠️ 对不上，检查 GROUP_NAMES"), ""]
+    lines += [f"生成时间：{stamp}；alias map：{current.get('alias_generated_at') or '-'}", ""]
 
     if baseline:
         lines += ["## 基线", "", "首次生成，没有上一轮快照可比；当前清单见文末。", ""]
@@ -250,10 +262,10 @@ def main() -> int:
     changes = diff(previous, current)
 
     print(f"模型 {len(current['models'])} 个"
-          f"（主力 {sum(1 for m in current['models'].values() if m['group'] == '主力')} / "
-          f"免费 {sum(1 for m in current['models'].values() if m['group'] == '免费')} / "
-          f"低耗 {sum(1 for m in current['models'].values() if m['group'] == '低耗')} / "
-          f"高耗 {sum(1 for m in current['models'].values() if m['group'] == '高耗')}）")
+          "（" + " / ".join(
+              f"{g} {sum(1 for m in current['models'].values() if m['group'] == g)}"
+              for g in GROUP_NAMES
+          ) + "）")
     if baseline:
         print("首次运行：本次作为基线，没有可比的变化")
     else:

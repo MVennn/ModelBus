@@ -253,14 +253,33 @@ Invoke-Py "Qoder 写配置" @("providers\qoder\qoder_zcode_sync.py", "--apply")
 
 # ---- 四、统一命名与分组 ---------------------------------------------------
 Say "----- 四、统一命名与分组 -----"
-Invoke-Py "统一命名写入" @("tools\model_alias.py", "--slot", "auto", "--apply")
+
+# 先刷新 ArenaGalleri 实时榜，再让生成器带 --arena 读候选。
+# 2026-11-06 之前这两步都没有：arena-main.json 停在 2026-10-23，
+# 文档写「主力 7 个」而实际只有 2 个，整个榜单单机摆设。
+# 刷新失败只降级为「不加分」，不阻断同步（-Soft）。
+# 必须带 --write：不带时只是 dry run 打印，候选文件永远停在旧日期。
+Invoke-Py "竞技榜刷新" @("tools\arena_leaderboard.py", "--refresh", "--force", "--write") -Soft
+if ($script:LastCode -ne 0) {
+    Say "竞技榜刷新失败，本次沿用旧候选文件"
+}
+
+# 竞技榜分数：先让 model_score.py 把 arena-main.json 折算成智力/价格/性价比，
+# 再让生成器带 --scores 用它裁掉明显落后的白名单条目（只降不升）。
+Invoke-Py "竞技榜分数" @("tools\model_score.py", "--write", "--quiet") -Soft
+if ($script:LastCode -ne 0) {
+    Say "分数换算失败，本次不带分数选型"
+}
+$scoreArgs = @("tools\model_alias.py", "--slot", "auto", "--apply", "--arena")
+if ($script:LastCode -eq 0) { $scoreArgs += "--scores" }
+Invoke-Py "统一命名写入" $scoreArgs
 $applyCode = $script:LastCode
 
 # --check 在「有漂移」时返回 1，这是本脚本要处理的正常分支，不算失败
 Invoke-Py "漂移检查" @("tools\model_alias.py", "--check") -Soft
 if ($script:LastCode -ne 0) {
     Say "检测到漂移，收缩名单要两轮才收敛，再写一次"
-    Invoke-Py "统一命名二轮" @("tools\model_alias.py", "--slot", "auto", "--apply")
+    Invoke-Py "统一命名二轮" $scoreArgs
     Invoke-Py "漂移复查" @("tools\model_alias.py", "--check")
     if ($script:LastCode -ne 0) {
         Say "复查仍有漂移，需要人工看"

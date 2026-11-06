@@ -358,6 +358,9 @@ def main() -> int:
         },
         "rule": rule,
         "candidates": picked,
+        # 「接近但未入选」也落盘：tools/model_score.py 拿它给生成器算分数，
+        # 这批恰恰是最需要拿来比的型号，丢掉就等于只认识 3 个模型。
+        "near": near,
     }
 
     if not (args.write or args.apply):

@@ -71,6 +71,12 @@ const timeoutCooldown = 5 * time.Minute
 // 是另一个键，兜底不会被吃掉；只有链里真有这条孪生跳时才冷却直连跳（proxyTwinAfter）。
 const regionCooldown = 30 * time.Minute
 
+// quotaCooldown 是「额度已经烧光」类 4xx 的冷却时长。它比死跳长得多：千问的
+// 300 元/一年额度用完就是用完，不会在半小时内自己回来；按 30 分钟冷却，结果是
+// 每半小时重撞一次 403 Free quota exhausted，白付一次往返。用 24h 把这一跳摁住，
+// 等到额度续上或有人改配置再复活（进程重启会清空冷却表，等于手动复活开关）。
+const quotaCooldown = 24 * time.Hour
+
 // New wires the server. client is shared with the bridge.
 func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervisor, client *http.Client, log *logx.Logger) *Server {
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
@@ -122,6 +128,24 @@ func (s *Server) cooling(hop alias.Hop) bool {
 		return false
 	}
 	return true
+}
+
+// coolDurationFor 决定这一跳该冷却多久：额度烧光用 quotaCooldown（一天），
+// 其余不可用的跳用默认的 hopCooldown。返回的 reason 只用于日志。
+func (s *Server) coolDurationFor(hop alias.Hop, status int, head []byte) (string, time.Duration) {
+	if quotaExhausted(status, head) {
+		return "quota", quotaCooldown
+	}
+	return "fatal", hopCooldown
+}
+
+// logQuotaCooling 只在额度类冷却时打一行显式日志，好让人一眼看出「不是坏了，是没钱了」。
+func (s *Server) logQuotaCooling(reason string, hop alias.Hop, status int, d time.Duration) {
+	if reason != "quota" {
+		return
+	}
+	s.log.Infof("[router] %s 额度已耗尽（HTTP %d），冷却 %v；额度续上或进程重启后自动复活",
+		hopKeyForLog(hop), status, d)
 }
 
 func (s *Server) markCooling(hop alias.Hop) {
@@ -725,7 +749,9 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		result = s.retryBridgeOn429(r, hop, cw, opts, result)
 		if hopFatal(result.Status, result.Body) {
-			s.markCooling(hop)
+			m, d := s.coolDurationFor(hop, result.Status, result.Body)
+			s.markCoolingFor(hop, d)
+			s.logQuotaCooling(m, hop, result.Status, d)
 			if index+1 < len(t.Chain) {
 				s.attemptChain(w, r, body, model, t, path, search, index+1)
 				return
@@ -764,7 +790,9 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	s.log.Infof("%s %s%s model=%s -> %s:%s (%d/%d)", r.Method, path, search, model, hop.Channel, hop.Upstream, index+1, len(t.Chain))
 	accept := func(status int, head []byte) bool {
 		if hopFatal(status, head) {
-			s.markCooling(hop)
+			m, d := s.coolDurationFor(hop, status, head)
+			s.markCoolingFor(hop, d)
+			s.logQuotaCooling(m, hop, status, d)
 			return false
 		}
 		if regionBlocked(status, head) && proxyTwinAfter(t.Chain, index) {
@@ -793,6 +821,24 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 
 // hopFatal 标记「这一跳现在就是不能用」的响应：模型 id 不存在、免费额度耗尽、欠费。
 // 这类 4xx 与请求本身无关，换下一跳大概率能成，所以要回落并把该跳冷却一段时间。
+// quotaExhausted 判断这一跳是不是「额度已经烧光」，而不是「这一跳坏了」。
+// 两者都要回落 + 冷却，但时长差三个数量级：坏跳 30 分钟就够，额度用完要等续费。
+func quotaExhausted(status int, head []byte) bool {
+	if !hopFatal(status, head) {
+		return false
+	}
+	for _, marker := range [][]byte{
+		[]byte("Free quota exhausted"), []byte("use free tier only"),
+		[]byte("AllocationQuota"), []byte("insufficient_quota"),
+		[]byte("quota exhausted"), []byte("Arrearage"),
+	} {
+		if bytes.Contains(head, marker) {
+			return true
+		}
+	}
+	return false
+}
+
 func hopFatal(status int, head []byte) bool {
 	switch status {
 	case 400, 402, 403:
