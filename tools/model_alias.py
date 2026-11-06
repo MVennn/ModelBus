@@ -115,7 +115,11 @@ MAIN_ORDER = [
     "chat:deepseek-v4.1-flash",
     # 贵备份：AA 榜上唯一高于 DeepSeek 基准的模型（2026-10-28 1122 vs 1093，
     # #44 vs #56），只在 DeepSeek 两跳同时不可用时手动切。
-    "chat:Qwen3.8-Max",
+    # 写显式渠道：没写前缀时 classify 只能猜，Qwen3.8-Max 会被判成 OC 的同名
+    # 条目、再被裸名去重吞掉（2026-11-06 实测链里只剩 QD 一跳，没有任何兜底）。
+    # OC 那条当前 OC_PRICES 缺价 → 只在 stderr 留「缺价未收录」，补价后自动成兜底。
+    "chat:qoder:Qwen3.8-Max",
+    "chat:oc:qwen3.8-max",
     # 免费 DeepSeek（千问渠道，messages 协议）：¥300 预付额度先烧这一条。
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
@@ -280,7 +284,7 @@ ABBR = {
     "deepseek-v4-flash": "DeepSeek-4-Flash",
     "deepseek-v4-flash-vision-exp": "DeepSeek-4-Flash-Vision",
     "deepseek-v4-pro": "DeepSeek-4-Pro",
-    "deepseek-v3-2-volc": "DeepSeek-3.2-Volc",
+    "deepseek-v3-2-volc": "DeepSeek-3.2",
     "deepseek-flash": "DeepSeek-4-Flash",
     "qwen3.8-max": "Qwen-3.8-Max",
     "qwen3.8-flash": "Qwen-3.8-Flash",
@@ -303,30 +307,33 @@ ABBR = {
     "minimax-m3": "MiniMax-M3",
     "minimax-m2.7": "MiniMax-M2.7",
     "minimax-m2.5": "MiniMax-M2.5",
-    "kimi-k2.8-preview": "Kimi-K2.8-Pre",
+    "kimi-k2.8-preview": "Kimi-K2.8-Preview",
     "kimi-k3": "Kimi-K3",
     "kimi-k2.6": "Kimi-K2.6",
     "kimi-k2.5": "Kimi-K2.5",
     "hy3": "HY3",
     "hy3-x": "HY3-X",
-    "hy4-preview": "HY4-Pre",
-    "hy4-preview-f": "HY4-Pre",
-    "hy4-preview-ctrl": "HY4-Pre",
-    "hy4-preview-exp": "HY4-Pre",
-    "hy4-preview-x": "HY4-Pre",
+    # 预览桶一律写全 -Preview：缩写 -Pre 与 -Std 一样，读者分不清是档位还是版本。
+    "hy4-preview": "HY4-Preview",
+    "hy4-preview-f": "HY4-Preview",
+    "hy4-preview-ctrl": "HY4-Preview",
+    "hy4-preview-exp": "HY4-Preview",
+    "hy4-preview-x": "HY4-Preview",
     "hy4free": "HY4-Free",
-    "hy4std": "HY4-Std",
+    # hy4std 的上游回包 model 就是 hy4，-Std 只是 WorkBuddy 的档位名，不是型号名；
+    # 同族只剩它一个付费档，去掉尾缀。只有 HY4-Free 必须带 Free 区分配额池。
+    "hy4std": "HY4",
     "hy3-b": "HY3",
     "hy3-c": "HY3",
     "fast-model": "HY-Fast",
-    "step-5-preview": "Step-5-Pre",
+    "step-5-preview": "Step-5-Preview",
     "space-bunny": "Space-Bunny",
     "mimo-v2.6-pro": "MiMo-2.6-Pro",
     "mimo-v2.6-flash": "MiMo-2.6-Flash",
     "mimo-v2.5": "MiMo-2.5",
     "mimo-v2.5-pro": "MiMo-2.5-Pro",
     "longcat-2.0": "LongCat-2.0",
-    "longcat-2.5-preview-free": "LongCat-2.5-Pre",
+    "longcat-2.5-preview-free": "LongCat-2.5-Preview",
     "beam-free": "Beam",
     "iceman-contributor-free": "Iceman",
     "claude-haiku-5-5": "Claude-Haiku-5.5",
@@ -479,6 +486,10 @@ def model_rules(cfg: dict) -> list[dict]:
 _PRICE_WARNED: set[str] = set()
 # 缺价统计：整渠道无价时 --apply 会把该渠道的模型整批从配置里剔除。
 _UNPRICED: dict[str, int] = {}
+# 逐跳明细：只报渠道计数时，「名单点名的某一跳查不到价」和「价格源整体缺失」
+# 长得一模一样，2026-11-06 的 Qwen-3.8-Max 就是这样丢掉 OC 兜底跳的 —— 名单写着
+# chat:Qwen3.8-Max，OC_PRICES 里没有它的价，跳被静默剔除，链只剩 QD 一跳。
+_UNPRICED_HOPS: list[str] = []
 _CHANNEL_ITEMS: dict[str, int] = {}
 
 
@@ -754,13 +765,19 @@ def abbreviate(model: str) -> str:
     key = model.lower()
     if key in ABBR:
         return ABBR[key]
+    # hy4-preview 的多个入口（-f / -ctrl / -exp1..3 / -x）是同一上游的不同档位，
+    # 回包 model 都是 hy4-preview。同一型号只给一个显示名，档位尾缀一律不带
+    # （用户 2026-11-06 口径：没有真正不同的模型就不要尾缀）。
+    if re.match(r"hy4-preview(-|$)", key):
+        return "HY4-Preview"
     # 厂商前缀（`qiniu/` `moonshotai/`）与 `-free` / `-f` 标记都不进显示名：
     # 「免费」由分组表达，只有同型号同时存在免费与付费档时才加 `-Free`。
     text = re.sub(r"^[a-z0-9_-]+/", "", model, flags=re.IGNORECASE)
     text = re.sub(r"(?i)[-_]free$", "", text)
     text = re.sub(r"^[Vv](?=\d)", "", text)
-    text = re.sub(r"(?i)flash\b", "Fs", text)
-    text = re.sub(r"(?i)preview\b", "Pre", text)
+    # 不缩写：-Fs / -Pre 这类尾缀读者分不清是档位还是版本，一律写全。
+    text = re.sub(r"(?i)flash\b", "Flash", text)
+    text = re.sub(r"(?i)preview\b", "Preview", text)
     text = re.sub(r"[^A-Za-z0-9.-]+", "-", text).strip("-")
     return text or "MODEL"
 
@@ -869,6 +886,21 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "region": "CN" if model.startswith("cn:") else "GB",
             "upstream": model,
             "base_model": model.split(":", 1)[1],
+            "protocol": protocol,
+            "fallbacks": [],
+            "legacy_ids": [model],
+        }
+    if model.startswith("oc:"):
+        # 显式 OC 渠道：白名单里同名型号可能在别的渠道也有（qwen3.8-max 同时在 QD），
+        # 不写前缀就只会走末尾兜底，upstream 还会带着 "oc:" 一起被当成型号名。
+        upstream = model[len("oc:"):]
+        return {
+            "raw": model,
+            "original": model,
+            "channel": "OC",
+            "region": "",
+            "upstream": upstream,
+            "base_model": upstream,
             "protocol": protocol,
             "fallbacks": [],
             "legacy_ids": [model],
@@ -1099,6 +1131,7 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             price = price_of(item["channel"], item["upstream"], wb, qd, slot)
         if price is None:
             _UNPRICED[item["channel"]] = _UNPRICED.get(item["channel"], 0) + 1
+            _UNPRICED_HOPS.append(f'{item["channel"]}:{item["upstream"]}')
             continue
         hop = dict(item)
         hop["price"] = round(float(price), 2)
@@ -1246,13 +1279,33 @@ def pool_entries(pools: list[dict], slot: str) -> list[dict]:
     return entries
 
 
+CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:", "QW": "qwen:", "QN": "qn:"}
+
+
+def hop_specs(protocol: str, hop: dict) -> list[str]:
+    """一个跳能被名单命中的写法：裸名 + 带渠道前缀的显式写法。
+
+    名单允许写显式渠道（`chat:qoder:Qwen3.8-Max` / `chat:oc:qwen3.8-max`），因为同一
+    upstream 名在不同渠道是不同的跳（qwen3.8-max 同时在 Qoder 与 OC）。只比裸名的话，
+    显式条目的跳永远命中不了名单 —— 既不判主力，也排不到名单名额。
+    """
+    prefix = CHANNEL_PREFIX.get(str(hop.get("channel") or ""), "")
+    out: list[str] = []
+    for value in (hop.get("upstream"), hop.get("base_model")):
+        if not value:
+            continue
+        bare = f"{protocol}:{value}"
+        if bare not in out:
+            out.append(bare)
+        if prefix and f"{protocol}:{prefix}{value}" not in out:
+            out.append(f"{protocol}:{prefix}{value}")
+    return out
+
+
 def _picked(entry: dict, hop: dict, wanted: set[str]) -> bool:
     """按 `<协议>:<上游>` 命中：协议是必需的，同型号的 chat / 桥接版名字一样。"""
     protocol = str(entry.get("protocol") or "chat")
-    for value in (hop.get("upstream"), hop.get("base_model")):
-        if value and f"{protocol}:{value}" in wanted:
-            return True
-    return False
+    return any(spec in wanted for spec in hop_specs(protocol, hop))
 
 
 def _version_of(entry: dict) -> tuple[int, ...]:
@@ -1735,10 +1788,11 @@ def main() -> int:
     # LOW_ORDER；不在名单里的模型（理论上不会进组）排末尾。
     def _pick_rank(row: dict, order: list[str]) -> int:
         """条目命中的名单序号；没命中的排末尾。组内顺序由人工名单决定。"""
+        protocol = str(row.get("protocol") or "chat")
         for hop in row["chain"]:
+            specs = hop_specs(protocol, hop)
             for j, name in enumerate(order):
-                if f"{row.get('protocol')}:{hop.get('upstream')}" == name or \
-                   f"{row.get('protocol')}:{hop.get('base_model')}" == name:
+                if name in specs:
                     return j
         return len(order)
 
@@ -1828,6 +1882,12 @@ def main() -> int:
     if _UNPRICED:
         detail = "、".join(f"{ch} {n} 个" for ch, n in sorted(_UNPRICED.items()))
         print(f"\nWARN: 因缺价未收录：{detail}（价格源不可用时先修复再 --apply）", file=sys.stderr)
+        # 明细必须打出来：少了这一行，白名单点名的跳消失与「整渠道无价」不可区分。
+        shown = _UNPRICED_HOPS[:12]
+        if shown:
+            print("  具体跳：" + "、".join(shown) +
+                  (f"（共 {len(_UNPRICED_HOPS)} 条）" if len(_UNPRICED_HOPS) > len(shown) else ""),
+                  file=sys.stderr)
     dead = [ch for ch, n in _CHANNEL_ITEMS.items() if n and _UNPRICED.get(ch, 0) == n]
     if dead and args.apply and not args.force_unpriced:
         print(

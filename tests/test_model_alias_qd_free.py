@@ -6,6 +6,9 @@
 只按「裸型号名」去重，Qwen3.8-Flash 已被 OC 的 messages 条目占位，于是 QD 那条
 免费跳被静默吞掉 —— 名单写了等于没写。
 
+时效：Qoder 的免费窗口在 2026-11-06 23:59 前后关闭（price_factor 0.0 → 0.04，
+usage.billable false → true），但仍比 OC 的 0.09 便宜，所以链首继续是 QD。
+
 两条硬约束：
 1. 白名单里显式写了渠道前缀（chat:qoder:…）的条目必须带 explicit_channel，
    否则 main() 的裸名去重会把新渠道的跳当重复丢掉；
@@ -63,14 +66,25 @@ class QwenFlashChainTest(unittest.TestCase):
         data = json.loads(ALIAS_MAP.read_text(encoding="utf-8"))
         self.models = data.get("models") or {}
 
-    def test_qd_free_hop_leads_the_chain(self) -> None:
+    def test_qd_hop_leads_the_chain(self) -> None:
+        """QD 必须是这条链最便宜的一跳。
+
+        2026-11-06 23:44 上游还是 price_factor 0.0（真免费），23:59 已改成 0.04、
+        usage.billable 也从 false 变 true —— 免费窗口关掉了。所以这里不再写死 0.0，
+        只断言「比 OC 兜底便宜、排链首」；哪天上游涨价超过 OC，这条会红，提示复核。
+        """
         entry = self.models.get("Qwen-3.8-Flash")
         if entry is None:
             self.skipTest("当前配置没有 Qwen-3.8-Flash")
         chain = entry.get("chain") or []
         self.assertTrue(chain, "Qwen-3.8-Flash 链为空")
-        self.assertEqual(chain[0].get("channel"), "QD", f"链首不是 QD：{chain[0]}")
-        self.assertEqual(chain[0].get("price"), 0.0, "QD 免费跳的价格应为 0")
+        head = chain[0]
+        self.assertEqual(head.get("channel"), "QD", f"链首不是 QD：{head}")
+        head_price = head.get("price")
+        self.assertIsNotNone(head_price, "QD 跳没有价格，会被静默剔除")
+        others = [h.get("price") for h in chain[1:] if h.get("price") is not None]
+        self.assertTrue(others, f"链里没有 OC 付费兜底跳：{chain}")
+        self.assertLessEqual(head_price, min(others), f"QD 不再是最便宜的一跳：{head_price} vs {others}")
         # 同一条链里必须还留着 OC 的付费跳做兜底（跨协议合并）。
         self.assertTrue(
             any(hop.get("channel") == "OC" for hop in chain),

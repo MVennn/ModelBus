@@ -118,8 +118,9 @@ class PriceIsDerivedTest(unittest.TestCase):
             )[0]
             return dict(built, price=price)
 
-        # 贵备份：0.43 仍在名单里 -> 主力
-        self.assertEqual(M.entry_group(entry_for("cn:Qwen3.8-Max", 0.43), {}), ("main", "manual"))
+        # 贵备份：0.43 仍在名单里 -> 主力。名单里这条是 chat:oc:qwen3.8-max（显式渠道，
+        # 因为同名型号同时在 Qoder 有免费入口），所以命中要按 OC 跳来构造。
+        self.assertEqual(M.entry_group(entry_for("oc:qwen3.8-max", 0.43), {}), ("main", "manual"))
         # 名单里的便宜模型 -> 省钱
         self.assertEqual(M.entry_group(entry_for("cn:glm-5.3-flash", 0.08), {}), ("low", ""))
         # 不在名单的贵模型 -> 不收录
