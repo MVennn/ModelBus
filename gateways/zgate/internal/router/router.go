@@ -693,9 +693,13 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		// 尾巴这一跳走 Messages 桥，失败照样换下一跳。
 		s.log.Infof("%s %s%s model=%s -> %s:%s [%s] (%d/%d)", r.Method, path, search,
 			model, hop.Channel, hop.Upstream, proto, index+1, len(t.Chain))
-		// 只有「链尾跳」才走流式：一旦前面某跳失败才能安全回落；非尾跳若先写了半截 SSE
-		// 就没法再换下一跳了（整段缓冲后一次性写出，与旧版一致）。
-		streaming := wantsStream(body) && index == len(t.Chain)-1
+		// 每一跳都按流式转发。旧实现只允许链尾跳流式（怕非尾跳写出半截 SSE 后无法回落），
+		// 代价是所有「首跳就能成」的 messages 型号都被整段缓冲：客户端要等整段生成完才见到
+		// 第一个字（2026-11-06 实测 Claude-Haiku-5.5 首字节 1.739s = 总耗时 1.739s、只有 4 条
+		// data 行；同期 Beam 因首跳被地区受限冷却、落到链尾跳，首字节 0.670s / 总 4.280s、88 条 data 行）。
+		// 安全性没有损失：非 2xx 在任何字节写出之前就以 Result 返回，回落照旧；
+		// 真要在 200 之后断流，链尾跳同样回不了落。
+		streaming := wantsStream(body)
 		cw := newBridgeChunkWriter(w)
 		opts := bridge.Options{
 			Protocol:      proto,
@@ -736,7 +740,14 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 				hopKeyForLog(hop), result.Status, regionCooldown)
 			s.markCoolingFor(hop, regionCooldown)
 		}
-		if (result.Status >= 500 || result.Status == 429 || regionBlocked(result.Status, result.Body)) && index+1 < len(t.Chain) {
+		// 流里已经写过 chunk 就不能再换跳：客户端手里已经有半截 SSE，再写第二个响应体
+		// 只会得到一条脏流。bridge 目前保证「写过 chunk 之后一律返回 200」（bridge.go:279-282），
+		// 所以这条分支今天是防御性的；护栏留着，防止将来桥接改动把两份响应写进同一条流。
+		// 真要走到这里，finishBridge 见 cw.written 也不会再补写任何字节。
+		if cw.written && (result.Status >= 500 || regionBlocked(result.Status, result.Body)) {
+			s.log.Infof("[router] %s 流式已开始后上游失败（HTTP %d），直接收口，不再回落", hopKeyForLog(hop), result.Status)
+		}
+		if !cw.written && (result.Status >= 500 || result.Status == 429 || regionBlocked(result.Status, result.Body)) && index+1 < len(t.Chain) {
 			s.log.Infof("[router] %s -> HTTP %d, fallback %s", hop.Upstream, result.Status, nextHopName(t.Chain, index))
 			s.attemptChain(w, r, body, model, t, path, search, index+1)
 			return

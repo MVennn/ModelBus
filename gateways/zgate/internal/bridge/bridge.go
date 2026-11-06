@@ -37,6 +37,12 @@ const DefaultTimeout = 120 * time.Second
 // 只有真正僵死的上游才会触发。
 const DefaultIdle = 30 * time.Second
 
+// DefaultIdleNonStream 是非流式桥接调用的空闲上限。非流式上游是「整段生成完才吐
+// 一个字节」，用 30 秒判静默会把生成超过 30 秒的正常回答误判成 upstream silent 504
+// （2026-11-06 实测 Claude-Haiku-5.5 走非流式时，长回答必挂在这一步）。
+// 这里放宽到与总超时同量级，让 DefaultTimeout 当唯一硬闸。
+const DefaultIdleNonStream = DefaultTimeout
+
 // Options describes one bridged call.
 type Options struct {
 	Protocol      string // messages | responses
@@ -160,7 +166,7 @@ func postJSON(ctx context.Context, client *http.Client, url string, headers map[
 	}
 	defer resp.Body.Close()
 	// 非流式同样要防「连上但不说话」：否则 Conatus 这类僵死上游会干等满总超时。
-	ir := newIdleReader(resp.Body, DefaultIdle)
+	ir := newIdleReader(resp.Body, DefaultIdleNonStream)
 	defer ir.stop()
 	raw, err := io.ReadAll(ir)
 	if err != nil {
