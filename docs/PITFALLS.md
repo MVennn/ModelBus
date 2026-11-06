@@ -685,3 +685,52 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   - `python -I tools/check-docs.py` → `[OK] 52 篇文档全部通过…`，退出码 0；
   - `python -I tools/check-secrets.py` → `[OK] 已扫描 176 个文件…`，退出码 0；
   - 反证：把 `✓` 临时改回原样，同一命令退出码 1 并抛 `UnicodeEncodeError`。
+
+## 37. 探活写了三年没人调用：结果文件不存在、没有时间戳、顺序还反了 【通用】
+
+- **现象**：`model_alias.py --probe-file` 有完整的消费逻辑（:1731-1766：非 ok 的条目
+  从分组里剔除），可 `moonshotai/kimi-k3-free` 在 2026-10-27 被上游 retired 之后，
+  还稳稳占着免费组的位置，每次调用 502。`sync-models.ps1` 里 grep `model_probe`
+  零命中 —— 结果文件从来没被生成过。
+- **三个坑叠在一起，只修一个都不生效**：
+  1. **没人跑**：每日同步从第四步直接跳到 `model_alias.py`，没有探活这一步，
+     `--probe-file` 自然也没传。
+  2. **没有时间戳**：`model_probe.py` 只写 `ok_at`（仅成功时才有），而
+     `_fresh_probe` 按 `checked_at` 判新鲜度。实测 66 条记录全被判「超过 72 小时」，
+     一律按未知处理 —— **未知不删除**，所以即使传了 `--probe-file` 也摘不掉任何模型。
+     修法是每条都写 `checked_at`（ISO，本地时区）。
+  3. **顺序反了**：探活要放在第一轮 `--apply` **之后**。白名单本轮新补进配置的型号
+     （`cn:hy4std`）在第一轮之前不在配置里，探不到它，第二轮带 `--probe-file` 时会被
+     判成 `probe not probed` 直接跳过 —— 等于新模型永远进不来。
+- **解法**：`sync-models.ps1` 的次序改成「arena 刷新 → scores → apply → 探活 →
+  带 `--probe-file` 再 apply → `--check`」，并在探活后统计可用率：
+  `ok * 2 < total` 时不传 `--probe-file`。理由：大面积失败多半是网关或某个渠道整体
+  挂了，此时按探活摘模型会把好型号一起删光。
+- **验证**：19 个模型探活 18 ok / 1 error（Kimi-K3 → 502）；带 `--probe-file` 写入后
+  免费组从 6 变 5，Kimi-K3 消失，经 7871 调用从 502 变成 400（未知模型）。
+
+## 38. `--check` 和 `--apply` 参数不一样，每天报一次假漂移 【通用】
+
+- **现象**：`sync-models.ps1` 里 `--apply` 带 `--arena`，`--check` 不带。arena 把
+  `MiMo-2.6-Flash`、`Space-Bunny` 从省钱提进主力，于是 `--check` 每天都报
+  「分组：MiMo-2.6-Flash 主力 → 省钱」两处漂移 → 触发二轮重写 → 复查仍报 → 日志常驻
+  「复查仍有漂移，需要人工看」，实际配置完全正确。
+- **根因**：`--check` 是「用当前参数重算一遍，和落盘的 alias map 比对」。参数不同就是
+  拿两套规则比结果，报的漂移是参数差，不是数据差。
+- **解法**：把 `--check` 的参数从 `--apply` 派生（同一个 `$checkArgs` 数组拼
+  `--arena` / `--scores` / `--probe-file`），不要手写字面量。
+- **验证**：`python tools/model_alias.py --check --arena --scores --probe-file …` →
+  「无漂移」；去掉 `--arena` 就复现那两行漂移。
+
+## 39. DSH 的 edit 工具会剥掉 UTF-8 BOM：改了带 BOM 的 .ps1 就变乱码 【通用】
+
+- **现象**：用 `edit_file` / `edit` 改 `sync-models.ps1`（HEAD 版本是
+  `EF BB BF` 开头的 UTF-8 BOM），改完 `head -c 3 | xxd` 变成 `23 52 65`（`#Re`），
+  BOM 没了。PowerShell 5.1 按 GBK 读无 BOM 的 UTF-8，所有中文注释糊成乱码，
+  `Parser::ParseFile` 报一串 `Unexpected token '涓诲姏'` / `The string is missing
+  the terminator`。计划任务里跑会直接把脚本跑挂。
+- **解法**：每次用 edit 类工具改带 BOM 的文件，改完补一行：
+  `python -c "import pathlib;p=pathlib.Path('x.ps1');b=p.read_bytes();p.write_bytes(b if b[:3]==b'\xef\xbb\xbf' else b'\xef\xbb\xbf'+b)"`，
+  再用 `[System.Management.Automation.Language.Parser]::ParseFile` 复核语法。
+  判据是 `head -c 3 | xxd` 必须显示 `efbbbf`。`.py` / `.sh` 不要 BOM，别顺手加。
+

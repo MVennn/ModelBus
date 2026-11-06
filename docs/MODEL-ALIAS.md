@@ -201,7 +201,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 
 | 组（providerId） | 装什么 | 判定 |
 |---|---|---|
-| **主力** `opencode-go-chat` | 两条：`DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束** |
+| **主力** `opencode-go-chat` | `HY4-Std`（WB 单跳 0.29，竞技榜建模 #8 / 网页 #10）+ `DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份）+ 竞技榜达标的两条（`MiMo-2.6-Flash` / `Space-Bunny`） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束**；白名单点名但配置里没有的型号会补建条目（见 §6） |
 | **免费** `opencode-go-chat-free` | 真免费条目（当前 6 条） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
 | **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 10 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.19 能在组里）；名单外另有一条 **自动补位**（见下） |
 | ~~高耗~~ | 已删除 | 不在两个名单里且价格 > 0.11 → **不收录** |
@@ -219,6 +219,10 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
   一年期预付额度」。
 - **主力豁免价格上限**：贵备份 `Qwen-3.8-Max` 现价 0.17，其余超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。
+- **名单只管排序，不管建档**：条目只从 `provider_config` 的 `personalModelIds` 与池子
+  文件生成，往 `MAIN_ORDER` 里加一个配置里没有的型号，不加 `whitelist_items()` 就什么
+  都不会发生（2026-11-06 的 `cn:hy4std` 就是这么白写了一天）。现在白名单点名的缺失
+  型号会从价格源补一条候选，持 `whitelisted` 标记，豁免 `LOW_MAX` 与 `VENDOR_QUOTA`。
 - **榜单不再自动扩主力**：`arena_leaderboard.py` 仍能产候选，但
   `model_alias.py` 默认忽略，要 `--arena` 才生效。
 - **顺序由人工名单决定，不按价格**：主力按 `MAIN_ORDER`、省钱按 `LOW_ORDER`
@@ -319,11 +323,26 @@ python tools/arena_leaderboard.py --refresh --write
 python tools/model_probe.py
 
 # 2. 生成三组 + alias map；只保留探测 ok（或曾 ok 的瞬时限流）的模型
-python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply
+python tools/model_alias.py --slot auto --arena --scores \
+  --probe-file ~/.zcode/v2/model_probe.json --apply
 
 # 3. 漂移自检：重算结果应与刚落盘的 alias map 完全一致（退出码 0）
-python tools/model_alias.py --check
+#    参数必须和上一步一模一样 —— 只写 --check 时，arena 把某个型号从省钱提到主力
+#    会被当成漂移，每天都要无效重写两轮
+python tools/model_alias.py --check --arena --scores \
+  --probe-file ~/.zcode/v2/model_probe.json
 ```
+
+- **顺序不能颠倒**：探活要在第一轮 `--apply` 之后跑。本轮新补进配置的型号（例如
+  白名单补入的 `cn:hy4std`）在第一轮之前根本不在配置里，探不到它，第二轮带
+  `--probe-file` 时会被判成 `probe not probed` 直接跳过。`sync-models.ps1` 的第四步
+  就是按「apply → 探活 → 带 probe 再 apply」这个次序写的。
+- **白名单是权威，但只管排序不管建档**：条目只从 `provider_config` 与池子文件生成，
+  所以白名单点名一个配置里没有的型号时，`whitelist_items()` 会从价格源补一条候选
+  （按裸名比对，没有渠道前缀的写法不会被另猜一个渠道）。补进来的条目持有
+  `whitelisted` 标记，不受 `LOW_MAX` 价格闸与 `VENDOR_QUOTA` 配额限制。
+- 探测结果只在 72 小时内有效（`--probe-max-age-hours`）；过期按「未知」处理，
+  **未知不删除**。每条记录都写 `checked_at`，没有它的记录会被整份当成过期。
 
 - 只预演：去掉 `--apply`。
 - 备份：`provider_config.json.bak-alias-<时间戳>`。

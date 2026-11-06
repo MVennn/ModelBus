@@ -2275,3 +2275,48 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 
 第 2–3 项改动会重排显示名与「免费」组归属（`HY4-Pre` 会掉出免费组），属外部可见变更，
 未动代码。落地清单与回退写在文档 §2.1 末尾。
+
+# 2026-11-06 第十五轮：选型三处硬伤修复（HY4 归位 / 探活生效 / 渠道排序表）
+
+用户 m01373「你去做吧」，执行 m01351 三问回答里承诺的五项。
+
+## 背景：三处「看起来在自动选型，实际是死代码」
+
+1. 竞技榜上我们手里最强的型号是 `hy4`（建模 #8 / 静态网页 #10，0.29 积分），
+   被「省钱档 ≤0.11」的价格闸裁掉，配置里留下的是同族第 58 名的 `hy4-preview`。
+   而且只往 `MAIN_ORDER` 写 `chat:cn:hy4std` 什么都不会发生 —— 条目只从
+   `provider_config` 的 `personalModelIds` 与池子文件生成，白名单只管排序不管建档。
+2. `model_alias.py --probe-file` 的消费逻辑（非 ok 条目剔出分组）一直是死代码：
+   `sync-models.ps1` 里连 `model_probe` 都 grep 不到。于是 2026-10-27 就被上游
+   retired 的 `moonshotai/kimi-k3-free` 一直占着免费组的位置，每次调用 502。
+3. `cn:hy4-preview-f` 的 `credits` 是空字符串、`list_rate` 是 0，被判成免费；
+   历史 2420 次请求实际扣了 6601 积分。
+
+## 改动
+
+- `tools/model_alias.py`：`MAIN_ORDER` 首位加 `chat:cn:hy4std`；新增
+  `whitelist_items()` 按裸名补建缺失条目；新增 `CHANNEL_RANK = {WB:0, OC:1, QD:1,
+  QW:2, QN:3}` 取代「WB 布尔 + TAIL_HOPS 布尔」排序键；`wb_prices()` 改两遍扫描
+  （credits 权威 → list_rate → 同族挂牌价回填）；新增 `write_quota_windows()`
+  写 `~/.zcode/v2/quota-windows.json`。
+- `tools/model_probe.py`：结果补 `resp_model` / `quota_model` / `credit`，并写
+  `checked_at`（此前只有 `ok_at`，非 ok 记录没时间戳 → 整份被 `_fresh_probe` 判过期
+  → 死型号永远删不掉）。
+- `tools/sync_report.py`：报告新增「性价比漂移」（读 model-scores.json）与
+  「额度窗口」（读 quota-windows.json）两段。
+- `sync-models.ps1`：第四步改成「apply → 探活 → 带 `--probe-file` 再 apply」，
+  探活可用率 < 50% 时不传 `--probe-file`；`--check` 改用与 apply 同参数。
+- 文档：`docs/MODEL-ALIAS.md` §4 表格与 §6 命令块重写；`docs/PITFALLS.md` 新增
+  §37（探活三连坑）/ §38（check 与 apply 参数不对称）/ §39（edit 剥 BOM）。
+
+## 实测
+
+- 两轮 apply：第一轮不带 probe（让 hy4std 进配置），第二轮带 probe 摘 Kimi-K3。
+  一轮到底不行 —— 探活时 hy4std 还不在配置里，第二轮会被判 `probe not probed`。
+- 最终 18 个：主力 5（HY4-Std 0.29 / DeepSeek-4.1-Flash 0.11 / Qwen-3.8-Max 0.17 /
+  MiMo-2.6-Flash 0.06 / Space-Bunny 0.08）、免费 5、省钱 8。
+- HY4-Std 经 7871 实测 200（0.92s）；Kimi-K3 从 502 变成 400（未知模型，已摘除）。
+- `quota-windows.json` 已生成，QN 剩 24 天在 stderr 告警。
+- `--check --arena --scores --probe-file` → 无漂移。
+- 报告 `docs/reports/MODEL-SYNC-20261106-2320.md`：18 个，新增 HY4-Std / MiMo-2.6-Pro，
+  移除 HY4-Pre / Kimi-K3，链路变化 0。

@@ -17,6 +17,46 @@
 
 ## [未发布]
 
+### 选型修三处硬伤：HY4 归位、探活真正生效、渠道排序表（2026-11-06）
+
+- 起因（三个实锤，共同点是「看起来在自动选型，实际是死代码」）：
+  1. 竞技榜上我们手里最强的模型是 `hy4`（建模 #8、静态网页 #10、0.29 积分），却被
+     「省钱档 ≤0.11」的价格闸裁掉，配置里留下的是同族第 58 名的 `hy4-preview`。
+     只把 `chat:cn:hy4std` 写进名单也不生任何条目 —— 条目只从 `provider_config`
+     与池子文件来，白名单只管排序，不管建档。
+  2. `model_alias.py --probe-file` 从写出来那天起就没被传过：`sync-models.ps1` 里
+     连 `model_probe` 都 grep 不到。于是 2026-10-27 就下架的
+     `moonshotai/kimi-k3-free` 一直占着免费组位置，每次调用 502。
+  3. `cn:hy4-preview-f` 的 `credits` 是空字符串、`list_rate` 是 0，被判成免费；
+     历史 2420 次请求实际扣了 6601 积分。
+- 改动：
+  1. `tools/model_alias.py`
+     - `MAIN_ORDER` 首位加 `chat:cn:hy4std`；新增 `whitelist_items()`：白名单点名但
+       配置里没有的型号直接从价格源建条目，按**裸名**比对（否则 `chat:Qwen3.8-Max`
+       这种不带渠道前缀的写法会被猜成 OC，与已有的 QD 条目重名）。
+     - 新增 `CHANNEL_RANK = {WB:0, OC:1, QD:1, QW:2, QN:3}`，取代原来「WB 布尔 +
+       TAIL_HOPS 布尔」两维排序键；同 rank 内保留 QD 先于 OC 的旧顺序以保证等价。
+     - `wb_prices()` 重写为两遍：`credits` 权威，缺则用 `list_rate`，两者都缺时用
+       同族挂牌价回填并 WARN —— `hy4-preview-f` 由 0.00 变 0.29。
+     - 新增 `write_quota_windows()`：三条额度窗口（QN 限免 2026-11-30 / QW 每模型
+       试用池 2026-12-15 / QW ¥300 预付 2027-10-28）写到
+       `~/.zcode/v2/quota-windows.json`，剩余 ≤30 天在 stderr 告警。
+  2. `tools/model_probe.py`：每条结果补 `resp_model` / `quota_model` / `credit`
+     三个身份字段，并写 `checked_at`。此前只写 `ok_at`，非 ok 的记录没有任何时间戳，
+     `_fresh_probe` 会把整份结果判成过期按「未知」处理 —— 等于死型号永远删不掉。
+  3. `tools/sync_report.py`：报告新增「性价比漂移」（读 `model-scores.json`，只列
+     intel<85 或 value<1.0）与「额度窗口」（读 `quota-windows.json`，≤30 天 ⚠️、
+     过期 ❌）两段，文件缺失时整段不出现。
+  4. `sync-models.ps1`：第四步第一轮 apply **之后**接探活，`--probe-file` 才第一次
+     真正被传（顺序不能颠倒：本轮新补进配置的型号要先有探测记录，否则会被当成
+     `not probed` 直接跳过）；探活可用率低于一半时不据此摘模型，避免网关整体故障
+     时把清单删光。漂移检查改用与 apply 同一组参数（`--arena --scores --probe-file`），
+     不再天天报「MiMo-2.6-Flash 主力 → 省钱」这种参数不对称造成的假漂移。
+- 结果：18 个模型（主力 5 / 免费 5 / 省钱 8）。HY4-Std 进主力第一位，经 7871 实测
+  200（0.92s）；Kimi-K3 被探活摘除，调用从 502 变成 400 未知模型。
+- 回退：`python tools/model_alias.py --no-scores --no-arena`；要关掉探活就删
+  `sync-models.ps1` 里「模型探活」那一段。
+
 ### 选型接上性能：竞技榜分数进每日同步 + 每厂商配额（2026-11-06）
 
 - 起因：`docs/BENCHMARKS.md` §5.4 定义了三档换算，但 `model_alias.py` 零引用 ——
