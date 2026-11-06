@@ -56,6 +56,80 @@ alias map **不含凭据**；上游 key 仍由路由按渠道从 `provider_confi
 
 ---
 
+## 2.1 同类模型的判定（2026-11-06）
+
+**判据不看名字，看上游回包。** 名字只是给人看的标签，同名不同模型（或不同名同模型）
+都会让「合并 → 回落 → 计费」这套语义悄悄错位。
+
+### 三级判据（按权威性）
+
+| 级别 | 证据 | 判定 |
+|---|---|---|
+| L1 **权威** | 回复 JSON 的 `model` 字段（上游自报型号） | 相同 = 同一模型，可合并成一条链；不同 = 不同模型，永不合并 |
+| L2 **确认** | `usage.quota.model` / `usage.credit` | quota 池相同 = 同一计费模型；`credit > 0` = 该桶实际扣分，**不得进免费组** |
+| L3 **指纹** | 定价源的 `(ctx, out, list_rate)` 三元组 | 全等 = 同一模型的多个部署桶（如 `hy3` / `hy3-b` / `hy3-c`） |
+
+```text
+L1 决定「能不能合并」   → 只有同 model 的桶才并进一条链
+L2 决定「能不能标免费」 → 回包 credit 为 0 才允许 price=0
+L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名字前缀相同
+```
+
+**名字（`ABBR` 表）只用于显示名覆盖，不参与合并判定。** 任何「因为名字像所以合并」
+的推断都要用 L1 复核。
+
+### 实测矩阵：HY 家族（2026-11-06，经 7863 直连，单问「17 乘以 23」）
+
+| upstream | 回包 `model` | `quota.model` | 本次 `credit` | 现有显示名 | 现有组 |
+|---|---|---|---|---|---|
+| `cn:hy4free` | **hy4-free** | hy4 | 0 | `HY4-Free` | 免费 |
+| `cn:hy4std` | **hy4** | （无） | 0.02 | —（0.29 超省钱档上限被裁） | — |
+| `cn:hy4-preview` | **hy4-preview** | hy4-preview | 0.04 | —（同上） | — |
+| `cn:hy4-preview-f` | **hy4-preview** | hy4-preview | 0.03 | `HY4-Pre` | 免费 |
+| `cn:hy4-preview-ctrl` / `-exp` / `-exp1..3` | **hy4-preview** | （无） | 0.03–0.04 | `HY4-Pre`／`hy4-Pre-exp1..3` | — |
+| `cn:hy3` / `-b` / `-c` | **hy3** | hy3 | 0 | `HY3` | 免费 |
+| `cn:hy3-x` | **hy3-x** | （无） | 0.01 | `HY3-X` | 省钱 |
+
+历史消耗（`gateways/upstream/workbuddy/data/usage.json` 聚合）：
+
+| model | 请求数 | credit 合计 | 平均 |
+|---|---|---|---|
+| `hy4free` | 1154 | **0.00** | 0 |
+| `hy4-preview-f` | 2420 | **6601.01** | **2.73** |
+| `hy4-preview` | 864 | 0.22 | 0.0003 |
+| `hy3` / `hy3-b` / `hy3-c` | 590 | 0.00 | 0 |
+| `hy3-x` | 170 | 37.47 | 0.22 |
+
+### 由此得到的三个结论
+
+1. **`HY4-Free` 与 `HY4-Pre` 不是同类模型，不能合并。** L1 回包分别是 `hy4-free`
+   与 `hy4-preview`（两个上游型号），L2 配额池分别是 `hy4` 与 `hy4-preview`，
+   L2 计费是 0 与每次约 0.03 积分 —— 三条判据全指向「两个模型」。
+2. **真正的同类是 `hy4-preview` 一族**：`hy4-preview` / `-f` / `-ctrl` / `-exp` /
+   `-exp1..3` 回包都是 `hy4-preview`，属于同一模型的 8 个部署桶。现状把它们拆成
+   `HY4-Pre` 与 `hy4-Pre-exp1..3` 四个显示名 —— 因为 `ABBR` 表只填了前 5 个变体，
+   `exp1`/`exp2`/`exp3` 落到正则兜底（`preview`→`Pre` 但前缀没统一大写）。
+3. **`cn:hy4-preview-f` 是资费口径 bug**：定价源里它的 `credits` 是空字符串、
+   `list_rate` 是 0，于是被判 `price=0` 进「免费」组；实测每次请求扣约 0.03 积分，
+   历史累计 6601 积分。「免费组 = 真不花钱」这个前提被破坏。
+
+### 落地清单（按 L1 判据改造，未实施）
+
+| # | 位置 | 改动 |
+|---|---|---|
+| 1 | 探活脚本 | 回包里提取 `model` / `usage.quota.model` / `usage.credit` 写进 `model_probe.json` 的结构化字段（现在只存原始 detail 字符串，判不了族） |
+| 2 | `tools/model_alias.py` | 合并键从 `abbreviate(base_model)` 改为「L1 回包 model（缺失时退回名字 stem）」；`ABBR` 降级为显示名覆盖表 |
+| 3 | `tools/model_alias.py` | `price` 判免费加一道 L2 校验：该 upstream 近期 `credit > 0` 时不允许 `price=0`（`hy4-preview-f` 立即从「免费」掉回付费档） |
+| 4 | 同步报告 | 输出「显示名 → 上游 model → 桶列表 → 实际 credit」矩阵，新桶自动归类；判不出族的列「待确认」而不是静默给个脏名字 |
+
+回归方式：用 `wb_pricing.json` 快照 + `usage.json` 聚合做夹具，断言
+（a）`hy3`/`-b`/`-c` 仍合成一条；（b）`hy4-preview*` 八个桶合成一条；
+（c）`hy4free` 与 `hy4-preview-f` 分属两条；（d）`hy4-preview-f` 不再进免费组。
+
+回退：判定逻辑集中在新增的 `family_of()`，删掉调用即回到 `ABBR` 手填行为。
+
+---
+
 ## 3. 跨渠道合并（chain）
 
 链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `TAIL_HOPS` 钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：

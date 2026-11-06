@@ -2235,3 +2235,43 @@ workbuddy / 各渠道 sync 改动；审查三个机制之间的状态一致性�
 
 - 口径全文写进 `docs/BENCHMARKS.md` §9（三段链路 / 三档分数 / 门槛与只降不升 / 配额 / 首次生效变化 / 回退）。
 - 「体能分」与 AA 两套量纲不混算：竞技榜基准是 1094 分 + 0.11 积分，不是 342.40 + 1.20。
+
+# 2026-11-06 第十四轮：同类模型的判定（HY4 双条问题）
+
+## 背景
+
+用户问「HY4 有两个模型（HY4-Free / HY4-Pre），能否确定是同类？以后怎么判断同类并合并」。
+
+## 实测（经 7863 直连，单问「17 乘以 23」）
+
+| upstream | 回包 model | quota.model | credit |
+|---|---|---|---|
+| cn:hy4free | hy4-free | hy4 | 0 |
+| cn:hy4std | hy4 | - | 0.02 |
+| cn:hy4-preview | hy4-preview | hy4-preview | 0.04 |
+| cn:hy4-preview-f | hy4-preview | hy4-preview | 0.03 |
+| cn:hy4-preview-exp1 | hy4-preview | - | 0.04 |
+| cn:hy3 | hy3 | hy3 | 0 |
+| cn:hy3-x | hy3-x | - | 0.01 |
+
+usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 2420 请求 /
+**6601.01 credit（均值 2.73）**；`hy3` 系 590 请求 / 0；`hy3-x` 170 请求 / 37.47。
+
+## 结论
+
+1. `HY4-Free` 与 `HY4-Pre` **不是同类**：回包 model 不同、quota 池不同、一个免费一个扣分。
+2. 真正的同类是 `hy4-preview` 一族 8 桶，现被 ABBR 拆成 4 个显示名（`exp1/2/3` 走正则兜底，前缀没统一）。
+3. **资费 bug**：`cn:hy4-preview-f` 定价源 `credits` 为空串、`list_rate` 0 → 判 `price=0`
+   进「免费」组，实测每次扣约 0.03 积分，历史累计 6601。
+
+## 交付
+
+- `docs/MODEL-ALIAS.md` 新增 §2.1「同类模型的判定（2026-11-06）」：三级判据
+  （L1 回包 model / L2 quota+credit / L3 (ctx,out,rate) 指纹）、实测矩阵、三条结论、四项落地清单、回归夹具与回退。
+- `docs/README.md` 索引一句话补「同类模型的判定」。
+- `python tools/check-docs.py` exit 0（33 篇）。
+
+## 未做（等拍板）
+
+第 2–3 项改动会重排显示名与「免费」组归属（`HY4-Pre` 会掉出免费组），属外部可见变更，
+未动代码。落地清单与回退写在文档 §2.1 末尾。
