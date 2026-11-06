@@ -17,6 +17,34 @@
 
 ## [未发布]
 
+### 选型：显示名去尾缀、漏模型的三种机制（2026-11-06）
+
+- **显示名不再造后缀**（用户口径：只有真不同的模型或无法合并时才加尾缀）。
+  `abbreviate()` 兜底不再把 `flash` / `preview` 缩成 `-Fs` / `-Pre`；
+  `hy4std` → `HY4`（回包 `model` 本就是 `hy4`，`-Std` 是 WorkBuddy 档位）；
+  `hy4-preview` / `-f` / `-ctrl` / `-exp1..3` / `-x` 统一 `HY4-Preview`；
+  `kimi-k2.8-preview` → `Kimi-K2.8-Preview`、`step-5-preview` → `Step-5-Preview`、
+  `deepseek-v3-2-volc` → `DeepSeek-3.2`。
+- **漏模型的三个真机制**（其余「上游 39 个只用 11 个」是白名单设计的必然，不是 bug）：
+  ① 裸名去重吞掉同型号的其他渠道（已修，`explicit_channel`）；
+  ② 名单点名的跳查不到价 → 静默剔除（2026-11-06 `chat:Qwen3.8-Max` 整条兜底消失、
+     日志无提示）→ 新增 `_UNPRICED_HOPS` 汇总「具体跳」；
+  ③ 显式渠道条目的跳命中不了名单（`_picked` / `_pick_rank` 只比裸 `<协议>:<上游>`，
+     主力判定与名单名次双失效）→ 新增 `hop_specs()`，两处共用。
+- 补 `classify()` 的 `oc:` 前缀分支：原来只有 `cn:` / `global:` / `qoder:` / `qwen:` /
+  `qn:`，写 `chat:oc:qwen3.8-max` 会落兜底、upstream 带着 `oc:` 当型号名去查价。
+- `MAIN_ORDER` 的贵备份拆成 `chat:qoder:Qwen3.8-Max` + `chat:oc:qwen3.8-max`：前者是
+  真主链（QD 单跳），后者补 OC 兜底意识（当前 OC_PRICES 缺 `qwen3.8-max` 价，只在
+  stderr 留 `WARN: 因缺价未收录 … 具体跳：OC:qwen3.8-max`，补价后自动成兜底跳）。
+- **Qoder 免费窗口关闭**：`/v1/models` 从 `price 0.0 / valley 0.0` 变
+  `price 0.04 / peak 0.1 / valley 0.04`（`is_free` 仍 true，字段自相矛盾），实测
+  `usage.billable` `false` → `true`（`credits` 0.1638）。Qwen-3.8-Flash 因此从免费组
+  落到省钱组（0.03），链首仍是 QD（0.03 < OC 0.09）。回归断言不再写死 0.0。
+- 回归：新增 `tests/test_model_alias_naming.py`（尾缀规则 4 条 + `oc:` 前缀 3 条）；
+  `tests/test_model_alias_price.py` 的主力用例改用 OC 跳构造。共 56 passed。
+- 回退：`git revert` 本提交后跑 `python tools/model_alias.py --slot auto --apply --arena --scores`；
+  只想恢复旧显示名就把 `ABBR` 的 `hy4std` / `hy4-preview*` 键改回 `HY4-Std` / `HY4-Pre`。
+
 ### 选型：Qoder 免费 Qwen3.8-Flash 进链（2026-11-06）
 
 - 事实：Qoder 官方目录里 `Qwen3.8-Flash`（key `qfmodel`）`price_factor 0.0 / is_free true`，

@@ -2368,3 +2368,55 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 - 经 7871 实测 200（2.07s），网关日志 model=Qwen-3.8-Flash -> QD:Qwen3.8-Flash (1/3)
   ⇒ alias map 热更新生效，不需要重启 zgate。
 - --check --arena --scores → 无漂移（exit 0）；unittest 49 passed（44 + 新增 5）。
+
+# 2026-11-06 第十六轮：显示名去尾缀 + 漏模型的三层机制
+
+## 起因
+用户 m01913：「所以为什么会漏呢，那现在会漏是不是有很多模型也跟着漏了。然后关于命名，
+我之前也说过如果没有相同的模型或者相同的模型可以合并，那就不要尾缀吧，比如这个 free std 这些。」
+
+## 漏了多少（快照：alias map 已用跳 vs 各渠道 /v1/models）
+- WB 39 → 11、OC 30 → 11、QD 12 → 4、QW 1 → 1、QN 1 → 1。
+- 大头是设计：条目只从 provider_config 的 personalModelIds 与 providers/qwen/pools.json 生成，
+  上游列表与价格表都不自动建档。WB 未用 28 条 = 路由别名/非模型 8 + 旧一代 10 +
+  hy4-preview 同族 7 桶 + 贵旗舰 3（0.69 / 0.97 / 1.62，超 LOW_MAX 且不在名单）。
+
+## 真正会静默漏的三层（本轮全修）
+1. 裸名去重吞同渠道型号（Qwen3.8-Flash 事故，上一轮已修 explicit_channel）。
+2. 名单点名的跳查不到价 → 静默剔除：chat:Qwen3.8-Max 没写前缀 → classify 猜 OC →
+   OC_PRICES 无 qwen3.8-max → 跳被丢，主力 2 号位实际只剩 QD 单跳、零兜底、日志无提示。
+   修：_UNPRICED_HOPS 收集缺价跳，汇总行打「具体跳：…」（最多 12 条）。
+3. 显式渠道条目命中不了名单：_picked / _pick_rank 只比裸 <协议>:<上游>，写
+   chat:qoder:Qwen3.8-Max 的跳既不进主力判定也排不到名次（被甩组尾）。
+   修：新增 hop_specs()，同时产出裸名与带渠道前缀两种写法，两处共用。
+
+## 命名
+- ABBR：hy4std → HY4（回包 model 就是 hy4）；hy4-preview / -f / -ctrl / -exp / -exp1..3 / -x
+  → HY4-Preview（另加前缀正则兜底）；kimi-k2.8-preview → Kimi-K2.8-Preview；
+  step-5-preview → Step-5-Preview；longcat-2.5-preview-free → LongCat-2.5-Preview；
+  deepseek-v3-2-volc → DeepSeek-3.2。
+- abbreviate() 兜底：flash → Flash、preview → Preview（不再出 -Fs / -Pre）。
+
+## 缺口与修法
+- classify 补 oc: 前缀分支（原来只有 cn:/global:/qoder:/qwen:/qn:，写 chat:oc:qwen3.8-max
+  会落兜底、upstream 带着 "oc:" 当型号名，实测打出「具体跳：OC:oc:qwen3.8-max」）。
+- MAIN_ORDER 贵备份拆两条：chat:qoder:Qwen3.8-Max + chat:oc:qwen3.8-max。
+
+## Qoder 免费窗口关闭（意外发现）
+- 23:44 实测 price 0.0 / billable false；23:59 变成 price 0.04 / peak 0.1 / valley 0.04、
+  usage.billable true、credits 0.1638，is_free 仍是 true（字段自相矛盾）。
+- 结果：Qwen-3.8-Flash 从免费组落到省钱组（0.03），链首仍是 QD（0.03 < OC 0.09）。
+  回归断言改成「QD 比 OC 兜底便宜且排链首」，不再写死 0.0。
+
+## 落地结果
+- apply（备份 provider_config.json.bak-alias-20261106-235908-524300）：主力 5
+  （HY4 0.29 / DeepSeek-4.1-Flash 0.11 / Qwen-3.8-Max 0.17 / MiMo-2.6-Flash 0.06 /
+  Space-Bunny 0.08）、免费 5（HY3 / HY4-Free / Beam / Conatus / Iceman）、省钱 8，合计 18。
+- 文档：docs/MODEL-ALIAS.md 新增 §2.2「为什么会漏模型」，§2 补尾缀规则表，
+  §3.2 加时效说明并改价格口径，§4 表格数字与 HY4-Std → HY4 同步。
+- 测试：新增 tests/test_model_alias_naming.py（7 条）；test_model_alias_qd_free.py 的链首
+  断言改为「最便宜」；test_model_alias_price.py 主力用例改用 OC 跳构造。56 passed。
+
+## 未做
+- 用响应 list_cost 反推单价：OC 各厂 in/out 倍率不同（deepseek-v4-pro 对得上，
+  mimo-v2.6-flash 对不上 OC_PRICES 的 0.06），硬填会把价格闸算歪。口径定为「缺价必须可见」。

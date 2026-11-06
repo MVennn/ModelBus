@@ -40,10 +40,27 @@ alias map **不含凭据**；上游 key 仍由路由按渠道从 `provider_confi
 例：`DeepSeek-4.1-Flash`、`GLM-5.3-Flash`、`Qwen-3.8-Max`、`Claude-Haiku-5.5`。
 
 - **不再带渠道**（原 `W/` `O/` `Q/`）**和积分**（原 `/0.03/`）。
-- 版本号保留点号（`4.1` / `3.8` / `2.6` / `5.3`），`Flash` 与 `Preview` 不再缩写（`DeepSeek-4.1-Flash`、`HY4-Pre`）。
+- 版本号保留点号（`4.1` / `3.8` / `2.6` / `5.3`），`Flash` 与 `Preview` 写全
+  （`DeepSeek-4.1-Flash`、`HY4-Preview`），不缩成 `-Fs` / `-Pre`。
 - 系列前缀保持可读：`DeepSeek`、`Qwen`、`GLM`、`MiniMax`、`Kimi`、`HY`、`MiMo`、
   `LongCat`、`Beam`、`Claude`、`GPT`、`Muse`、`Step`、`Space`。
-- 变体只保留模型本身有意义的：`Flash`、`Pre`=Preview、`Pro`、`Max`、`Plus`、`Vision`。
+- 变体只保留模型本身有意义的：`Flash`、`Preview`、`Pro`、`Max`、`Plus`、`Vision`。
+
+**不造后缀（2026-11-06 用户口径）**：显示名只承载「这是哪个模型」，不承载档位、
+渠道、积分。只有当上游确实存在两个不同模型、或同型号在协议上无法合并时才加后缀
+（`-Free` / `-Msg` / `-Resp`）。档位名一律不进显示名：
+
+| 上游 id | 显示名 | 依据 |
+|---|---|---|
+| `cn:hy4std` | `HY4` | 回包 `model` 就是 `hy4`，`-Std` 是 WorkBuddy 的档位 |
+| `cn:hy4-preview` / `-f` / `-ctrl` / `-exp1..3` / `-x` | `HY4-Preview` | 八个入口同一上游，回包 `model` 都是 `hy4-preview` |
+| `kimi-k2.8-preview` | `Kimi-K2.8-Preview` | 写全，不缩 `-Pre` |
+| `step-5-preview` | `Step-5-Preview` | 同上 |
+| `deepseek-v3-2-volc` | `DeepSeek-3.2` | `-volc` 是供应商后缀，不是型号 |
+
+实现：`abbreviate()` 的兜底只做大小写规整（`flash` → `Flash`、`preview` → `Preview`），
+不再把词首缩成两三个字母；`hy4-preview` 族走前缀规则统一归一。
+回归：`tests/test_model_alias_naming.py`。
 
 **同名冲突的两种处理：**
 
@@ -130,6 +147,54 @@ L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名�
 
 ---
 
+## 2.2 为什么会漏模型（2026-11-06）
+
+用户问「是不是很多模型也跟着漏了」。按当前快照（`model-alias-map.json` 的已用跳
+与各渠道 `/v1/models` 的全量列表做差）先给数量：
+
+| 渠道 | 上游型号 | 进链 | 未进链 |
+|---|---|---|---|
+| WB | 39 | 11 | 28 |
+| OC | 30 | 11 | 19 |
+| QD | 12 | 4 | 8 |
+| QW / QN | 1 / 1 | 1 / 1 | 0 / 0 |
+
+**大头不是 bug，是设计**：条目只从 `provider_config.json` 的 `personalModelIds` 与
+`providers/qwen/pools.json` 生成，上游 `/v1/models` 与价格表都不会自动建档。也就是
+「上游有 39 个、我们只用 11 个」是白名单的必然结果。未进链的 28 条 WB 型号可分四类：
+
+- **路由别名 / 不是模型**（8）：`auto`、`balanced-model`、`deep-model`、`fast-model`、
+  `wb-lite`、`hunyuan-chat`、`hunyuan-image-alpha`、`hunyuan-image-edit`（多条 `list` 为空）。
+- **旧一代**（10）：`deepseek-v3-1-lkeap` 0.52、`deepseek-v3-2-volc` 0.29、
+  `deepseek-v4-flash` 0.17、`deepseek-v4-pro` 0.51、`glm-5.0-turbo` 0.95、`glm-5.2` 0.79、
+  `minimax-m2.7` 0.26、`step-5-preview` 0.33、`kimi-k2.5` 0.45、`kimi-k2.8-preview` 0.77。
+- **hy4-preview 同族 7 个桶**：全 0.29，回包都是 `hy4-preview`，按 §2.1 判据是同一个模型，
+  只需一条（其中 `-preview-f` 的 `credits` 是空串，见 §3.1）。
+- **贵旗舰**（3）：`glm-5.3` 0.69、`kimi-k3-1` 1.62、`kimi-k3.1-pro` 0.97 —— 超过
+  `LOW_MAX = 0.11` 又不在主力名单，被价格闸挡掉。
+
+真正会**静默漏**的只有三层，这才是需要修的地方：
+
+1. **裸名去重吞掉同型号的不同渠道**。白名单补建原先只比「裸型号名」，`chat:qoder:…`
+   与 OC 的同名条目撞车就被判重复丢掉（2026-11-06 Qwen3.8-Flash 事故）。已修：
+   spec 写显式渠道（`qoder:` / `qwen:` / `cn:` / `global:` / `oc:`）即带
+   `explicit_channel`，按 `(渠道, 裸名)` 比对。
+2. **名单点名但查不到价 → 静默剔除**。`chat:Qwen3.8-Max` 就是这样：没写前缀 →
+   classify 猜 OC → OC_PRICES 没有 `qwen3.8-max` → 跳被丢掉，主力 2 号位实际只剩
+   QD 单跳、没有任何兜底，而且日志一个字都没有。已修：`_UNPRICED_HOPS` 收集缺价跳，
+   汇总行打「具体跳：…」（最多 12 条），`--apply` 时可见。
+3. **显式条目的跳命中不了名单**。`_picked()` / `_pick_rank()` 原来只比
+   `<协议>:<上游>` 裸写法，写了 `chat:qoder:Qwen3.8-Max` 的跳既不进主力判定、
+   也排不到名单名次（会被甩到组尾）。已修：`hop_specs()` 同时产出裸名与带渠道前缀的
+   两种写法，两处共用。
+
+补价这件事这次**没做**：用响应里的 `list_cost` 反推单价不可靠 —— OC 各厂的输入/输出
+倍率不同（`deepseek-v4-pro` 用 peak 0.77/1.54 折算对得上实测，`mimo-v2.6-flash` 就对不上
+`OC_PRICES` 里的 0.06），硬填会把价格闸算歪。现在的口径是「缺价必须可见」而不是
+「猜一个价填进去」。
+
+---
+
 ## 3. 跨渠道合并（chain）
 
 链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `TAIL_HOPS` 钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：
@@ -192,9 +257,15 @@ DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
 > 同轮还抓出 MiMo-2.6-Pro（0.18 应为 0.13）和一条 Qoder 源故障时吃静态回退
 > 留下的 0.0 假免费条目。
 
-### 3.2 白名单显式渠道 + 跨协议合并：Qoder 免费 Qwen3.8-Flash（2026-11-06）
+### 3.2 白名单显式渠道 + 跨协议合并：Qoder Qwen3.8-Flash（2026-11-06）
 
-Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里是
+> **时效（2026-11-06 23:59 复核）**：免费窗口已经关闭。`/v1/models` 从
+> `price 0.0 / valley 0.0` 变成 `price 0.04 / peak 0.1 / valley 0.04`（`is_free` 仍是
+> `true`，字段自相矛盾），实测 `usage.billable` 从 `false` 变 `true`、`credits`
+> 0.1638。它比 OC 的 0.09 便宜，仍然排链首，但已经不落免费组。下面的「0.0 / 不扣积分」
+> 是 23:44 的事实，保留作历史依据。
+
+Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里曾是
 `price_factor 0.0 / original_price_factor 0.1 / is_free true`，错峰规则
 `idle_time_model_credit_discount`（22:00–08:00 UTC+8 四折）之外，`/v1/models`
 回的是 `price 0.0 / peak 0.1 / valley 0.0`。实测经 8790 打 6 次，usage 里
@@ -213,23 +284,25 @@ Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里是
    `Qwen-3.8-Flash` 与 `Qwen-3.8-Flash-Msg` 两个分身。现在
    `MERGE_ACROSS_PROTOCOL` 与 `MERGE_FREE_GB` 都加了 `qwen3.8-flash`。
 
-结果是一条链、一个显示名，落免费组：
+结果是一条链、一个显示名（免费窗口内落免费组，关闭后落省钱组）：
 
 ```
 Qwen-3.8-Flash   chain: QD:Qwen3.8-Flash -> OC:qwen3.8-flash -> OC:qwen3.8-flash(机场孪生)   price 0.00
 ```
 
-白天 QD 按 peak 0.1 计（×`QD_FACTOR` 0.86 ≈ 0.086），仍略低于 OC 的 0.09；渠道 rank
-OC 与 QD 同为 1，第二键是价格 —— 所以**白天夜里链首都还是 QD**，只是价格不同：
+QD 按峰谷计价（×`QD_FACTOR` 0.86）：夜里 valley 0.04 → 0.03，白天 peak 0.1 → 0.086，
+两种都低于 OC 的 0.09；渠道 rank 里 OC 与 QD 同为 1，第二键是价格 —— 所以**链首
+始终是 QD**，只有价格和分组在动：
 
-- 错峰窗口（22:00–08:00）= 0.0 → `--apply` 时落**免费组**；
-- 白天（12:00 的每日同步）= 0.086 → 落**省钱组**，同一条链，同一个显示名。
+- 错峰窗口（22:00–08:00）= 0.03 → 落**省钱组**（免费窗口期曾是 0.0 → 免费组）；
+- 白天（12:00 的每日同步）= 0.086 → 也落**省钱组**，同一条链，同一个显示名。
 
-也就是说分组每天会在这两组之间摆一次，属于预期，不是漂移（`--check` 用同参数复算，
-白天算白天、夜里算夜里，两边都自洽）。白天的 0.086 是否真扣积分**未实测**（本轮
-只在 23:44 测过夜间），下一个白天再打几发核 `usage.billable` 与 `credits.remain`。
+分组会随上游调价摆动，属于预期，不是漂移（`--check` 用同参数复算，白天算白天、
+夜里算夜里，两边都自洽）。回归断言不写死价格，只断言「QD 比 OC 兜底便宜且排链首」，
+上游涨价越过 OC 时测试会红。
 
-回归：`tests/test_model_alias_qd_free.py`（显式渠道标记 3 条 + 链首 QD / 无分身 2 条）。
+回归：`tests/test_model_alias_qd_free.py`（显式渠道标记 3 条 + 链首 QD 且最便宜 / 无分身 2 条）
+与 `tests/test_model_alias_naming.py`（尾缀规则 + `oc:` 前缀解析）。
 回退：删掉 `LOW_ORDER` 里的 `chat:qoder:Qwen3.8-Flash` 与两个 `MERGE_*` 常量里的
 `qwen3.8-flash`，再跑一次 `--apply`。
 
@@ -242,9 +315,9 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 
 | 组（providerId） | 装什么 | 判定 |
 |---|---|---|
-| **主力** `opencode-go-chat` | `HY4-Std`（WB 单跳 0.29，竞技榜建模 #8 / 网页 #10）+ `DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份）+ 竞技榜达标的两条（`MiMo-2.6-Flash` / `Space-Bunny`） | `MAIN_IDS`，键是 `<协议>:<上游 id>`，**不受价格上限约束**；白名单点名但配置里没有的型号会补建条目（见 §6） |
-| **免费** `opencode-go-chat-free` | 真免费条目（当前 6 条） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
-| **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 7 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.19 能在组里）；名单外另有一条 **自动补位**（见下） |
+| **主力** `opencode-go-chat` | `HY4`（WB 单跳 0.29，竞技榜建模 #8 / 网页 #10）+ `DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份，QD 单跳 0.17；OC 同名跳缺价未收录）+ 竞技榜达标的两条（`MiMo-2.6-Flash` / `Space-Bunny`） | `MAIN_IDS`，键是 `<协议>:<上游 id>`（可写显式渠道，如 `chat:qoder:Qwen3.8-Max`），**不受价格上限约束**；白名单点名但配置里没有的型号会补建条目（见 §6） |
+| **免费** `opencode-go-chat-free` | 真免费条目（当前 5 条：HY3 / HY4-Free / Beam / Conatus / Iceman） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
+| **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 8 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.13 能在组里）；名单外另有一条 **自动补位**（见下） |
 | ~~高耗~~ | 已删除 | 不在两个名单里且价格 > 0.11 → **不收录** |
 
 为什么这么切：用户的实际选择只有「DeepSeek」和「免费」。按价格四档会让
