@@ -326,7 +326,7 @@ curl -si -X POST http://127.0.0.1:7863/v1/chat/completions \
 
 ## 11. 网关 / 统一入口没起来 【实例 B】
 
-**现象**：WorkBuddy 模型连不上 `127.0.0.1:7863`，或四组模型都连不上 `127.0.0.1:7871`；
+**现象**：WorkBuddy 模型连不上 `127.0.0.1:7863`，或三组（主力 / 免费 / 省钱）统一入口连不上 `127.0.0.1:7871`；
 开机后 zgate 没生效；或者 Qoder 上游没在跑。
 
 **排查**
@@ -338,15 +338,15 @@ gateways/zgate/zgate.exe status
 # 2) 看 zgate 日志（每个请求一行、子进程起停、错误；UTF-8）
 python -c "import os; p=os.path.join(os.environ['LOCALAPPDATA'],'ZCodeGateway','zgate.log'); print(open(p,encoding='utf-8').read()[-3000:])"
 
-# 3) 看开机自启在不在
-ls "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/" | grep -i zcode
+# 3) 看开机自启在不在（现行是两个计划任务，不再是 Startup 快捷方式）
+schtasks /query /tn "ModelBus-zgate-hidden" /fo LIST; schtasks /query /tn "ModelBus-zgate-watchdog" /fo LIST
 ```
 
 **原因 / 解法**（均为**【实例 B】**）
 
 | 原因 | 解法 |
 |---|---|
-| zgate 没在跑（没装自启 / 被杀） | `gateways/zgate/zgate.exe serve` 前台起一次看报错；再 `zgate.exe install` 重建自启 |
+| zgate 没在跑（没装自启 / 被杀） | 前台 `gateways/zgate/zgate.exe serve` 看报错；再跑 `tools/zgate-lifecycle/install-lifecycle.ps1` 校正两个计划任务，或 `schtasks /run /tn "ModelBus-zgate-hidden"` 立即拉起（`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 7871 被别的进程占着 | `zgate.exe serve` 会明确报「监听失败」；用 `netstat -ano \| findstr 7871` 找出占用者 |
 | 配置路径不对（`gateways/zgate/zgate.json`） | `zgate.exe status` 第一段会打印实际读到的配置、alias map 与日志路径 |
 | WorkBuddy 冷启动失败 | 看 `%LOCALAPPDATA%\ZCodeGateway\workbuddy.stderr.log`；确认 `gateways/upstream/workbuddy/wb2api.exe` 与 `config.json` 存在（clone 整目录被 `.gitignore` 排除，**克隆后不会自带**，重建见 [MAINTENANCE.md](MAINTENANCE.md) §8.4） |
@@ -356,8 +356,8 @@ ls "$APPDATA/Microsoft/Windows/Start Menu/Programs/Startup/" | grep -i zcode
 | `status` 的 Provider 段显示 key 缺失 | 四组没指向 7871，或 provider 里没有 apiKey：重跑 `python tools/model_alias.py --slot auto --apply`，或检查 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` |
 | 想彻底回到手动 | `zgate.exe uninstall` 移除自启；网关仍可用 `gateways/upstream/workbuddy/run.bat`、Qoder 用 `start-qoder-proxy.bat` 单独起 |
 
-> zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管两个子进程
-> （WB `ondemand`、Qoder `always`）。ZCode 最小化到托盘不影响任何进程，
+> zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管 3 个子进程
+> （workbuddy / qoder / cliproxyapi，均 `ondemand` + `windows` 定时窗口兜底）。ZCode 最小化到托盘不影响任何进程，
 > 这是预期行为。生命周期设计与配置项见 [MAINTENANCE.md](MAINTENANCE.md) §8。
 
 ---
@@ -499,10 +499,61 @@ ls -la gateways/zgate/zgate.exe
 | 产物是控制台程序，但 exe 正被占用改不动 | zgate 在运行时 Windows 会锁住文件。先停掉（zgate 没有 `stop` 子命令）：`Stop-Process -Id <pid> -Force`；再重编、再起 |
 | 快捷方式 `WindowStyle = 7` 没用 | 「最小化」只对有窗口的程序有效，对控制台子系统程序**不等于隐藏**。而且实测那个窗口既没最小化、也是可见的 —— 唯一解法是让产物本身是 GUI 子系统 |
 | 想确认没有别的控制台窗口 | `Get-Process conhost | Where-Object { $_.MainWindowTitle }`；无输出即没有 |
-| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。用 explorer 拉起可存活：`Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"'` |
+| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。要让 Task Scheduler 当父进程才活得下来：`schtasks /run /tn "ModelBus-zgate-hidden"`，或等看门狗（PT1M）自动拉回；会话里直接 `Start-Process zgate.exe` 会被回收 |
 
 > 机制解释见 [PITFALLS.md](PITFALLS.md) §20；构建命令与脚本见
 > [MAINTENANCE.md](MAINTENANCE.md) §8.1。
+
+### 16.1 终端里起的 zgate 随窗口关闭而死
+
+**现象**：在 cmd / Windows Terminal 里敲 `zgate serve`（或双击 exe），网关跑起来；一关那个窗口，三组统一入口立刻全 502，`/health` 拒连。
+
+**原因**：`zgate serve` 是前台进程，控制台窗口关闭会给窗口内所有进程发 `CTRL_CLOSE_EVENT`；子进程（wb2api 等）挂在 zgate 的 Job Object 上一起走。这不是 bug，是前台进程的正常语义 —— 要让网关活过终端，就得让终端不是它的父。
+
+**解法**（0.3.0 起）
+
+```cmd
+:: 后台起，立刻返回；关掉这个窗口不影响网关
+zgate.exe serve -tray
+```
+
+- `serve -tray` 用 `DETACHED_PROCESS` 拉一个**无父进程**的副本：副本没有控制台，收不到关窗事件；拉起方退出后副本照常服务。
+- 拉起方通过环境变量把自身 PID 传给副本，副本每 2 秒查一次：拉起它的进程消失就自己退出，不留孤儿占端口。日志里是 `拉起方 <pid> 已退出，后台副本随之停止`。
+- 前台 `zgate serve` 现在打完启动横幅就 `FreeConsole` 解放控制台，避免留下半死的 `conhost`；输出仍写日志文件，重定向（`zgate status > out.txt`）不受影响。
+- **2026-11-09 起的现行自启不是快捷方式、也不是 `serve -tray`**：两个计划任务
+  `\ModelBus-zgate-hidden`（AtLogOn，Interactive/Limited → `wscript //B //Nologo launch-zgate.vbs`
+  → `start-zgate-nw.ps1` 起普通 `serve`）与 `\ModelBus-zgate-watchdog`（PT1M → `ensure-zgate.vbs`
+  → `ensure-zgate.ps1`）。`zgate install` / `uninstall` 只管旧的启动文件夹快捷方式，正常情况下不跑。
+  `swap-zgate.ps1` / `start-zgate.bat` 已改为兼容薄包装转交计划任务，**不再用 `Start-Process`**。
+  旧的 `\ModelBus-zgate` 任务、HKCU Run daemon、Startup 快捷方式均已移除。
+
+**验证**
+
+```cmd
+zgate.exe serve -tray
+:: 应有一行「已在后台启动: <exe> (pid N, ready=true)；停止: Stop-Process -Id N」
+curl http://127.0.0.1:7871/health
+:: 关掉这个窗口再开一个：/health 仍 200
+```
+
+**注意**：`DETACHED_PROCESS` 只表示「不共享控制台」，不保证**调用方整棵进程树被回收**时仍存活（`cmd /c`、`Start-Process` 结束后会连带带走，已实测）。要彻底解耦，用计划任务启动 —— 自启走的就是这条路。
+
+### 16.2 改完 Go 代码怎么自动换版
+
+**现象**：改了 `gateways/zgate/` 下的 Go 代码，`POST /admin/reload` 之后新逻辑没生效。
+
+**原因**：`/admin/reload` 热加载 `zgate.json` 的策略 / 空闲阈值 / 定时窗口 / 上游 base / 凭据
+（`gateways/zgate/internal/router/router.go:963-986`：`config.Load` + `keys.Load` 六通道 + `ApplyConfig(children)` + `setRuntime` + `aliases.Reload()`），不替换二进制；
+监听地址 / 新增子进程 / alias map 路径与 Go 代码变更必须换 `zgate.exe` 并重启实例。
+
+**解法**：agent 改完 Go 代码后自动执行 `tools/zgate-lifecycle/restart-zgate.cmd`（CMD 入口，
+转交 `deploy-zgate.ps1`）：`build.py --candidate` 编到 `zgate.candidate.exe`（不覆盖运行中的 exe）
+→ 暂停 watchdog → `Stop-Process zgate` → 备份 → 替换 → `schtasks /run /tn ModelBus-zgate-hidden`
+→ `/health` 轮询 → 恢复 watchdog → 失败自动回滚。全过程不需要用户手动重启。
+
+**注意**：严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate —— 它们落在 CMD/DSH 会话的
+Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程消失）。机制与完整流程见
+[ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 ---
 

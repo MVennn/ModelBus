@@ -242,9 +242,9 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 | 周期 | 动作 |
 |---|---|
-| **每天 12:00（定时任务 `automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）** | 五段顺序：① `python providers/opencode-go/ops/go_model_sync.py --apply`（体检对地区受限型号自动经机场复测，**不要**再用「403 就删」的旧口径判读）；② WorkBuddy（`workbuddy_fetch_pricing.py` → `workbuddy_probe_zcode.py --max-rate 0.3 --sleep 20` → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_probe_zcode.py --timeout 90 --sleep 3` → `qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply`）；④ `python tools/model_alias.py --slot auto --apply` 归一化三组与 alias map，并自动调用 `tools/dsh_sync.py --apply` 把最终三组投影到本机 DeepSeekRuntime（使用默认 ZCode 配置路径时；DSH 未安装自动跳过；失败只告警不阻断；`--no-dsh` 可关闭），随后 `python tools/model_alias.py --check` 确认无漂移；⑤ `python tools/sync_report.py --write --push` 生成 `docs/reports/MODEL-SYNC-<时间>.md`（写明新增 / 移除 / 分组 / 链路变化）、更新报告索引并提交推送。手动补跑也按这个顺序；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
+| **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_zcode_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply`；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
 | **每天（可选，全量体检）** | `python tools/model_probe.py` → `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；定时任务不跑全量 probe，各 sync 自带定向探测。规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6 |
-| **每天 08:00 / 22:00 + 工作日 09:00 / 12:00 / 14:00 / 18:00** | `python providers/workbuddy/workbuddy_fetch_pricing.py` → `python tools/model_alias.py --slot auto --apply`（峰谷价切换，见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1；默认配置路径下也会自动同步 DSH） |
+| **峰谷价切换** | 不额外注册 08:00 / 22:00 峰谷任务：`--slot auto` 在每天 12:00 运行时按当前时刻取价，下一次同步自然纠正（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1 与「现行自动切换」段） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
 | **换套餐 / 换账号池后** | 全量重探 WorkBuddy（`--sleep 20`）+ 重跑同步 |
 | **2026-11-30 前后** | 七牛 `qiniu/conatus-free` 的限时免费到期：`QN_FREE_UNTIL` 会让该跳自动消失，只需跑一次 `python tools/model_alias.py --slot auto --apply` 确认免费组只剩 4 条。想续用就换其它 `-free` 模型（[QINIU.md](QINIU.md) §3） | 详见 [QINIU.md](QINIU.md) |
@@ -275,17 +275,18 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 ## 8. 网关生命周期（zgate）
 
-2026-10-23 起，三个反代由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
-它监听 `127.0.0.1:7871`，按 alias map 把四个 chat provider 的请求分流到三条上游，
-并按策略拉起 / 回收两个本地上游进程：
+2026-10-23 起，6 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
+它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 6 条上游（OC / WB / QD / QW / QN / CP），
+并按策略拉起 / 回收 3 个本地子进程（workbuddy 7863 / qoder 8790 / cliproxyapi 8317）：
 
 | 上游 | 端口 | 谁在跑 | 策略 |
 |---|---|---|---|
-| OpenCode-Go | 远程 | — | 直连，无本地进程 |
+| OpenCode-Go（OC）/ Qwen（QW）/ Qiniu（QN） | 远程 | — | 直连，无本地进程 |
 | WorkBuddy（`wb2api`） | 7863 | zgate 的子进程 | `ondemand`：首个 WB 请求时拉起，空闲 300 秒回收 |
-| Qoder（`qoder_proxy.py`） | 8790 | zgate 的子进程 | `ondemand`：同上，随用随拉 |
+| Qoder（QD，`qoder_proxy.py`） | 8790 | zgate 的子进程 | `ondemand`：同上，随用随拉 |
+| CLIProxyAPI（CP，`cli-proxy-api.exe`） | 8317 | zgate 的子进程 | `ondemand`：`windows` 为空，纯按需，首个 CP 请求时拉起 |
 
-两个上游都**不常驻**：没人用就一个都不起，zgate 自己只占约 19 MB。
+三个子进程都**不常驻**：没人用就一个都不起，zgate 自己只占约 19 MB。
 签到 / 保活这类定时任务靠 `children.*.windows` 兜底 —— 窗口内按 `always` 处理，
 窗口结束后若没有请求，再按 `idleSeconds` 回收：
 
@@ -295,8 +296,8 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | Qoder | `08:58-09:15`、`20:58-21:15`、`21:58-22:15` | 签到 9/21 点、保活 22 点 |
 
 策略与窗口写在 `gateways/zgate/zgate.json`，改完用 `zgate.exe reload` 热加载
-（新增子进程、监听地址、上游 base 仍要重启）。
-子进程装在 **Job Object** 里，zgate 崩溃或被结束时会一起收掉，不会留下占着 7863 / 8790 的孤儿。
+（新增子进程、监听地址、alias map 路径仍要重启；上游 base / 凭据可在 reload 里热加载）。
+子进程装在 **Job Object** 里，zgate 崩溃或被结束时会一起收掉，不会留下占着 7863 / 8790 / 8317 的孤儿。
 
 ### 8.1 日常命令
 
@@ -304,16 +305,38 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 |---|---|
 | 看状态（服务是否在跑 / 子进程 / 端口 / 凭据有无） | `gateways/zgate/zgate.exe status` |
 | 前台启动（排错用；正常由登录自启拉起） | `gateways/zgate/zgate.exe serve` |
-| 注册登录自启 | `gateways/zgate/zgate.exe install` |
+| 注册登录自启（现行） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（写两个计划任务；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 移除登录自启 | `gateways/zgate/zgate.exe uninstall` |
-| 热加载策略/窗口（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload` |
-| 健康检查 | `curl http://127.0.0.1:7871/health`（含每个子进程的 `state` / `pid` / `idle_s`） |
+| 热加载配置 / 上游 base / 凭据（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload`；监听地址 / 新增子进程 / alias map 路径 / Go 代码用 `restart-zgate.cmd` |
+| 健康检查 | `curl http://127.0.0.1:7871/health`（六段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
 | 只重启 WorkBuddy 上游 | `taskkill /IM wb2api.exe /F`，下一次 WB 请求自动拉起 |
 | 只重启 Qoder 上游 | `taskkill /IM python.exe /F` 后用下面的 bat 兜底，或重启 zgate |
 | 重新构建 zgate | `python gateways/zgate/build.py` |
+| 编候选 exe（不覆盖运行中） | `python gateways/zgate/build.py --candidate` → `gateways/zgate/zgate.candidate.exe` |
+| 部署 / 校正本机安全脚本与两个计划任务动作 | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（脚本落到 `%LOCALAPPDATA%\ZCodeGateway`） |
+| **改完 Go 代码后自动换版（CMD 入口）** | `tools/zgate-lifecycle/restart-zgate.cmd`（转交 `deploy-zgate.ps1`；`-SkipBuild` 用已就绪候选） |
+| 换版正本（PowerShell） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1` |
 
-自启方式是**启动文件夹快捷方式**（`%APPDATA%\Microsoft\Windows\Start Menu\Programs\Startup\ModelBus zgate.lnk`）——
-`schtasks /create /sc ONLOGON` 在当前权限下会被拒绝（拒绝访问），快捷方式不需要管理员。
+自启方式（**2026-11-09 起**）是**计划任务 `\ModelBus-zgate-hidden`**（AtLogOn，当前用户、Interactive、Limited，
+无需管理员）：`wscript //B //Nologo %LOCALAPPDATA%\ZCodeGateway\launch-zgate.vbs` →
+`start-zgate-nw.ps1`（用 `CreateNoWindow` 拉起 `zgate.exe serve`；端口已占用则写 `port already up, skip`
+直接退出；脚本跑完即退，**不留驻留进程**）。兜底看门狗 `\ModelBus-zgate-watchdog` 每 1 分钟
+→ `ensure-zgate.vbs` → 同一个 `start-zgate-nw.ps1`。
+
+旧的启动文件夹快捷方式 `ModelBus zgate.lnk`、HKCU Run 的 `ZcodeAIModels-zgate-daemon`、以及
+直接跑 exe 的旧任务 `\ModelBus-zgate` 都已移除（2026-11-09；备份与回滚：
+`%LOCALAPPDATA%\ZCodeGateway\autostart-backup-20261109\restore-autostart.ps1`，需管理员）。
+`zgate install` / `uninstall` 仍只管启动文件夹快捷方式，正常情况下不需要再跑——重跑会多出一条
+自启路径并让第二实例在 `zgate.log` 里留下 `bind: Only one usage of each socket address` 噪音。
+
+> **2026-11-09 起改完 `gateways/zgate/` 下的 Go 代码由 agent 自动跑
+> `tools/zgate-lifecycle/restart-zgate.cmd` 换版，不再要求用户手动重启**。
+> 该入口编候选 → 暂停 watchdog → `Stop-Process zgate` → 备份 → 原子替换 →
+> `schtasks /run /tn \ModelBus-zgate-hidden` → `/health` 轮询 → 恢复 watchdog，失败自动回滚旧二进制。
+> `POST /admin/reload` 热加载策略 / 空闲 / 窗口 / 上游 base / 凭据（`keys.Load` 六通道 + `ApplyConfig(children)` + `aliases.Reload()`）；监听地址 / 新增子进程 / alias map 路径与 Go 代码变更必须换版
+> 重启（源码 `router.go:984` 的 note）。**严禁在会话里用 `Start-Process` /
+> `cmd /c` 直接拉起 zgate**（会落进会话 Job Object 被回收）。完整流程见
+> [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登录自启
 **零窗口、零乱码**，日志只落 `%LOCALAPPDATA%\ZCodeGateway\zgate.log`；在终端里跑
@@ -341,7 +364,7 @@ zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登�
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `listen` | `127.0.0.1:7871` | 四个 chat provider 的 `baseUrl` 指向这里；环境变量 `ZGATE_LISTEN` 可覆盖 |
+| `listen` | `127.0.0.1:7871` | 统一命名（22 个）与 legacy 键（94 个）的 `baseUrl` 指向这里；环境变量 `ZGATE_LISTEN` 可覆盖 |
 | `aliasMap` | `~/.zcode/v2/model-alias-map.json` | 显示名 → 上游；按 mtime 热加载，改完不用重启 |
 | `providerConfig` | `~/.zcode/v2/provider_config.json` | 凭据兜底来源 |
 | `children.<name>.policy` | `ondemand` | `always` 常驻 / `ondemand` 按需（默认谁都不用就不起） |
@@ -360,7 +383,7 @@ zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登�
 
 ### 8.4 上游 clone 的更新
 
-两个上游仍是**独立 clone**，整目录被主仓 `.gitignore` 排除（含账号凭据与运行时状态）。
+WorkBuddy / Qoder 两个上游仍是**独立 clone**，整目录被主仓 `.gitignore` 排除（含账号凭据与运行时状态）；CLIProxyAPI 落在 `third-party/cliproxyapi/`，CP 凭据键名见 [SECRETS.md](SECRETS.md) §3.5。
 
 | 场景 | 命令 |
 |---|---|
@@ -409,6 +432,7 @@ Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒）�
 | 脚本改 ZCode 配置的哪几处、三个 `--apply` 脚本的行为差异 | [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §1、§1.1 |
 | Qoder 的端口、账号、同步与探测 | [QODER.md](QODER.md) |
 | 排障步骤 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
+| 网关父链 / 计划任务 / 换版流程 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) |
 
 ---
 

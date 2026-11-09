@@ -1,7 +1,7 @@
 # AGENTS.md — 本仓库的机器协议
 
-> **一句话**：三条硬规矩 —— **PROGRESS 按逻辑任务分家**、**凭据只走环境变量**、
-> **有 CodeGraph 就先用 CodeGraph**。其它都能从 `docs/` 里查到。
+> **一句话**：四条硬规矩 —— **PROGRESS 按逻辑任务分家**、**凭据只走环境变量**、
+> **有 CodeGraph 就先用 CodeGraph**、**改完 Go 代码自动走 `restart-zgate.cmd` 换版**。其它都能从 `docs/` 里查到。
 
 ---
 
@@ -49,6 +49,10 @@
 | ZCode 配置文件路径 | 环境变量 **`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`** |
 | ZCode 内置规则文件 | 环境变量 **`ZCODE_BUILTIN`** |
 | 代理会话头 | 环境变量 **`OPENCODE_SESSION`** |
+| Qoder 网关 key | 环境变量 **`QD_API_KEY`**（也可用 git-ignored 的 `providers/qoder/.env.local`） |
+| 千问直连 | 环境变量 **`QWEN_API_KEY`** / **`QWEN_BASE`** |
+| 七牛云 AI 网关 | 环境变量 **`QINIU_API_KEY`** |
+| CLIProxyAPI（CP，`8317`） | 环境变量 **`CLIPROXY_API_KEY`** |
 
 > ✅ `providers/opencode-go/probe/` 下的 `probe_models.py`、`probe_protocols.py`、
 > `bench_models.py`、`bench_clean.py`、`thinking-off-probe.js` 已统一读 `OPENCODE_GO_KEY` 环境变量；
@@ -63,10 +67,12 @@
 
 **仓库根有 `.codegraph/` 就优先用它查符号与调用路径；没有就退回普通检索（Grep / Read / glob）。**
 
-- 判断依据：仓库根存在 `.codegraph/` 目录才算已索引。当前工作副本已索引
+- 判断依据：仓库根存在 `.codegraph/` 目录才算已索引。当前索引**存在但可能陈旧**
   （`.codegraph/` 被 `.gitignore` 排除，不随仓库分发）。
-- 有索引时优先 `codegraph_explore` / `codegraph explore "<问题>"`；
-  新克隆或索引失效时直接普通检索，需要再 `codegraph init -y`。
+- 每会话先跑一次 `codegraph_status` 看健康度；**会话内不自行 `codegraph init`**（索引是否重建由人决定），
+  只有报 **stale** 才跑 `codegraph_sync`；索引缺失时用普通检索继续干活并提示人执行 `codegraph init`。
+- 有索引时定向查用 `codegraph_explore` / `codegraph_callers` / `codegraph_callees` / `codegraph_node`；
+  callers/callees/impact 不保证完整（会漏未解析的方法 / 泛型 / trait 派发边），要 100% 准确改用 grep。
 - 无论有没有索引，**改动前后都要把 `docs/README.md` 的索引对齐**（孤儿文档零容忍）。
 
 ---
@@ -92,3 +98,10 @@
 - **不要 `git init` / `git add` / 提交**，除非明确要求。
 - **不要动** `docs/MODEL-QUICK-REF.md`、`docs/archive/`、`evidence/`、`PROGRESS.md`
   与任何脚本，除非任务明确要求改它们。
+
+---
+
+## 6. zgate 换版硬规则
+
+- **改完 `gateways/zgate/` 下的 Go 代码后，agent 自动执行 `tools/zgate-lifecycle/restart-zgate.cmd` 完成编译候选 + 受控换版，不再要求用户手动重启**；换 Go 代码必须换二进制。`POST /admin/reload` 热加载 `zgate.json` 的策略 / 空闲 / 窗口 / 上游 base / 凭据（`keys.Load` 六通道 + `ApplyConfig(children)` + `aliases.Reload()`，`router.go:963-986`）；监听地址 / 新增子进程 / alias map 路径仍需换版重启。
+- **严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate** —— 它们落在 CMD/DSH 会话的 Job Object 里，会话结束整棵进程树被回收；拉起只走计划任务 `\ModelBus-zgate-hidden` 父链。机制与换版流程见 [docs/ZGATE-LIFECYCLE.md](docs/ZGATE-LIFECYCLE.md)。

@@ -1,13 +1,14 @@
 # 运行架构整合方案
 
-> **一句话**：把现在的「PowerShell 守护 + Node 路由 + 两个上游进程」收敛成
-> **一个 Go 入口进程 + 按需拉起的子进程**，实测常驻内存 293 MB → ~128 MB
-> （ZCode 关闭时 ~20 MB），目录按「运行层 / 接入层」两轴重排。
+> **一句话**：把「PowerShell 守护 + Node 路由 + 本地网关进程」收敛成
+> **一个 Go 入口进程 + 6 个 upstream / 3 个按需拉起的 child**（WB / Qoder / CLIProxyAPI），
+> 落地时实测常驻内存从 293.4（MB，改造前 4 进程）降到 ~128 MB（ZCode 关闭时 ~20 MB）；2026-11-09 空闲态另测 64.0 MB（zgate + wb2api，qoder / CP 未拉起），数字随时点与子进程状态变化，目录按「运行层 / 接入层」两轴重排。
 
-**状态：已落地（2026-10-23）。**
-运行层现在是 `gateways/`：`zgate`（Go）监听 7871 并托管两个子进程；
-接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
-[MAINTENANCE.md](MAINTENANCE.md) §8。
+**状态：已落地（2026-10-23），现行架构 2026-11-09 对齐。**
+运行层现在是 `gateways/`：`zgate`（Go）监听 `127.0.0.1:7871`，按 `zgate.json` 托管
+6 个 upstream（OC / WB / QD / QW / QN / CP）与 3 个 child（workbuddy :7863、qoder :8790、
+cliproxyapi :8317）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
+[MAINTENANCE.md](MAINTENANCE.md) §8，自启与换版见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 ---
 
@@ -37,8 +38,8 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 | 场景 | 今天 | 整合后 |
 |---|---|---|
-| ZCode 开着，三条线路都在用 | ~293 MB | ~128 MB |
-| ZCode 开着，只用 OpenCode-Go | ~293 MB | ~20-48 MB（子进程按需/空闲回收） |
+| ZCode 开着，三条线路都在用 | ~293.4（MB） | ~128 MB |
+| ZCode 开着，只用 OpenCode-Go | ~293.4（MB） | ~20-48 MB（子进程按需/空闲回收） |
 | ZCode 关着 | ~194 MB（守护器 + Qoder 常驻） | ~20 MB（任务窗口内 ~90 MB） |
 
 ---
@@ -72,12 +73,12 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 | 约束 | 来源 | 对方案的影响 |
 |---|---|---|
-| ZCode 每个 provider 只能填一个 `api.baseUrl` | 客户端机制 | 四组必须共用 7871 入口 → 路由不能去掉 |
-| 四个组里混着三个渠道的模型 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | 分流必须按 alias map 的 `chain` 做，不能按组做 |
+| ZCode 每个 provider 只能填一个 `api.baseUrl` | 客户端机制 | 三组（主力 / 免费 / 省钱）必须共用 7871 入口 → 路由不能去掉 |
+| 三组里混着 6 个 upstream 的模型 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | 分流必须按 alias map 的 `chain` 做，不能按组做 |
 | 两个上游是 git clone，更新方式是 `git pull --ff-only` | [MAINTENANCE.md](MAINTENANCE.md) §8 | 不能改上游源码；只能当子进程管 |
 | Qoder 自带调度器（09:00 / 21:00 签到、22:00 保活） | [QODER.md](QODER.md)、`qoder_scheduler.py` | 停掉即漏任务，除非由外部在窗口内拉起 |
 | WorkBuddy 自带签到/活跃/夜猫子/额度刷新，且**只在进程活着时跑** | [MAINTENANCE.md](MAINTENANCE.md) §8 副作用 | 现状已经因为跟 ZCode 起停而漏跑；整合时可以顺手修 |
-| 协议桥要处理 Anthropic Messages / OpenAI Responses / 思考字段 / 工具调用 / SSE 合成 | `tools/protocol_bridge.js`（375 行） | 重写必须做等价性回归，不能"看着差不多" |
+| 协议桥要处理 Anthropic Messages / OpenAI Responses / 思考字段 / 工具调用 / SSE 合成 | `gateways/zgate/internal/bridge/bridge.go`（Go 正本，已支持流式；旧 `tools/protocol_bridge.js` 退役） | 等价性回归见 bridge / stream / egress 共 49 个 Go 测试，不能"看着差不多" |
 
 ---
 
@@ -90,27 +91,29 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 | 子命令 | 做什么 |
 |---|---|
 | `zgate serve` | 常驻：监听 7871，做 alias 分流 + 协议桥 + 子进程守护 |
+| `zgate serve -tray` | 同上，但以 `DETACHED_PROCESS` 拉起无父进程副本后立即返回；**实测不保证调用方整棵进程树被回收时存活**（`cmd /c`、`Start-Process` 结束后 2s 内子进程消失）。现行自启不用它，改走计划任务父链下的普通 `serve`（见 §10.2、[ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)） |
 | `zgate status` | 打印各通道/子进程/alias 条数/最近错误（`--json` 给脚本用） |
-| `zgate install` / `uninstall` | 注册 / 移除"登录时启动"的计划任务（替代 `.vbs` + 启动文件夹） |
+| `zgate install` / `uninstall` | 注册 / 移除启动文件夹快捷方式 `ModelBus zgate.lnk`（不需要管理员）。现行自启已改为计划任务 `\ModelBus-zgate-hidden`（见 §10.2），这两个命令平时不用跑 |
 | `zgate replay` | 拿录制的黄金样本回放，和 JS 路由的结果做逐字段比对（见 §6.1） |
 
 ### 3.2 进程模型
 
 ```
 ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
-             │
-             ├─ alias 未命中/OC 通道 ──▶ https://opencode.ai/zen/go/v1（远程，无本地进程）
-             ├─ WB 通道 ──▶ 子进程 wb2api.exe :7863   （按需拉起 / 空闲回收）
-             └─ QD 通道 ──▶ 子进程 python qoder_proxy.py :8790（按需拉起 / 空闲回收）
+             │  zgate.json 配 6 个 upstream：OC / WB / QD / QW / QN / CP
+             ├─ OC / QW / QN ──▶ 远程（opencode.ai / 千问 / 七牛云，无本地进程）
+             ├─ WB 通道 ──▶ 子进程 wb2api.exe :7863          （按需拉起 / 空闲回收）
+             ├─ QD 通道 ──▶ 子进程 python qoder_proxy.py :8790（按需拉起 / 空闲回收）
+             └─ CP 通道 ──▶ 子进程 cli-proxy-api.exe :8317    （按需拉起 / 空闲回收）
 ```
 
-- **监听面不变**：仍然只有 7871 对 ZCode 暴露；7863 / 8790 继续只绑 `127.0.0.1`。
+- **监听面不变**：仍然只有 7871 对 ZCode 暴露；7863 / 8790 / 8317 继续只绑 `127.0.0.1`。
 - **子进程用 Windows Job Object 托管**：`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，
   zgate 崩了/被结束，子进程一起收掉，不会留孤儿（现在靠 PowerShell 启动时对账清理）。
 - **单飞（single-flight）拉起**：同一通道并发首请求只触发一次启动，其余请求排队等
   健康检查就绪（`zgate.json` 的 `startTimeoutSeconds`：WB 30 s / Qoder 40 s，源码缺省 25 s，超时返回 503 而不是挂死）。
 - **崩溃重启**：带指数退避（1s → 2s → 4s → … → 60s，见 `internal/supervisor/supervisor.go`）；
-  `failCount` 只喂给退避计算，**没有降级标记**，`/health` 的 `States()` 也不含降级字段。
+  `failCount` 只喂给退避计算；`/health` 六段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`（本地 child 取 `sup.States()`，远程由 key 推 `up` / `no_key`），`children` 段是 `sup.States()` 原样（含 `state` / `pid` / `idle_s` / `last_error`）。
 
 ### 3.3 子进程回收策略（三档，可配置）
 
@@ -137,9 +140,9 @@ ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
 ```
 gateways/zgate/
 ├─ main.go                 # 子命令分发
-├─ config.json             # 端口 / 超时 / 回收阈值 / 子进程命令（不含凭据）
+├─ zgate.json              # 端口 / 超时 / 回收阈值 / 子进程命令（不含凭据）
 ├─ internal/alias/         # 读 ~/.zcode/v2/model-alias-map.json，按 mtime 热加载
-├─ internal/bridge/        # chat ↔ messages/responses + SSE 合成（protocol_bridge.js 的等价物）
+├─ internal/bridge/        # chat ↔ messages/responses + SSE 流式合成（Go 正本 bridge.go，旧 JS 版退役）
 ├─ internal/router/        # 7871 入口、上游选择、超时、错误归一
 ├─ internal/supervisor/    # 子进程起停、健康检查、空闲回收、退避、窗口调度
 ├─ internal/winproc/       # Job Object、进程树终止、端口就绪探测
@@ -155,8 +158,8 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
 1. `opencode-go/ops/opencode-header-proxy.js`（8787，给第三方客户端补
    `x-opencode-session`）→ zgate 的第二个监听器，`config.json` 里 `profiles.client-headers`。
    它现在根本没在跑，但迟早要跑，别再多一个 Node 进程。
-2. `/health` 从"三家各自回显"升级为统一视图：每个通道的 `state`
-   （`up` / `starting` / `down` / `degraded`）、最后一次错误、子进程 PID、alias 条数。
+2. `/health` 已落地为统一视图：六段 upstream（OC / WB / QD / QW / QN / CP）各带 `base` / `key` / `child` / `state` / `last_error`，
+   加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias.models`、`cooling`、`uptime_s`；`GET /v1/models` 返回 alias 聚合 catalog。
 3. 日志合并：`zgate.log`（按大小轮转）+ 子进程 stdout/stderr 各一份，
    目录统一到 `%LOCALAPPDATA%\ZCodeGateway\`。今天的四套日志名保留一版兼容。
 
@@ -190,7 +193,8 @@ ModelBus/
 │  ├─ workbuddy/                #   ← workbuddy/*.py、cache/、logs/
 │  └─ qoder/                    #   ← qoder/*.py、.env.local、qoder_probe.json
 ├─ tools/                       # 跨供应商工具：model_alias / arena / model_probe / check-*
-├─ third-party/                 # 不变（随仓分发的上游切片）
+├─ third-party/                 # 随仓分发的上游切片
+│  └─ cliproxyapi/              #   CLIProxyAPI（CP，:8317 /v1/models），exe 由 zgate 的 child cliproxyapi 按需拉起
 ├─ docs/  evidence/  memories/  # 不变
 └─ README.md  AGENTS.md  CHANGELOG.md  PROGRESS.md
 ```
@@ -274,7 +278,7 @@ ModelBus/
 
 | 阶段 | 常驻进程 | ZCode 开着 | ZCode 关着 |
 |---|---|---|---|
-| 今天 | 4 | 293 MB | 194 MB |
+| 今天 | 4 | 293.4（MB） | 194 MB |
 | P1 | 3 | 179 MB | 90 MB |
 | P2 | 2（+1 子进程） | 128 MB | 90 MB |
 | P3（推荐档） | 1–3 | 118 MB / 48 MB（按需） | 90 MB |
@@ -286,7 +290,7 @@ ModelBus/
 
 ### 6.1 协议桥重写的等价性风险（最高）
 
-`protocol_bridge.js` 处理的是"看着差不多、实际差很多"的细节：思考字段、
+`internal/bridge/bridge.go` 处理的是"看着差不多、实际差很多"的细节：思考字段、
 工具调用结构、非流式上游伪造成 SSE。**靠肉眼 review 一定会漏。**
 
 对策 —— 黄金样本回归，P2 开工前先做：
@@ -392,7 +396,7 @@ foreach ($p in 7863,7871,8790,8787) {
 | P0 目录重构 | 完成。`gateways/{zgate,legacy-router,upstream/{workbuddy,qoder}}` + `providers/{opencode-go,workbuddy,qoder}`；4 个脚本的硬编码路径、`.gitignore`、19 篇文档/模板的路径全部改齐，`check-docs` / `check-secrets` 通过 |
 | P1 守护器 | 完成，但**没有**按原计划跟随 ZCode 主进程 —— 见 §10.2 |
 | P2 路由 + 协议桥 | 完成。Go 实现约 2000 行（含测试），替换 857 行 JS |
-| P3 子进程回收 | 两个上游都用 `ondemand`（空闲 300 秒回收）；签到/保活用 `windows` 定时窗口兜底 |
+| P3 子进程回收 | 三个 child 都用 `ondemand`（空闲 300 秒回收；CLIProxyAPI 的 `windows` 为空，纯按需）；签到/保活用 `windows` 定时窗口兜底 |
 
 ### 10.2 与提案的差异
 
@@ -400,10 +404,23 @@ foreach ($p in 7863,7871,8790,8787) {
    实现成本高且脆弱。改成 **zgate 常驻 + 子进程策略**：zgate 约 19 MB，常驻代价远小于原来的
    PowerShell 守护器（124 MB），还顺手解决了「ZCode 关着时 WorkBuddy 定时任务不跑」的老问题 ——
    把 `children.workbuddy.policy` 设成 `always` 即可让它 24/7 跑。
-2. **自启用启动文件夹快捷方式**，不是 `schtasks /create /sc ONLOGON`（当前权限下返回「拒绝访问」）。
+2. **自启用登录计划任务**。早期 `schtasks /create /sc ONLOGON` 在非管理员权限下返回「拒绝访问」，于是改用
+   启动文件夹快捷方式；2026-11-09 起收敛为计划任务 `\ModelBus-zgate-hidden`（AtLogOn、当前用户 Interactive，
+   `Register-ScheduledTask` 不需要提权）→ `wscript //B //Nologo launch-zgate.vbs` → `start-zgate-nw.ps1`
+   （`CreateNoWindow` 拉起 `zgate serve`，端口已占则直接退出）。两条附加约束：产物必须是 **GUI 子系统**
+   （否则 Win11 的 Windows Terminal 接管 console 照样弹窗，`-WindowStyle Hidden` 和 lnk 的 `WindowStyle=7` 都拦不住），
+   且启动脚本跑完即退，不留常驻进程。
 3. ~~`scheduled` 窗口档没有实现~~ —— 2026-10-23 晚补上（见 §10.6）：它不是第三种 policy，
    而是给任意 child 加的 `windows` 列表，窗内按 `always` 处理。
 4. **旧 JS 路由保留**在 `gateways/legacy-router/`，作为回退；P3 验收通过后可删。
+5. **自启是双计划任务，换版走生命周期脚本**（2026-11-09）。除 `\ModelBus-zgate-hidden` 外，
+   还有 `\ModelBus-zgate-watchdog`（PT1M 跑一次 `ensure-zgate.vbs` → `ensure-zgate.ps1`，
+   `/health` 不通就拉回）。改完 `gateways/zgate/` 下的 Go 代码由 agent 自动执行
+   `tools/zgate-lifecycle/restart-zgate.cmd` 换版：`build.py --candidate` 编候选 → 停 watchdog →
+   备份 → 替换 → `schtasks /run /tn ModelBus-zgate-hidden` → `/health` 轮询 → 恢复 watchdog，
+   失败自动回滚；`POST /admin/reload` 只热加载 `zgate.json` 的策略 / 空闲 / 窗口
+   （`gateways/zgate/internal/supervisor/supervisor.go:473`）。详见
+   [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 ### 10.3 等价性验证
 

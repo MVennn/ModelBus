@@ -121,6 +121,9 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 | `QD_PANEL_PASSWORD` | 首次启动 qoder2api-hub 时用；之后以 `accounts/settings.json` 的摘要为准 | 无 | 用已持久化的面板密码 |
 | **`QWEN_API_KEY`** | `providers/qwen/qwen_zcode_sync.py`、`gateways/zgate`（缺省回退 `providers/qwen/.env.local`） | 无 | 脚本明确报错退出；路由的千问渠道 502 |
 | **`QWEN_BASE`** | `providers/qwen/qwen_zcode_sync.py` | `https://maas.qianwenaiapi.com/apps/anthropic/v1` | 用默认值（**必须带 `/v1`**：桥会直接拼 `/messages`） |
+| **`QINIU_API_KEY`** | `gateways/zgate`（`QN` 上游的 `keyEnv`，给七牛云 AI 网关鉴权） | 无 | 明确报错退出；路由对应上游 502 |
+| **`CLIPROXY_API_KEY`** | `gateways/zgate`（`CP` 上游 `127.0.0.1:8317/v1` 的 `keyEnv`，给 CLIProxyAPI 鉴权） | 无 | 明确报错退出；路由对应上游 502 |
+| `CLIPROXY_ACCESS_KEY` | `third-party/cliproxyapi/cliproxy.env` → `gateways/zgate`（`CP` 上游缺 `CLIPROXY_API_KEY` 时的回退文件，CLIProxyAPI 自身约定的键名） | 无 | 与 `zgate.json` 的 `keyEnv=CLIPROXY_API_KEY` 是**不同来源、非笔误**：环境变量主路径 + 第三方文件回退 |
 
 ### 3.6 Qoder（qoder2api-hub）
 
@@ -312,7 +315,7 @@ push 之后 CI 才拦下来。`--all` 是默认口径的同义参数，保留兼
 本机配置（如 `config.local.json`）设计上就不入库，被 `.gitignore` 排除后
 不会报出来；但**未忽略的新文件一律扫**，抓住「新建了文件忘了加规则」这种情况。
 
-`tools/sync_report.py --write --push` 在 `git add` 之前会先跑本脚本，
+`tools/sync_report.py --write --push`（**手动显式调用**；每日同步默认不 push）在 `git add` 之前会先跑本脚本，
 门禁非 0 就不提交、不推送；CI 把「敏感信息扫描」放在检出源码之后的第一步，
 失败立即停，不再等前面十几步构建测试白跑。
 装本地闸门：`git config core.hooksPath .githooks`（见 `.githooks/pre-commit`）。

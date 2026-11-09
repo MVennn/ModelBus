@@ -11,10 +11,10 @@
 
 | 文档 | 一句话定位 |
 |---|---|
-| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、ZCode 配置落点、三组 provider（OpenCode-Go / WorkBuddy / Qoder）的分组 / 协议 / 工具调用 / 关思考参数 |
+| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、ZCode 配置落点、6 个 upstreams（OC / WB / QD / QW / QN / CP）的分组 / 协议 / 工具调用 / 关思考参数 |
 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（WB 固定链首、其余按价格稳定排序）、同类模型的判定（看上游回包 model / quota / credit，不看名字）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
 | [QODER.md](QODER.md) | **Qoder 接入正本**：qoder2api-hub 的 8790 进程、OAuth/签到、`qoder` provider 的模型与同步/探测命令、边界与故障处理 |
-| [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与桥接非流式的边界 |
+| [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与 Go 协议桥流式双路径的边界 |
 | [QINIU.md](QINIU.md) | **七牛云 AI 网关接入正本**：`QN` 渠道、只认 Anthropic Messages、`qiniu/conatus-free` 限免到 2026-11-30、同网关其它免费模型的实测结论 |
 | [MODEL-QUICK-REF.md](MODEL-QUICK-REF.md) | 早期速查（2026-10-20）：价格、额度与实测首字。**结论已并入 MODEL-PROVIDERS.md**，本篇保留作历史快照 |
 | [archive/OPENCODE-GO-ANALYSIS.md](archive/OPENCODE-GO-ANALYSIS.md) | 2026-10-19 的阶段性分析（归档只读）：协议归属实测、价格带筛选、出口方案 |
@@ -24,8 +24,9 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [DOC-RULES.md](DOC-RULES.md) | **文档规则正本**：文件命名（全大写连字符）、分类定位、单一正本映射表、链接纪律、变更触发矩阵、体量预算 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：四个常驻进程 293 MB 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：3 个 child（7863 / 8790 / 8317）与 6 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
 | [MAINTENANCE.md](MAINTENANCE.md) | 日常维护：刷价格表、探测限速、快照保留、`--apply` 备份与回退、热重载注意事项 |
+| [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) | **zgate 生命周期正本**：计划任务双任务自启、CMD/DSH 会话树与 Job Object 问题、`build.py --candidate` + `tools/zgate-lifecycle/` 换版流程、失败回滚与常见故障 |
 | [TOOLS.md](TOOLS.md) | **工具清单正本**：运行环境、每个脚本的产物与去留标记、统一模式与 `--separate` 的区别 |
 | [VERSIONING.md](VERSIONING.md) | **版本晋升正本**：三段式进位、仓库发布号在哪维护、什么时候不动版本号。发版规则并入本篇 |
 | [SECRETS.md](SECRETS.md) | **凭据位置正本**：一律走环境变量，**只写位置不写值**；上传公开仓库前必读 |
@@ -43,7 +44,7 @@
 | 位置 | 一句话定位 |
 |---|---|
 | 仓库根 [README.md](../README.md) | 门面（面向使用者）：这是什么、环境要求、使用、反馈、免责声明、许可证 |
-| 仓库根 [AGENTS.md](../AGENTS.md) | 机器协议：PROGRESS 按逻辑任务分家、凭据走环境变量、CodeGraph |
+| 仓库根 [AGENTS.md](../AGENTS.md) | 机器协议（四条硬规矩）：PROGRESS 按逻辑任务分家、凭据走环境变量、有 CodeGraph 先用、改完 Go 代码自动走 `restart-zgate.cmd` 换版 |
 | 仓库根 [CHANGELOG.md](../CHANGELOG.md) | 开发者记录：**版本号本身**在它的版本标题里，**进位规则**见 [VERSIONING.md](VERSIONING.md) |
 | 仓库根 [PROGRESS.md](../PROGRESS.md) | 本仓唯一进度台账（追加式批次日志） |
 | 仓库根 [NOTICE](../NOTICE) | 第三方声明：WorkBuddy2API Panel（MIT）、qoder2api-hub（MIT）、OpenCode Go（商业）、ZCode（Apache-2.0）等 |

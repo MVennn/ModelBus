@@ -12,7 +12,7 @@ docs/ 分四类（索引见 [README.md](README.md)）：
 | 类别 | 收什么 | 现有成员 |
 |---|---|---|
 | 模型与 Provider | 有哪些 provider、模型归哪组、走什么协议、参数怎么写 | MODEL-PROVIDERS、MODEL-QUICK-REF、archive/OPENCODE-GO-ANALYSIS |
-| 流程与规范 | 怎么写文档、怎么维护、版本怎么晋升、凭据放在哪、工具清单怎么记、发版说明 | DOC-RULES、MAINTENANCE、TOOLS、VERSIONING、SECRETS、release-notes/README |
+| 流程与规范 | 怎么写文档、怎么维护、版本怎么晋升、凭据放在哪、工具清单怎么记、发版说明 | DOC-RULES、MAINTENANCE、TOOLS、VERSIONING、SECRETS、ZGATE-LIFECYCLE、release-notes/README |
 | 排错与踩坑 | 出问题了怎么查、为什么会这样 | PITFALLS、TROUBLESHOOTING |
 | 参考资料 | 面向使用者的 Release 说明、证据快照、许可证、外部榜单、上游调研 | release-notes/、根 README / AGENTS / CHANGELOG / NOTICE / PROGRESS / LICENSE、evidence/、BENCHMARKS、UPSTREAM、third-party/ |
 
@@ -56,6 +56,7 @@ docs/ 分四类（索引见 [README.md](README.md)）：
 | **版本晋升规则**（有功能更新 +0.1.0，没有 +0.0.1） | [VERSIONING.md](VERSIONING.md) §1–§2 |
 | **交付 / 发版规则**（版本号在哪维护 / 什么时候不动版本号 / 打 tag） | [VERSIONING.md](VERSIONING.md) §3、§5 + [release-notes/README.md](release-notes/README.md) |
 | 运行架构（进程 / 端口 / 目录两轴）与改造记录 | [ARCHITECTURE.md](ARCHITECTURE.md) |
+| zgate 自启父链、双计划任务与换版回滚流程 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) |
 | 脚本清单、产物与去留标记、运行环境 | [TOOLS.md](TOOLS.md) |
 | 凭据存放位置与取值方法 | [SECRETS.md](SECRETS.md) |
 | 许可证 | 仓库根 [LICENSE](../LICENSE)（MIT 全文） |
