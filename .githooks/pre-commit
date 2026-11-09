@@ -1,4 +1,4 @@
-#!/usr/bin/env sh
+#!/bin/sh
 # 提交前敏感信息闸门：默认扫工作树（含未忽略的新文件），失败即拒绝提交。
 # 启用：git config core.hooksPath .githooks
 cd "$(git rev-parse --show-toplevel)" || exit 2
@@ -13,4 +13,18 @@ else
   exit 2
 fi
 "$PY" tools/check-secrets.py || exit 1
+
+# 本地格式/语法/文档闸门：CI 只在 push/PR 触发，提交前这道必须挡住。
+# 1) Go 格式（与 .github/workflows/ci.yml 同判据）。
+if command -v gofmt >/dev/null 2>&1; then
+  unformatted=$(gofmt -l gateways/zgate)
+  if [ -n "$unformatted" ]; then
+    echo "[FAIL] 以下 Go 文件未过 gofmt（先 gofmt -w 再提交）：" >&2
+    echo "$unformatted" >&2
+    exit 1
+  fi
+fi
+# 2) 文档结构 + 项目语义（真值 zgate.json）+ 新脚本 LF/BOM + PS1 语法。
+"$PY" tools/check-docs.py || exit 1
+"$PY" tools/check-project.py || exit 1
 exit 0
