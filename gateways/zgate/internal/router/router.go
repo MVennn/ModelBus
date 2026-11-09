@@ -249,6 +249,10 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.health(w)
 		return
 	}
+	if path == "/models" {
+		s.models(w)
+		return
+	}
 	if path == "/admin/reload" {
 		s.reload(w, r)
 		return
@@ -472,7 +476,10 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 		h.Set("User-Agent", "unified-router/1.0")
 	}
 	switch channel {
-	case "WB", "QD", "QW":
+	case "WB", "QD", "QW", "QN", "CP":
+		// 这些通道一律用 zgate 自己的 key 覆盖 Authorization：
+		// CP 走本机 CLIProxyAPI（access.api-keys 校验），QN 是七牛云网关；
+		// 漏掉任一通道都会把客户端原始 Bearer（或空）透传上去被回 401。
 		h.Set("Authorization", "Bearer "+key)
 	case "OC":
 		h.Set("Authorization", "Bearer "+key)
@@ -638,30 +645,65 @@ func retryHint(head []byte) string {
 
 func (s *Server) health(w http.ResponseWriter) {
 	s.aliases.Reload()
+	states := s.sup.States()
 	upstreamView := func(channel string) map[string]any {
 		u := s.Config().Upstreams[channel]
-		return map[string]any{
-			"base":  u.Base,
-			"key":   s.keyset().For(channel) != "",
-			"child": u.Child,
+		hasKey := s.keyset().For(channel) != ""
+		view := map[string]any{
+			"base":       u.Base,
+			"key":        hasKey,
+			"child":      u.Child,
+			"state":      "up",
+			"last_error": "",
 		}
+		if !hasKey {
+			view["state"] = "no_key"
+		}
+		// 本地 child 的 state / last_error / pid 取自 supervisor 实况；
+		// 远程上游（无 child）只有 key/base，state 由 key 是否配置推定。
+		if u.Child != "" {
+			if st, ok := states[u.Child].(map[string]any); ok {
+				if v, ok := st["state"]; ok {
+					view["state"] = v
+				}
+				if v, ok := st["last_error"]; ok {
+					view["last_error"] = v
+				}
+				if v, ok := st["pid"]; ok {
+					view["pid"] = v
+				}
+			}
+		}
+		return view
 	}
 	payload := map[string]any{
-		"ok":        true,
-		"opencode":  upstreamView("OC"),
-		"workbuddy": upstreamView("WB"),
-		"qoder":     upstreamView("QD"),
-		"qwen":      upstreamView("QW"),
-		"qiniu":     upstreamView("QN"),
+		"ok":          true,
+		"opencode":    upstreamView("OC"),
+		"workbuddy":   upstreamView("WB"),
+		"qoder":       upstreamView("QD"),
+		"qwen":        upstreamView("QW"),
+		"qiniu":       upstreamView("QN"),
+		"cliproxyapi": upstreamView("CP"),
 		"alias": map[string]any{
 			"path":   s.aliases.Path(),
 			"models": s.aliases.Count(),
 		},
-		"children": s.sup.States(),
+		"children": states,
 		"cooling":  s.coolingCount(),
 		"uptime_s": int(time.Since(s.started).Seconds()),
 	}
 	writeJSON(w, 200, payload)
+}
+
+// models 是 zgate 自己的聚合命名空间视图。GET /v1/models 与 GET /models 都落到
+// 这里（normalizePath 去掉 /v1），ZCode 看到的是 zgate-owned catalog，不再是
+// OpenCode-Go 自家 /models 的逐字节透传。
+func (s *Server) models(w http.ResponseWriter) {
+	writeJSON(w, 200, map[string]any{
+		"object":   "list",
+		"owned_by": "zgate",
+		"data":     s.aliases.Catalog(),
+	})
 }
 
 // routeChain walks a merged chain: every hop carries its own base, channel and
@@ -969,7 +1011,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorBody("配置读取失败: "+err.Error(), "configuration_error"))
 		return
 	}
-	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile)
+	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.CliproxyEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)
 	s.aliases.Reload()

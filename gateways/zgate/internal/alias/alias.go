@@ -9,6 +9,7 @@ package alias
 import (
 	"encoding/json"
 	"os"
+	"sort"
 	"sync"
 	"time"
 )
@@ -133,4 +134,70 @@ func (m *Map) Resolve(model string) (Target, bool) {
 		}
 	}
 	return Target{}, false
+}
+
+// CatalogEntry is one row of the aggregated GET /v1/models view. zgate owns the
+// namespace: a display name is its own canonical id, while a legacy id points
+// back to the display name it resolves to.
+type CatalogEntry struct {
+	ID          string `json:"id"`
+	Object      string `json:"object"`
+	OwnedBy     string `json:"owned_by"`
+	CanonicalID string `json:"canonical_id"`
+	Group       string `json:"group"`
+	ChainHops   int    `json:"chain_hops"`
+}
+
+// Catalog returns the unified namespace as a deterministic, deduplicated list:
+// display names first (sorted), then legacy ids that are not themselves display
+// names (sorted). Deterministic order keeps GET /v1/models and GET /models
+// byte-identical across calls and map iterations.
+func (m *Map) Catalog() []CatalogEntry {
+	m.Reload()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.data == nil {
+		return []CatalogEntry{}
+	}
+	group := func(name string) (string, int) {
+		t, ok := m.data.Models[name]
+		if !ok {
+			return "", 0
+		}
+		hops := len(t.Chain)
+		if hops == 0 {
+			hops = 1 // a direct single-upstream target is one hop
+		}
+		return t.Group, hops
+	}
+	names := make([]string, 0, len(m.data.Models))
+	for name := range m.data.Models {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]CatalogEntry, 0, len(m.data.Models)+len(m.data.Legacy))
+	for _, name := range names {
+		g, hops := group(name)
+		out = append(out, CatalogEntry{
+			ID: name, Object: "model", OwnedBy: "zgate",
+			CanonicalID: name, Group: g, ChainHops: hops,
+		})
+	}
+	legacy := make([]string, 0, len(m.data.Legacy))
+	for id := range m.data.Legacy {
+		if _, isName := m.data.Models[id]; isName {
+			continue // already emitted as a display name
+		}
+		legacy = append(legacy, id)
+	}
+	sort.Strings(legacy)
+	for _, id := range legacy {
+		canonical := m.data.Legacy[id]
+		g, hops := group(canonical)
+		out = append(out, CatalogEntry{
+			ID: id, Object: "model", OwnedBy: "zgate",
+			CanonicalID: canonical, Group: g, ChainHops: hops,
+		})
+	}
+	return out
 }

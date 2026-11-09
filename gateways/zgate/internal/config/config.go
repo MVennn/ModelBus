@@ -49,6 +49,7 @@ type Config struct {
 	QoderEnvFile    string              `json:"qoderEnvFile"`
 	QwenEnvFile     string              `json:"qwenEnvFile"`
 	QiniuEnvFile    string              `json:"qiniuEnvFile"`
+	CliproxyEnvFile string              `json:"cliproxyEnvFile"`
 	Session         string              `json:"session"`
 	Log             Log                 `json:"log"`
 	Upstreams       map[string]Upstream `json:"upstreams"`
@@ -124,6 +125,9 @@ func (c *Config) applyDefaults() {
 	if c.QiniuEnvFile == "" {
 		c.QiniuEnvFile = "../../providers/qiniu/.env.local"
 	}
+	if c.CliproxyEnvFile == "" {
+		c.CliproxyEnvFile = "../../third-party/cliproxyapi/cliproxy.env"
+	}
 	if c.Session == "" {
 		c.Session = os.Getenv("OPENCODE_SESSION")
 	}
@@ -166,6 +170,17 @@ func (c *Config) applyDefaults() {
 	} else if u.KeyEnv == "" {
 		u.KeyEnv = "QWEN_API_KEY"
 		c.Upstreams["QW"] = u
+	}
+	// CLIProxyAPI（本机 8317）：Gemini / Antigravity / Vertex 统一出口，OpenAI 兼容。
+	if u, ok := c.Upstreams["CP"]; !ok {
+		c.Upstreams["CP"] = Upstream{
+			Base:   "http://127.0.0.1:8317/v1",
+			Child:  "cliproxyapi",
+			KeyEnv: "CLIPROXY_API_KEY",
+		}
+	} else if u.KeyEnv == "" {
+		u.KeyEnv = "CLIPROXY_API_KEY"
+		c.Upstreams["CP"] = u
 	}
 	// 七牛云 AI 网关（api.qnaigc.com）同样只提供 Anthropic Messages。
 	if u, ok := c.Upstreams["QN"]; !ok {
@@ -225,6 +240,7 @@ func (c *Config) resolvePaths() error {
 	c.QoderEnvFile = c.resolve(c.QoderEnvFile)
 	c.QwenEnvFile = c.resolve(c.QwenEnvFile)
 	c.QiniuEnvFile = c.resolve(c.QiniuEnvFile)
+	c.CliproxyEnvFile = c.resolve(c.CliproxyEnvFile)
 	c.Log.Dir = c.resolve(c.Log.Dir)
 	return nil
 }

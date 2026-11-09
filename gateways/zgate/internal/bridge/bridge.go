@@ -1,10 +1,13 @@
 // Package bridge translates OpenAI Chat Completions into Anthropic Messages or
-// OpenAI Responses and back. It is a faithful port of tools/protocol_bridge.js.
+// OpenAI Responses and back. It is the Go 正本 (tools/protocol_bridge.js was the
+// original port source and is now retired, no longer shipped).
 //
-// Upstream calls are non-streaming; the chat SSE ZCode expects is synthesised
-// here. That keeps the translation small and deterministic (no delta
-// accumulation across chunk boundaries). The trade-off is that bridged models
-// deliver their text in one chunk instead of token-by-token.
+// Two paths: when Options.Stream && Options.OnChunk != nil, forwardStream pushes
+// upstream SSE deltas to the client token-by-token (Accept: text/event-stream).
+// Otherwise postJSON collects one upstream response; if the caller asked for a
+// streaming chat envelope, sseOf synthesises a single-chunk SSE reply. The
+// streaming path is what every bridge hop in the router uses; the non-streaming
+// branch is the deterministic small-translation fallback.
 package bridge
 
 import (

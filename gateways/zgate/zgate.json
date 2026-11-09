@@ -13,7 +13,8 @@
     "WB": { "base": "http://127.0.0.1:7863/v1", "child": "workbuddy" },
     "QD": { "base": "http://127.0.0.1:8790/v1", "child": "qoder" },
     "QW": { "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1", "keyEnv": "QWEN_API_KEY" },
-    "QN": { "base": "https://api.qnaigc.com/v1", "keyEnv": "QINIU_API_KEY" }
+    "QN": { "base": "https://api.qnaigc.com/v1", "keyEnv": "QINIU_API_KEY" },
+    "CP": { "base": "http://127.0.0.1:8317/v1", "child": "cliproxyapi", "keyEnv": "CLIPROXY_API_KEY" }
   },
   "children": {
     "workbuddy": {
@@ -37,6 +38,17 @@
       "port": 8790,
       "health": "http://127.0.0.1:8790/ping",
       "startTimeoutSeconds": 40
+    },
+    "cliproxyapi": {
+      "policy": "ondemand",
+      "idleSeconds": 1800,
+      "windows": [],
+      "exe": "../../third-party/cliproxyapi/cli-proxy-api.exe",
+      "args": ["-config", "config.yaml"],
+      "cwd": "../../third-party/cliproxyapi",
+      "port": 8317,
+      "health": "http://127.0.0.1:8317/v1/models",
+      "startTimeoutSeconds": 30
     }
   }
 }
