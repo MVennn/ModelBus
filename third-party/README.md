@@ -11,6 +11,7 @@
 | --- | --- | --- | --- | --- |
 | [`zcode/`](zcode/UPSTREAM.md) | [`zai-org/ZCode`](https://github.com/zai-org/ZCode) | Apache-2.0 | ZCode 内置规则数据 `zcode-builtin.json` + 规则引擎源码 `model-config.ts` / `schema.ts` / `rule-data-schema.ts`（**原样，未改一个字节**） | `workbuddy/zcode_effective_body.js` 靠它复刻客户端的请求体语义；让探测不依赖本机是否装了 ZCode |
 | [`zcodium/`](zcodium/UPSTREAM.md) | [`ZCodium-project/ZCodium`](https://github.com/ZCodium-project/ZCodium) | MIT | ZCodium 内置思考规则的**最小切片**（4 条，逐字抄录）+ 一个本仓自己写的漂移检查脚本 | 给「思考参数矩阵」提供**可引用的源码依据**，并能检测本机 ZCode 内置规则是否变了 |
+| [`cliproxyapi/`](cliproxyapi/UPSTREAM.md) | [`router-for-me/CLIProxyAPI`](https://github.com/router-for-me/CLIProxyAPI) | MIT | v8.0.61 release 的 `README.md` / `README_CN.md` / `LICENSE` / `config.example.yaml`（**原样**）+ 本仓 `UPSTREAM.md`；77 MB 的 `cli-proxy-api.exe` 与运行时配置由本目录 `.gitignore` 排除 | 本地 OpenAI 兼容网关，监听 `127.0.0.1:8317`，作为 zgate 的 CP upstream；来源与更新见 `UPSTREAM.md` |
 
 ---
 
@@ -30,7 +31,7 @@
 
 | 仓库 | 自身许可 | 引入的上游 | 是否兼容 |
 | --- | --- | --- | --- |
-| `ModelBus` | MIT | Apache-2.0（ZCode）、MIT（ZCodium） | ✅ 兼容 —— Apache-2.0 允许再分发进 MIT 项目，要求保留版权声明与 NOTICE（本目录保留了上游 LICENSE 全文） |
+| `ModelBus` | MIT | Apache-2.0（ZCode）、MIT（ZCodium）、MIT（CLIProxyAPI） | ✅ 兼容 —— Apache-2.0 允许再分发进 MIT 项目，要求保留版权声明与 NOTICE（本目录保留了上游 LICENSE 全文） |
 
 > 对比：兄弟仓 `ShellcrashRules` 整仓是 **GPL-3.0**，因为它含 ShellCrash 的 GPL-3.0 派生件，
 > 无法用「自研 MIT + 派生 GPL」拆开。**本仓没有这个问题。**

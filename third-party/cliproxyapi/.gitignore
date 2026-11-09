@@ -1,0 +1,10 @@
+# 本目录下不进版本库的运行时产物与重资产
+config.yaml
+cliproxy.env
+*.env
+cli-proxy-api.exe
+auths/
+logs/
+*.log
+kv.db
+*.err
