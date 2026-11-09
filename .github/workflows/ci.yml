@@ -71,3 +71,9 @@ jobs:
 
       - name: 文档自检
         run: python3 tools/check-docs.py
+
+      - name: 项目语义与脚本换行（真值：gateways/zgate/zgate.json）
+        # check-docs 只查链接/锚点/引言/孤儿；这一道比对门面口径与 zgate.json，
+        # 并校验 tools/zgate-lifecycle 脚本的 LF/BOM。PS1 语法在本机 pre-commit 跑，
+        # ubuntu 无 powershell 时 check-project.py 自动 SKIP。
+        run: python3 tools/check-project.py
