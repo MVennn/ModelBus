@@ -369,6 +369,21 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **验证**：`python gateways/zgate/build.py --check` 打印
   `Subsystem = 2 → WINDOWS_GUI（无窗）`；`--cross-check` 会在临时目录交叉编译一份
   windows/amd64 再校验，CI 用这条（Linux 上也能真跑起来）。
+- **2026-11-09 补充（Win11 终端接管）**：计划任务 / 快捷方式拉起**控制台子系统**程序时，
+  Windows 11 的默认终端会让 `WindowsTerminal.exe`（父进程是 `svchost.exe` 的 Task Scheduler）
+  接管它的 console 并显示成可见窗口，标题就是 exe 路径 —— 该 `wt` 进程的 `MainWindowHandle`
+  非 0，而 zgate 自身 `MainWindowHandle` 是 0，很容易误判成"窗口是 zgate 弹的"。
+  可靠的判断方式是对着 `wt` / `OpenConsole` 进程数做前后对照，而不是看标题。
+  根治有两条，缺一不可：① 产物是 `Subsystem = 2`；② 启动链路用
+  `CreateNoWindow`（`ProcessStartInfo` + `UseShellExecute=$false`）包一层，
+  别让 Task Scheduler 直接 exec 控制台程序。现行自启见 `docs/MAINTENANCE.md` §8.1。
+- **2026-11-09 补充（换版路径收口）**：换版一律走 `python gateways/zgate/build.py --candidate`
+  （编到 `zgate.candidate.exe`，不覆盖运行中的 `zgate.exe`）+
+  `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版；**禁止在会话里裸用 `Start-Process` /
+  `cmd /c` 拉起 zgate** —— 这样起的进程落在 CMD/DSH 会话的 Job Object 里，会话结束整棵进程树
+  被回收（实测 2s 内消失）。换版流程、双计划任务自启与失败回滚正本见
+  [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)；`/admin/reload` 只热加载 `zgate.json` 的策略 /
+  空闲 / 窗口，换 Go 代码必须重启实例（`gateways/zgate/internal/supervisor/supervisor.go:473`）。
 
 ## 21. 上游握手超时留 15s，会把一次失败拖成长尾 【通用】
 
@@ -528,6 +543,11 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
     -WorkingDirectory '<工作区>\ModelBus\gateways\zgate' -WindowStyle Hidden
   ```
 
+   > ⚠️ **警示（2026-11-09）**：上面的 `Start-Process` 仅作「手工前台排查」的历史示例，
+   > **不是现行自启 / 换版入口**。会话里这样拉起的进程归属 CMD/DSH 会话树，父进程退出后
+   > 2s 内消失；现行自启走计划任务 `\ModelBus-zgate-hidden`，换版走
+   > `tools/zgate-lifecycle/restart-zgate.cmd`，正本见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
+
   起来后必须验证：`netstat -ano | grep 7871` 有 LISTENING，且
   `curl http://127.0.0.1:7871/health` 返回 `"ok":true`。
 - **教训**：**这是单点故障**。重启网关属于「会切断用户所有模型」的操作，
@@ -665,6 +685,17 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   - 端到端：`curl 127.0.0.1:7871/v1/chat/completions -d '{"model":"Beam",...}'` 返回 200，
     zgate 日志 `(1/2)` 直连 403 → `(2/2)` 机场 200。
   - 反证：直连复测仍是 403，说明不是网络抖动而是出口问题。
+
+- **2026-11-09 现行口径（解法已变，以上为来龙去脉）**：`go_model_sync.py`
+  的「已配置模型体检」现在**不再发探测请求**，去留只看上游清单：
+  `stale_reason(model, deprecated_dates, live, hint)` 只判官方弃用日 +
+  实时 `/models` 与 Go 文档表里都查不到，不再用 403 判「跑不通即清」；
+  `prune_is_suspicious(removed_count, configured_count, live_count)` 用
+  `PRUNE_GUARD_RATIO=0.34` 给批量移除加刹车。`http(..., proxy=None)` 的
+  proxy 参数仍保留，但四个调用点都不带 proxy —— **地区 403 复测**这条路径
+  连同 `[经机场]` / `⇄ N 个…` 报告字样已随「零新增推理请求」一起停用。
+  理由：脚本自建请求绕过 zgate，本就测不准；路由器侧 P33 的 alias 机场孪生跳
+  才是现行出口策略，把脚本自己探活重新打开等于恢复零收益请求。
 
 ## 36. 检查脚本用 ✓ / ✗ 打结论：GBK 控制台下自己把自己判成失败 【通用】
 

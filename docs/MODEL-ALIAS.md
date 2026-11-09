@@ -323,6 +323,20 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 为什么这么切：用户的实际选择只有「DeepSeek」和「免费」。按价格四档会让
 16 个永远不点的贵模型占着选择器，也让主力被榜单越塞越肿。
 
+> **2026-11-09 现行口径校准（上表与本节以下数条是 2026-10-28 快照）**：
+> 用户 2026-11-09 把主力收敛为「DeepSeek + Gemini」——`MAIN_ORDER`
+> （`tools/model_alias.py:106-128`）现为 `DeepSeek-4.1-Flash`（0.11）+ 4 条
+> CLIProxyAPI Gemini（0.00）；`HY4`（`cn:hy4std` 0.29）与 `Qwen-3.8-Max`
+> （`qoder:Qwen3.8-Max` 0.43）已下沉省钱组（`LOW_ORDER:146-163`）。竞技榜候选由
+> `MAIN_UPSTREAM_HINTS = ("deepseek", "gemini")` 过滤，`MiMo-2.6-Flash` /
+> `Space-Bunny` 不再回灌主力。省钱组现行 **12 条**，`MiMo-2.6-Pro` 随价格源为
+> **0.19**（`OC_PRICES:253`），不是上表的 0.13；上表「当前 8 条」同为旧快照。
+> 分组真值以 `python tools/model_alias.py --check --arena` 输出与
+> `%LOCALAPPDATA%/ModelBus/current-models.json` 为准。§4.2 的「分数 ≥ DeepSeek
+> 基准 95% + 积分 ≤ 0.11」是榜单候选筛选（`tools/arena_leaderboard.py`），与
+> `SCORE_MIN_INTEL = 85.0` / `SCORE_MIN_VALUE = 1.0`（`tools/model_alias.py:176-177`，
+> 白名单分数替代门槛）是两处不同功能的阈值，不要互相套用。
+
 三条硬口径：
 
 - **名单的键必须带协议**（`chat:cn:deepseek-v4.1-flash`）。同一型号会以 chat 与
@@ -331,7 +345,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
   `deepseek-v4.1-flash` 与 `qwen3.8-flash`）把 chat 与 messages 跳并成一条链，
   每跳自带 `protocol`，路由逐跳派发。`TAIL_HOPS` 再把指定跳钉到链尾，实现「先把月度额度用完，再用
   一年期预付额度」。
-- **主力豁免价格上限**：贵备份 `Qwen-3.8-Max` 现价 0.17，其余超限模型一律不收录，
+- **主力豁免价格上限**：白名单点名的条目不受 `LOW_MAX` 价格闸约束（现行主力 DeepSeek 0.11 + 4 条 CP Gemini 0.00；历史上 `Qwen-3.8-Max` 0.17 曾是贵备份，2026-11-09 已下沉省钱组、现价 0.43），名单外超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。
 - **名单只管排序，不管建档**：条目只从 `provider_config` 的 `personalModelIds` 与池子
   文件生成，往 `MAIN_ORDER` 里加一个配置里没有的型号，不加 `whitelist_items()` 就什么
@@ -372,8 +386,19 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 （例如 Qoder 的 DeepSeek-Flash 谷价时进免费组、峰价时并进付费链路），
 不会改显示名，老会话不受影响。
 
-自动切换的做法（北京时间）：每天 **08:00 / 22:00**，外加**工作日 09:00 / 12:00 /
-14:00 / 18:00**（OC 峰谷边界）各跑一次：
+现行自动切换（北京时间）：**每天 12:00 一次**，由计划任务 `\ModelBus 模型同步`
+调 `sync-models.vbs → sync-models.ps1`；第四段跑 `--slot auto --apply`，按运行时刻
+取价，第五段落报告后刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。
+
+早期这里写「08:00 / 22:00 加工作日 09:00 / 12:00 / 14:00 / 18:00 各跑一次」，
+属于过度承诺：完整流水线带榜单 `--write`、探活、漂移二轮写入等副作用，
+`model_alias.py` 每次 `--apply` 还会刷新 `generated_at`，同参连跑两次 alias map
+逐字节不同，多时段重跑会把「有漂移」误报成日常状态（推送自 2026-11-09 起已默认关闭，
+只有显式 `-Push` 才提交，见 [MAINTENANCE.md](MAINTENANCE.md) §6）。
+峰谷价本身仍由 `--slot auto` 在每次运行时按当前时间取价（见上文），
+只是不再为边界时刻额外注册任务：下一次 12:00 同步会自然纠正。
+
+手动预演仍可用：
 
 ```bash
 python providers/workbuddy/workbuddy_fetch_pricing.py

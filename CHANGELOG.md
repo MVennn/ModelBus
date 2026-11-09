@@ -17,6 +17,24 @@
 
 ## [未发布]
 
+### 检测性价比 / 收录价格口径正规化（2026-11-09）
+
+- **零新增推理请求**（用户 m01007「按你的想法去做，但是要考虑最性价比的打法」）：不新增「每次跑一遍好不好用」探测；每日同步里的 WorkBuddy 价格表骤降逐个探活（`probe_alive` 打 `/v1/chat/completions`）改为默认跳过、保留旧价，实测 19 次探活对最终 39 条 `wb_pricing.json` 零影响；`docs/PITFALLS.md` §35 补「现行口径」注记（`go_model_sync.py` 体检不再发探测请求，去留只看上游清单）。
+- **默认不 push**：`sync-models.ps1` 的 `[switch]$NoPush` 翻成 `[switch]$Push`，`if ($Push) { --write --push } else { --write }`；`sync-models.vbs` 计划任务入口不带 `-Push`，每天 12:00 只写报告、不自动 `git commit/push`。推送改手动显式 `powershell … -File sync-models.ps1 -Push`。`tools/check-project.py` 新增 `check_sync_policy(results)` 守这条口径（含 6 类反证）。
+- **门面口径**：[docs/MAINTENANCE.md](docs/MAINTENANCE.md) §6 每日任务行按 `sync-models.ps1` 实况重写（五段命令、计划任务名、默认不 push、无峰谷任务）；[docs/TOOLS.md](docs/TOOLS.md) / [docs/SECRETS.md](docs/SECRETS.md) / [docs/MODEL-ALIAS.md](docs/MODEL-ALIAS.md) 同步标注 `--push` 仅手动。
+- **收录判断与积分换算正规化**（用户 m01046/m01047「还是按照之前的逻辑，只是正规化一点」）：维持「DeepSeek 为基准、各家价格统一折算成 WorkBuddy 积分」原逻辑与全部数值，只把散落口径收成显式常量 / 单一真值源 / 自解释命名 / 注释；行为等价以 `model_alias.py --check --arena` 改前改后逐字一致为准。
+- **hy4free 担心核实**（本机 `usage.json` 按 `cr` 字段重算，零请求）：`hy4free` 1871 次 `cr=0.00`、58/58 桶全零 = 真免费；标 free 却扣 6601 积分的是同族 `cn:hy4-preview-f`（HY4-Pre），已按 `CHANGELOG.md:83-84/92-93` 修为同族挂牌价 0.29 且不再进免费组。
+
+### zgate 生命周期换版自动化 + 门面对齐 3 children / 6 upstreams（2026-11-09）
+
+- **换版机制**：新增 `tools/zgate-lifecycle/`，正本含 `restart-zgate.cmd`（CMD 入口）→ `deploy-zgate.ps1`（`gateways/zgate/build.py --candidate` 编到 `zgate.candidate.exe` 不覆盖运行中 exe → 暂停 watchdog → `Stop-Process zgate` → 备份 → 原子替换 → `schtasks /run /tn \ModelBus-zgate-hidden` → `/health` 轮询 → 恢复 watchdog → 失败回滚）、`install-lifecycle.ps1`（把安全脚本部署到 `%LOCALAPPDATA%\ZCodeGateway` 并校正两个计划任务动作）。`swap-zgate.ps1` / `start-zgate.bat` 改为兼容薄包装，不再 `Start-Process`。
+- **自启收敛**：现役为两个计划任务 `\ModelBus-zgate-hidden`（AtLogOn, Interactive/Limited，`wscript //B //Nologo launch-zgate.vbs` → `start-zgate-nw.ps1` 起普通 `serve`）与 `\ModelBus-zgate-watchdog`（PT1M，`ensure-zgate.vbs` → `ensure-zgate.ps1`）；旧 `\ModelBus-zgate` 任务、HKCU Run daemon、Startup 快捷方式均已移除。
+- **父链实测**（`PROGRESS.md:2586/2588-2589`）：`DETACHED_PROCESS` / `zgate serve -tray` 不保证调用方整棵进程树被回收时存活（`cmd /c`、`Start-Process` 结束后 2s 内子进程消失）；只有计划任务父链能脱离 CMD/DSH 会话树（跨 run_code 仍 `/health` 200）。
+- **架构对齐**：`gateways/zgate/zgate.json` 监听 `127.0.0.1:7871`，6 个 upstreams（OC / WB / QD / QW / QN / CP，CP=CLIProxyAPI `http://127.0.0.1:8317/v1`，`keyEnv=CLIPROXY_API_KEY`）、3 个 children（workbuddy 7863 `/panel/`、qoder 8790 `/ping`、cliproxyapi 8317 `/v1/models`）。环境变量只写变量名：`QWEN_API_KEY` / `QWEN_BASE` / `QD_API_KEY` / `CLIPROXY_API_KEY` / `QINIU_API_KEY`，值一律从环境变量读。
+- **热加载边界**：`POST /admin/reload` 热加载 `zgate.json` 的策略 / 空闲 / 窗口 / 上游 base / 凭据，并按 `keys.Load` 六通道 + `ApplyConfig(children)` + `setRuntime` + `aliases.Reload()` 更新运行时（`gateways/zgate/internal/router/router.go:963-986`）；监听地址、新增子进程、alias map 路径与 Go 代码变更仍需 `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版。
+- **P1/P2 修复**：门面 / 规则 / 记忆文档逐条精确对齐真实架构，新增 [docs/ZGATE-LIFECYCLE.md](docs/ZGATE-LIFECYCLE.md) 并同步 `docs/README.md` 索引；`AGENTS.md` 增「改完 Go 代码自动跑 `restart-zgate.cmd`、严禁会话内 `Start-Process` / `cmd /c` 拉起」硬规则。
+- **验证**：`python tools/check-docs.py` exit 0（链接 / 锚点 / 引言块 / 孤儿全通过）；本轮不重启 / 不停止网关，部署由 lead 执行。回退：`git revert` 本提交；二进制回滚点由 `deploy-zgate.ps1` 的备份保留。
+
 ### 选型：显示名去尾缀、漏模型的三种机制（2026-11-06）
 
 - **显示名不再造后缀**（用户口径：只有真不同的模型或无法合并时才加尾缀）。

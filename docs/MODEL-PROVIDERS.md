@@ -485,7 +485,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | 项 | 值（2026-10-28） |
 |---|---|
 | 渠道 | `QW`，远程直连，无本地子进程 |
-| 协议 | `anthropic-messages`（桥接；上游非流式） |
+| 协议 | `anthropic-messages`（桥接；Go 正本 `internal/bridge/bridge.go` 流式双路径：`stream=true` 逐 delta 转发，无 `OnChunk` 时退化为整段合成 SSE；2026-10-28 旧 JS 桥才是非流式，见 [QWEN.md](QWEN.md) §7.1） |
 | 免费额度 | 每模型 1M tokens，统一 2026-12-15 到期，**用完即停已开** |
 | 控制台 | 506 条 → 294 条 token 计量 → 209 个可对话 → 118 家族 → **14 个收录** |
 | 积分 | 窗口内 0（`QW_TRIAL_UNTIL`），窗口外缺价自动剔除 |
@@ -495,6 +495,47 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 **与前三例的关键差异**：目录不可自助拉取（要导控制台）、协议必须桥、
 免费是**限时试用**而不是长期 0 元。因此它的定位是「免费备选 / 批处理」，
 不进主力，也不与同型号的 chat 链合并（`-Msg` 独立成条）。
+
+---
+
+## 4.11 Gemini 反代（CLIProxyAPI，本次实例五）
+
+本地子进程 `third-party/cliproxyapi/cli-proxy-api.exe`（Go 单二进制，v8.0.61），
+默认端口 8317，入站 OpenAI `/v1` + Gemini `/v1beta` + Anthropic 三协议。
+
+| 项 | 值（2026-11-09） |
+|---|---|
+| 渠道 | `CP`，zgate 按需拉起（`policy: ondemand`），空闲回收 |
+| 凭证 | AI Studio **API key**（`api-keys.gemini`），请求头 `x-goog-api-key` |
+| 上游 | `https://generativelanguage.googleapis.com` |
+| 主力型号 | `gemini-3.6-flash` / `gemini-3-flash-preview` / `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` |
+| 积分 | 全部 0（免费层），`price_of` 里 `CP` 直接 return 0.0 |
+
+**凭证格式是硬门槛**：`AQ.` 前缀的新版 key 只认 `x-goog-api-key` 头，
+换成 `Authorization: Bearer` 会 401 UNAUTHENTICATED。CLIProxyAPI 的
+`api-keys.gemini` 段就是走前者，写对了才能列模型。
+
+**三个必踩的坑**：
+
+1. `zgate.json` 里 child 的 `exe`/`cwd` 相对路径以 `gateways/zgate` 为基准，
+   写成 `../third-party/...` 会解析成 `gateways/third-party/...`，报
+   `fork/exec ...: The directory name is invalid`。必须是 `../../third-party/...`。
+2. `internal/router/router.go` 的 `switch channel` 决定用哪套 key。漏了
+   `CP` 时会保留客户端的 Bearer 直接转发，CLIProxyAPI 回
+   `401 {"error":"Invalid API key"}`（几毫秒就回，看着像鉴权失败，其实是没换 key）。
+3. `config.yaml` 的 `models[].alias` 会让部分型号（`gemini-3.8-flash-high`、
+   `gemini-3-flash`）挂死 >90s，**不写 alias**，客户端直接用上游真名。
+
+**免费组闸**：`tools/model_alias.py` 的 `entry_group()` 对「0 积分即免费」的
+规则会让 CP 暴露的全部型号（含 antigravity 的 8 个 403、`gemini-3-flash` 404）
+灌进免费组。函数开头有 CP 白名单闸：链路全是 CP 且未命中 `MAIN_IDS` 一律
+`drop`。
+
+**antigravity OAuth 走不通**：`-antigravity-login` 能拿到有效 token
+（`userinfo` 200、`loadCodeAssist` 200），但返回的 `ineligibleTiers` 里
+`free-tier` 是 `UNSUPPORTED_CLIENT`——Google 已关闭个人版免费 Code Assist，
+只剩 `standard-tier` 且要求绑自己的 GCP project。`project_id` 填默认的
+`aicode-consumers` 会触发 `403 VALIDATION_REQUIRED`。
 
 ---
 
