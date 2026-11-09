@@ -598,3 +598,102 @@ func TestRegionBlockedDoesNotCoolALoneHop(t *testing.T) {
 		t.Fatalf("lone hop must still be attempted every time, got %d hits", n)
 	}
 }
+
+func TestHealthHasSixUpstreamsWithState(t *testing.T) {
+	srv, _ := newServer(t, `{"models":{},"legacy":{}}`, "http://127.0.0.1:1")
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+	resp, err := http.Get(front.URL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	var body map[string]any
+	if err := json.Unmarshal(raw, &body); err != nil {
+		t.Fatalf("health is not JSON: %s", raw)
+	}
+	for _, seg := range []string{"opencode", "workbuddy", "qoder", "qwen", "qiniu", "cliproxyapi"} {
+		view, ok := body[seg].(map[string]any)
+		if !ok {
+			t.Fatalf("/health missing segment %q: %s", seg, raw)
+		}
+		if _, ok := view["state"]; !ok {
+			t.Fatalf("/health %q missing state: %s", seg, raw)
+		}
+		if _, ok := view["last_error"]; !ok {
+			t.Fatalf("/health %q missing last_error: %s", seg, raw)
+		}
+	}
+}
+
+func TestModelsIsAggregatedCatalog(t *testing.T) {
+	mapJSON := `{"models":{"Alpha":{"group":"主力","chain":[{"upstream":"a"},{"upstream":"b"}]}},"legacy":{"alpha-legacy":"Alpha","Alpha":"Alpha"}}`
+	srv, _ := newServer(t, mapJSON, "http://127.0.0.1:1")
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+	get := func(path string) []byte {
+		resp, err := http.Get(front.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		raw, _ := io.ReadAll(resp.Body)
+		return raw
+	}
+	v1 := get("/v1/models")
+	plain := get("/models")
+	if string(v1) != string(plain) {
+		t.Fatalf("/v1/models and /models differ:\n%s\n%s", v1, plain)
+	}
+	var body struct {
+		Object  string `json:"object"`
+		OwnedBy string `json:"owned_by"`
+		Data    []struct {
+			ID          string `json:"id"`
+			OwnedBy     string `json:"owned_by"`
+			CanonicalID string `json:"canonical_id"`
+			Group       string `json:"group"`
+			ChainHops   int    `json:"chain_hops"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(v1, &body); err != nil {
+		t.Fatalf("catalog not JSON: %s", v1)
+	}
+	if body.Object != "list" || body.OwnedBy != "zgate" {
+		t.Fatalf("catalog envelope wrong: %s", v1)
+	}
+	byID := map[string]bool{}
+	count := 0
+	for _, e := range body.Data {
+		byID[e.ID] = true
+		if e.OwnedBy != "zgate" {
+			t.Fatalf("%s owned_by != zgate: %s", e.ID, v1)
+		}
+		if e.ID == "Alpha" {
+			count++
+			if e.CanonicalID != "Alpha" || e.Group != "主力" || e.ChainHops != 2 {
+				t.Fatalf("Alpha metadata wrong: %+v", e)
+			}
+		}
+		if e.ID == "alpha-legacy" && (e.CanonicalID != "Alpha" || e.Group != "主力") {
+			t.Fatalf("alpha-legacy metadata wrong: %+v", e)
+		}
+	}
+	if !byID["Alpha"] || !byID["alpha-legacy"] {
+		t.Fatalf("catalog missing unified/legacy id: %s", v1)
+	}
+	if count != 1 {
+		t.Fatalf("Alpha duplicated %d times: %s", count, v1)
+	}
+}
+
+func TestQiniuChatHopGetsBearer(t *testing.T) {
+	srv, _ := newServer(t, `{"models":{},"legacy":{}}`, "http://127.0.0.1:1")
+	r := httptest.NewRequest("POST", "/chat/completions", strings.NewReader(`{"model":"m"}`))
+	r.Header.Set("Authorization", "Bearer client-raw")
+	h := srv.forwardHeaders(r, []byte(`{"model":"m"}`), "QN", "qn-key")
+	if got := h.Get("Authorization"); got != "Bearer qn-key" {
+		t.Fatalf("QN Authorization = %q, want Bearer qn-key", got)
+	}
+}
