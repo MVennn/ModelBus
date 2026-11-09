@@ -10,8 +10,9 @@ import (
 )
 
 const (
-	createNoWindow = 0x08000000
-	createNewGroup = 0x00000200
+	createNoWindow  = 0x08000000
+	createNewGroup  = 0x00000200
+	detachedProcess = 0x00000008
 
 	jobObjectExtendedLimitInformation = 9
 	jobObjectLimitKillOnJobClose      = 0x00002000
@@ -26,6 +27,8 @@ var (
 	procAssignProcessToJob   = kernel32.NewProc("AssignProcessToJobObject")
 	procTerminateJobObject   = kernel32.NewProc("TerminateJobObject")
 	procCloseHandle          = kernel32.NewProc("CloseHandle")
+	procOpenProcess          = kernel32.NewProc("OpenProcess")
+	procGetExitCodeProcess   = kernel32.NewProc("GetExitCodeProcess")
 )
 
 type jobBasicLimit struct {
@@ -117,4 +120,42 @@ func PortBusy(port int) bool {
 	}
 	_ = conn.Close()
 	return true
+}
+
+// detachedAttr keeps a child alive after the launching console disappears:
+// the child gets no console at all, so a console-window close cannot send it
+// CTRL_CLOSE_EVENT, and the parent may exit immediately after Start.
+func DetachedAttr() *syscall.SysProcAttr {
+	return &syscall.SysProcAttr{
+		CreationFlags: detachedProcess | createNewGroup | createNoWindow,
+		HideWindow:    true,
+	}
+}
+
+const (
+	processQueryLimitedInformation = 0x1000
+	stillActive                    = 259
+)
+
+// ProcessAlive reports whether pid still names a running process.
+//
+// OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION) works for processes in any
+// session, which is what the -tray launcher needs: its parent may be a
+// terminal in another session. A PID can be reused, but the launcher is our
+// direct parent and the check runs every two seconds, so the window is tiny.
+func ProcessAlive(pid uint32) bool {
+	if pid == 0 {
+		return false
+	}
+	h, _, _ := procOpenProcess.Call(processQueryLimitedInformation, 0, uintptr(pid))
+	if h == 0 {
+		return false
+	}
+	defer procCloseHandle.Call(h)
+	var code uint32
+	ok, _, _ := procGetExitCodeProcess.Call(h, uintptr(unsafe.Pointer(&code)))
+	if ok == 0 {
+		return true // handle valid but query failed: assume alive, do not kill
+	}
+	return code == stillActive
 }

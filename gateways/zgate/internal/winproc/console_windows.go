@@ -22,6 +22,7 @@ var (
 	procAttachConsole = kernel32.NewProc("AttachConsole")
 	procGetStdHandle  = kernel32.NewProc("GetStdHandle")
 	procGetFileType   = kernel32.NewProc("GetFileType")
+	procFreeConsole   = kernel32.NewProc("FreeConsole")
 )
 
 // AttachParentConsole rebinds stdout/stderr to the terminal that launched us.
@@ -32,6 +33,13 @@ var (
 // hidden conhost and `zgate status > file` would be empty. Only when stdout is
 // unusable or a raw console handle do we attach to the parent's console, so
 // running from cmd / PowerShell still prints.
+//
+// The catch: a Windows console window closes with its last attached process.
+// Since zgate survives the shell that started it (closing the console does not
+// kill it — only Ctrl+C or taskkill does), an attached console would sit there
+// half-dead for as long as the gateway runs. DetachConsole undoes the attach
+// once the boot banner is out, which keeps the terminal readable and gives the
+// console window back to its shell.
 func AttachParentConsole() bool {
 	if keepInheritedStdio() {
 		return true
@@ -45,6 +53,20 @@ func AttachParentConsole() bool {
 		os.Stderr = out
 	}
 	return true
+}
+
+// DetachConsole releases a console taken by AttachParentConsole: output keeps
+// going to the zgate log file, and the shell's window is free to close.
+//
+// Handles we inherited (pipe / file) are left alone — detaching would break a
+// caller that deliberately captured our output. A failed detach is harmless:
+// the process keeps running, the console simply stays shared.
+func DetachConsole() bool {
+	if keepInheritedStdio() {
+		return false
+	}
+	ok, _, _ := procFreeConsole.Call()
+	return ok != 0
 }
 
 func keepInheritedStdio() bool {

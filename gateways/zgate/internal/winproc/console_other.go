@@ -4,3 +4,6 @@ package winproc
 
 // AttachParentConsole is a no-op outside Windows.
 func AttachParentConsole() bool { return true }
+
+// DetachConsole is a no-op outside Windows.
+func DetachConsole() bool { return false }

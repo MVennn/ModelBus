@@ -4,6 +4,7 @@
 
 用法：
     python gateways/zgate/build.py              # 构建（Windows: 产物 zgate.exe）+ 校验 PE 子系统
+    python gateways/zgate/build.py --candidate  # 编译到 zgate.candidate.exe，不覆盖运行中的 zgate.exe（deploy-zgate.ps1 用）
     python gateways/zgate/build.py --check      # 只校验现有 gateways/zgate/zgate.exe，不编译
     python gateways/zgate/build.py --cross-check# 交叉编译一份 windows/amd64 到临时目录并校验（CI 用，可在 Linux 上跑）
 
@@ -103,6 +104,26 @@ def build_native() -> int:
     return check_subsystem(EXE)
 
 
+def build_candidate() -> int:
+    """编译到 zgate.candidate.exe，不碰正在运行的 zgate.exe。
+
+    Windows 上被进程占用的 exe 无法覆盖；换版流程（tools/zgate-lifecycle/deploy-zgate.ps1）
+    先编候选，停旧实例后再原子替换，失败可用备份回滚。产物同样强制 GUI 子系统。
+    """
+    if sys.platform != "win32":
+        print("[SKIP] 本机不是 Windows，跳过候选构建（CI 用 --cross-check）。")
+        return 0
+    candidate = "zgate.candidate.exe"  # 相对 -C gateways/zgate 的目录，即 ZDIR
+    rc = run(["go", "build", "-C", "gateways/zgate", "-ldflags", WINDOWSGUI_LDFLAGS,
+              "-o", candidate, "."], cwd=ROOT)
+    if rc != 0:
+        print(f"[FAIL] go build 候选退出码 {rc}")
+        return 1
+    path = os.path.join(ZDIR, candidate)
+    print(f"[INFO] 候选产物：{path}")
+    return check_subsystem(path)
+
+
 def build_cross_check() -> int:
     """交叉编译 windows/amd64 到临时目录并校验 PE 子系统。
 
@@ -127,6 +148,9 @@ def main() -> int:
     if "--cross-check" in sys.argv:
         print("== 交叉编译 windows/amd64 并校验 PE 子系统 ==")
         return build_cross_check()
+    if "--candidate" in sys.argv:
+        print("== 构建候选产物（不覆盖运行中的 zgate.exe）==")
+        return build_candidate()
     if "--check" in sys.argv:
         print("== 校验现有产物 ==")
         if not os.path.exists(EXE):

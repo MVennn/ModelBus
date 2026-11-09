@@ -4,7 +4,9 @@ package winproc
 
 import (
 	"net"
+	"os"
 	"os/exec"
+	"syscall"
 	"time"
 )
 
@@ -32,4 +34,19 @@ func PortBusy(port int) bool {
 	return true
 }
 
+// detachedAttr has no effect outside Windows; the child simply inherits.
+func DetachedAttr() *syscall.SysProcAttr { return nil }
+
 var _ = exec.Command
+
+// ProcessAlive reports whether pid still names a running process.
+func ProcessAlive(pid uint32) bool {
+	if pid == 0 {
+		return false
+	}
+	p, err := os.FindProcess(int(pid))
+	if err != nil {
+		return false
+	}
+	return p.Signal(syscall.Signal(0)) == nil
+}
