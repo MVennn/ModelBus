@@ -1299,7 +1299,7 @@ provider 列表；Qoder hub 与 WorkBuddy/OpenCode 的现有链路保持不变�
 - `go test ./...` 25 个用例（新增跨渠道 chain 用例）全绿；`check-docs` / `check-secrets` 通过
 
 ## 待解决 / 注意事项
-- 分组基准 0.11 是固定常数；DeepSeek 调价后需要手动改 `LOW_MAX`
+- 分组基准 0.11 是固定常数；DeepSeek 调价后需要手动改 `DEEPSEEK_BASELINE_CREDITS`（`LOW_MAX` 现引用该基准）
 - 同名不同协议目前用 `-Msg` / `-Resp` 兜底，当前没有触发
 - 峰谷价现在只影响链路顺序与分组归属，不再改显示名
 
@@ -2420,3 +2420,364 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 ## 未做
 - 用响应 list_cost 反推单价：OC 各厂 in/out 倍率不同（deepseek-v4-pro 对得上，
   mimo-v2.6-flash 对不上 OC_PRICES 的 0.06），硬填会把价格闸算歪。口径定为「缺价必须可见」。
+
+## 2026-11-09 开机弹两个 cmd 窗口：根因与自启收敛
+
+- **现象**：开机弹两个 cmd 窗口（实为 Win11 Windows Terminal 接管的 console，标题是 zgate.exe 路径）。
+- **根因**：`gateways/zgate/zgate.exe` 被裸 `go build .` 覆盖成控制台版（`build.py --check` 报
+  `Subsystem = 3`，10469888B / 11-06 22:55，与 `zgate-0.3.0-cand.exe` 同尺寸）；叠加自启有三条重复路径
+  （启动文件夹 lnk + HKCU Run daemon + 计划任务 `ModelBus-zgate`），第二实例抢 7871 失败退出。
+- **修复**：`mv zgate.exe .work/zgate.exe.console-bak-20261109` → `python gateways/zgate/build.py`
+  → `Subsystem = 2 → WINDOWS_GUI`（10490368B / 07:24）；删除启动文件夹 `ModelBus zgate.lnk`、
+  HKCU Run 值 `ZcodeAIModels-zgate-daemon`（并杀掉 pid 9804）、计划任务 `\ModelBus-zgate`
+  （UAC `schtasks /Delete /F`）；新增 `\ModelBus-zgate-hidden`（AtLogOn → `launch-zgate.vbs` →
+  `start-zgate-nw.ps1`，`CreateNoWindow`，跑完自退）；`ensure-zgate.ps1` 的启动动作改为调用
+  `start-zgate-nw.ps1`，看门狗 `\ModelBus-zgate-watchdog` 保持 PT1M 启用。
+- **未动**：`CSPPassword.ahk.lnk`（itzmx 加密包自动填密码，有用，保留）；`cmd.exe /C AMDRSServ.exe`
+  （AMD 机制，hwnd=0 不弹窗）；当前 zgate pid 5388 未重启（AGENTS §6 禁止会话内重启长驻网关），
+  它继续在 7871 服务，其可见 wt 窗口随下次重启消失。
+- **文档**：`docs/MAINTENANCE.md` §8.1、`docs/ARCHITECTURE.md` §3.1 + §10.2、`docs/PITFALLS.md` §20、
+  `docs/TROUBLESHOOTING.md` §16 已同步；`memories/zgate-windowless-build.md` 新增「自启收敛」章节。
+  备份与回滚：`%LOCALAPPDATA%\ZCodeGateway\autostart-backup-20261109\restore-autostart.ps1`。
+- **验证**：`build.py --check` = Subsystem 2；`wscript //B //Nologo launch-zgate.vbs` →
+  `zgate-launch.log` 记 `port already up, skip` 且 wt/OpenConsole 计数不增；watchdog 07:26:01
+  LastTaskResult=0；`curl /health` = 200；`python tools/check-docs.py` 35 篇全通。
+
+## 2026-11-09 13:2x 主力链路换 CP Gemini + 撤 opencode 付费 Gemini
+
+- **触发**：用户要求「把你刚刚接入的 opencode 的 gemini 去掉，免得到时候代到他了，把我额度耗光了」。
+- **改动**：`tools/model_alias.py` MAIN_ORDER 删 `chat:gemini-4-argon`（1.76 积分/次），换四条 CP 渠道
+  `chat:cp:gemini-3.8-flash-high` / `chat:cp:gemini-3.1-flash-lite` / `chat:cp:gemini-3.5-flash-lite` /
+  `chat:cp:gemini-3-flash`；CHANNEL_PREFIX 补 `"CP": "cp:"`；price_of 对 CP 返回 0.0（排在省钱档之前）；
+  ABBR 补四条显示名；VENDOR_PREFIXES 补 `("Gemini","GEMINI")`。
+- **落盘**：`python tools/model_alias.py --apply` → 3 provider / 22 模型；主力 5 条 = DeepSeek-4.1-Flash 0.11 +
+  四个 Gemini 0.00；Gemini-4-Argon 因 1.76 > 0.11 被跳过，不再落在任何路由上。
+- **热载**：正确端点是 `POST http://127.0.0.1:7871/admin/reload`（`/reload` 返回 000），返回
+  `{"applied":["workbuddy","qoder","cliproxyapi"],"ok":true}`。
+- **阻塞（未解）**：Antigravity 授权成功、`/v1/models` 可列 8 个型号，但对话返回
+  `403 PERMISSION_DENIED / reason: VALIDATION_REQUIRED "Verify your account to continue."` —— Google 账号侧风控，
+  换模型换协议一致。需账号验证或改用 `api-keys.gemini` + 真 API key。
+- **网关换版**：`.work/restart_zgate.ps1` 已跑完（`OK swapped 2026-11-09T13:15:27`），zgate.log 13:15:26 出现
+  `CP : http://127.0.0.1:8317/v1 (key=ok, child=cliproxyapi)`，CP 渠道注册成功。
+- **坑**：`zgate.exe` / `zgate.exe.bak-20261109` / `.work/zgate.candidate.exe` 三者 md5 相同
+  （9a6ced21cac6061dab90d74f94f49018），备份脚本抓到的是已替换的新文件，旧二进制未真正保留，回滚需重编旧代码。
+- **入库卫生**：`third-party/cliproxyapi/.gitignore` 追加 `*.err`；删掉 aglogin*.err/.work_test.json/run.*.log；
+  `git add -n` 后该目录只剩 .gitignore/LICENSE/README*.md/UPSTREAM.md/config.example.yaml。
+
+
+## 2026-11-09 13:5x Gemini 走 AI Studio API key 打通（CP 渠道四型号 200）
+
+- **输入**：用户提供 AI Studio key（AQ. 前缀）。实测 `x-goog-api-key` 头 200、`Authorization: Bearer` 401，
+  v1beta 列出 47 个支持 generateContent 的型号。
+- **逐型号直连探测**：gemini-3.7-flash 200 但 **104.6s**（推理型）；3.6-flash 1.6s；3-flash-preview 1.3s；
+  3.5-flash-lite 1.2s；3.1-flash-lite 1.2-5.1s；gemini-3-flash 404（只有 -preview）；
+  gemini-4-argon 429 超配额；gemini-3.8-flash 两次探测均无响应；gemini-3.1-pro-preview 429；gemini-2.5-pro 404。
+- **配置**：`third-party/cliproxyapi/config.yaml` 启用根 `api-keys.gemini`（name=gemini-aistudio，
+  base-url=https://generativelanguage.googleapis.com），models 列 5 个：3.7-flash / 3.6-flash /
+  3-flash-preview / 3.5-flash-lite / 3.1-flash-lite，**不写 alias**（带 alias 时 3.8-flash-high 与 3-flash 两个
+  alias 会挂死 >90s）。access.api-keys 的客户端 key 仍是 f1a1d2f1…（与 cliproxy.env 的 CLIPROXY_ACCESS_KEY 一致）。
+- **三个 bug（都已修）**：
+  1. `gateways/zgate/zgate.json` 的 cliproxyapi child 路径写成 `../third-party/...`，解析成
+     `gateways/third-party/...` → 日志 `fork/exec ...: The directory name is invalid`。改为 `../../third-party/...`。
+  2. `gateways/zgate/internal/router/router.go:474` 的 `switch channel` 只有 WB/QD/QW/OC，**漏了 CP** →
+     转发时保留客户端 Bearer，CLIProxyAPI 回 `401 {"error":"Invalid API key"}`。已加 CP 到第一个 case。
+  3. 重编后 zgate.exe 需要换版才生效（restart 脚本备份名改 `zgate.exe.prev`，无条件覆盖）。
+- **主力**：Gemini-3.6-Flash / Gemini-3-Flash(3-flash-preview) / Gemini-3.5-Flash-Lite / Gemini-3.1-Flash-Lite，
+  全部 0.00；3.7-flash 因经 CP 常 503 过载且直连 104s 不进主力，仍留在 CP 模型列表可手动选。
+- **验证**：`python .work/e2e_final.py` 四型号并发打 zgate 7871 → 全部 200，1.1-2.1s；
+  `/admin/reload` 返回 applied=[cliproxyapi workbuddy qoder]；zgate.log 记
+  `POST /chat/completions model=Gemini-3.5-Flash-Lite -> CP:gemini-3.5-flash-lite (1/1)`。
+- **antigravity OAuth**：用户称已登录验证，实测仍 `403 VALIDATION_REQUIRED`（凭证在 auths/，模型仍列出但不可用）。
+
+
+## 2026-11-09 14:0x 免费组里三个「残废 Gemini」清掉
+
+- **现象**：免费组（0 积分）里夹着 `gemini-3-Flash` / `gemini-3.7-Flash` / `gemini-3.8-Flash-high` 三条，
+  显示名是小写、无 logo，夹在 Conatus 与 Beam 之间。三条全部调不通：`gemini-3-flash` 上游 404
+  （真实型号只有 `-preview`）、`3.7-flash` 503 高需求、`3.8-flash-high` 403 需账号验证。
+- **根因**：`tools/model_alias.py` 的 `entry_group()` 里 `if price <= 0: return "free"`。CP 渠道价格被
+  统一按 0 计，于是 CLIProxyAPI 暴露的**全部**型号（4 个主力 + antigravity 的 8 个 403 + 若干 404）
+  全掉进免费组。白名单只管「进不进主力」，管不到「不进免费」。
+- **修法**：`entry_group()` 开头加 CP 白名单闸 —— 链路全是 CP 渠道、又没命中 MAIN_IDS 的条目
+  直接 `return "drop", "cp-whitelist"`。
+- **结果**：22 个模型，主力 5（DeepSeek-4.1-Flash + 四个 Gemini）、免费 5（HY3 / HY4-Free / Beam /
+  Conatus / Iceman）、省钱 12。Gemini 只剩四条且全在主力组。
+- **验证**：`/health` 的 `alias.models=22`；四型号复测 Gemini-3.6-Flash 200 6.8s / Gemini-3-Flash 200
+  1.6s / Gemini-3.5-Flash-Lite 200 0.8s / Gemini-3.1-Flash-Lite 200 8.8s。同时测出 **Conatus 502
+  120.1s**（QN 渠道 api.qnaigc.com），与本次改动无关，属 QN 免费额度/上游问题。
+
+
+### 收尾（2026-11-09 14:0x）
+
+- `docs/MODEL-PROVIDERS.md` 新增 **§4.11 Gemini 反代（CLIProxyAPI）**：渠道表、凭证格式硬门槛
+  （`AQ.` key 只认 `x-goog-api-key`）、三个必踩的坑（child 相对路径 / router.go 的 switch 漏 CP /
+  `models[].alias` 挂死）、免费组闸、antigravity OAuth 的 `UNSUPPORTED_CLIENT` 结论。
+- `python tools/check-docs.py` → 36 篇文档全通（链接 / 锚点 / 相对链接 / 无孤儿）。
+- 入库卫生：`git add -n third-party/cliproxyapi/` 只列 .gitignore / LICENSE / README.md /
+  README_CN.md / UPSTREAM.md / config.example.yaml；config.yaml、cliproxy.env、*.env、auths/、
+  cli-proxy-api.exe、kv.db、logs/ 全部被忽略。
+- 运行态：`/health` = ok，`alias.models=22`，三个 child（workbuddy / qoder / cliproxyapi）策略正常；
+  `cooling=2`（Conatus 502 与另一条，日志无 cooling 行，属路由层计数，不影响主力）。
+- 未追踪项：`gateways/zgate/.restart.log`、`gateways/zgate/zgate.exe.prev`、`third-party/cliproxyapi/`。
+
+
+
+## 2026-11-09 14:2x Gemini 反代 502：单跳路径补退避重试 + CP 侧重试窗口拉长
+
+- **现象**：首发 Gemini-3.6-Flash 偶发，随后 45 秒内所有 Gemini 请求全 502
+  （`{"error":{"message":"all upstreams failed: OC:gm"}}` 类），zgate 日志
+  `429 退避 700ms 后重试同一跳` → `退避后仍 429，冷却 45s` → `冷却中，跳过`。
+- **根因（两条叠一起）**：
+  1. CP 只有 1 个 AI Studio 免费凭据，`request-retry` 默认值下 `max-retry-interval` 太短，
+     每分钟 250k input token 的瞬时限流（上游回 `Please retry in 59.15s`）没在 CP 内部消化，
+     直接把 429 透给 zgate；`gemini-3.7-flash` 的 503 UNAVAILABLE 同理。
+  2. Gemini 别名是 **chain 长度 1**，走 `routeAlias` 的单跳分支 `s.forward` →
+     `doForwardWith(accept=nil, retry=nil)`：既不退避重试也不记冷却，紧接着又被
+     `forwardChain` 的冷却表短路 —— 一次 429 就能把该跳钉死 45s，冷却期内必 502。
+- **改法**：
+  - `gateways/zgate/internal/router/router.go`：单跳分支改走新增的 `forwardSingle`：
+    传输层失败重试 1 次（`transportRetryDelay`）；>=400 读 8KB 响应头，429 退避
+    `rateLimitBackoff`(700ms) 原地重试 1 次；仍失败按状态码回写真实码并调 `acceptSingle`
+    记冷却（429→45s / 504→5min / 配额→24h / region）；冷却期直接 502
+    `all upstreams failed: <hop>`，不再发无用上游请求。错误体统一为
+    `unified-router upstream error: <StatusText> <上游 message>`。
+  - `third-party/cliproxyapi/config.yaml`（备份 `config.yaml.bak-20261109-retry`）：
+    `routing.retry.request-retry=3`、`max-retry-interval=45`、
+    `cooldown.transient-error-cooldown-seconds=10`。
+- **验证**：
+  - `go vet ./...` exit 0；`go test ./...` 全绿（alias 0.28s / bridge 2.72s / router 3.96s /
+    supervisor 10.56s），新增 `TestLoneHop429RetriesInPlace`、`TestLoneHop429CoolsAfterRetry`、
+    `TestRegionBlockedDoesNotCoolALoneHop` 均 PASS。
+  - 离线端到端（`.work/zgate-fix-20261109`，桩 18317 前两次 429、隔离实例 17871 单跳指向桩）：
+    请求 1 → `退避 700ms 后重试同一跳` → `退避后仍 429，冷却 45s` → 502（706ms，2 次命中桩）；
+    请求 2/3 冷却期内 → 502（0~1ms，不再打上游）；冷却过期后 → 200，桩计数连续递增。
+  - 生产实例未重启（仍是旧二进制），改后 `/health` 与四型号探测不受影响。
+- **待生效**：CP 的 `routing` 段要 zgate reload/重启 child 才读到，zgate 新二进制同理 ——
+  按规矩不自动重启长驻网关，由人工择时执行 `gateways/zgate` 重启 + child 拉起。
+
+## 2026-11-09 14:4x zgate 前台进程随终端关闭而死
+
+- **现象**：在 Windows Terminal / cmd 里起 zgate（父链 WindowsTerminal → cmd → zgate），
+  一关窗口网关就结束，四个 chat 组全 502；用户问「为什么不能在 cmd 里拉起」。
+- **根因**：`zgate serve` 是前台进程，控制台窗口关闭对窗内所有进程发
+  `CTRL_CLOSE_EVENT`；wb2api 等子进程又挂在 zgate 的 Job Object（KILL_ON_JOB_CLOSE）上，
+  一起走。产物本身已是 GUI 子系统，但 GUI 子系统只要 `AttachParentConsole()` 成功仍会
+  成为控制台的一员。
+- **改法**（`gateways/zgate`）：
+  - `internal/winproc/console_windows.go`：新增 `DetachConsole()`（`FreeConsole` + 只对
+    控制台句柄生效，pipe/文件重定向不动）；`main.go` 的 `serve()` 打完启动横幅后调用，
+    前台运行不再留半死 conhost，`zgate status > out.txt` 依旧有输出。
+  - `main.go`：新增 `serve -tray`（别名 `--tray` / `-background`）→ `detach()`，
+    以 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW` 拉起副本后立即返回；
+    副本无控制台，收不到关窗事件。拉起方把自身 PID 放进 `ZGATE_PARENT_PID`，
+    `serve()` 里的 `superviseLauncher` 每 2s 用 `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)`
+    +`GetExitCodeProcess` 判断拉起方是否还在，没了就 `os.Exit(0)`，不留孤儿占端口。
+  - `internal/winproc/winproc_{windows,other}.go`：新增 `DetachedAttr()`、`ProcessAlive()`。
+  - `install()`：登录自启快捷方式的目标参数由 `serve` 改成 `serve -tray`。
+  - 备份：`main.go.bak-20261109-dup`、`console_windows.go.bak-20261109-detach`、
+    `console_other.go.bak-20261109-detach`。
+- **验证**：
+  - `go vet ./...` exit 0；`go test ./...` 全绿（alias/bridge/router/supervisor）；
+    `python build.py` 成功，`--check` 报 `Subsystem = 2 → WINDOWS_GUI`，产物 10516480 B。
+  - 隔离实例（`ZGATE_CONFIG` 指向 `.work/zgate-detach-verify`，端口 17991）：
+    `serve -tray` 输出「已在后台启动: <exe> (pid N, ready=true)；停止: Stop-Process -Id N」
+    且同一行落日志；拉起方退出后 2s 内日志出现「拉起方 <pid> 已退出，后台副本随之停止」，
+    进程消失、端口释放（预期行为）。
+  - 计划任务（schtasks 一次性任务，父为 Task Scheduler）起的普通 `serve`：跨 run_code
+    仍然 `/health` 200，证明「与调用方解耦后不会被进程树回收带走」。
+  - **发现**：`cmd /c`、`Start-Process` 这类结束整棵进程树的方式仍会带走
+    `DETACHED_PROCESS` 子进程（实测 2s 内消失）；彻底解耦只能靠计划任务启动（自启即此路径）。
+- **待生效**：生产实例（旧二进制）仍在跑，按规矩不自动重启；人工执行
+  `Stop-Process -Id <pid> -Force` 后用 `zgate.exe serve -tray` 重起即可。
+
+
+## 2026-11-09 16:1x–16:3x 优化收口：撤销无效单跳改动 + zgate 自动换版解耦 + 门禁堵漏
+
+> 承接 14:2x「单跳 429」批次：该批次实际无效，本批次先撤销，再补三件真做的事。
+
+- **P1 撤销「改了等于没改」**（审查结论 + 本轮源码/二进制实况复核）：
+  - `internal/router/router.go:347` 线上二进制仍调 `s.forward(...)`；14:2x 新增的
+    `forwardSingle` / `acceptSingle` / `rawError` / `upstreamMessageOf` 共 139 行是零调用死代码，
+    `acceptSingle` 恒返回 true；所谓「单跳改走 forwardSingle」从未生效。
+  - 两例新测试 `TestLoneHop429RetriesInPlace` / `TestLoneHop429CoolsAfterRetry` 命中
+    `attemptChain` 而非 `forwardSingle`（chain 数组 len=1 仍走 attemptChain），属测旧路径的
+    错位测试，测过了也不证明新路径。
+  - 处置：`router.go:347` 恢复 `s.forward(w, r, rewritten, t.Base, path, search, headers)`；
+    删死代码段（350–487，139 行 / 4046 字符）；`router_test.go` 删两错位测试（85 行）。
+    复核 `forwardSingle/acceptSingle/rawError/upstreamMessageOf/TestLoneHop429` 计数全 0，
+    `s.forward(` = 2（routeFallback 两处合法调用）。
+  - 「`--check` 触发 DSH 同步写入致假漂移」是**误报**：`tools/model_alias.py:1997-2000`
+    在 `if args.check` 就 return，走不到 `:2138` 的 `sync_deepseek_harness`；全文件写动作
+    都在 `--apply` 分支。本轮不改该处。
+
+- **P2 真 bug + 死常量清理**：
+  - `internal/config/config.go:243` 补 `c.CliproxyEnvFile = c.resolve(c.CliproxyEnvFile)`
+    （原 `resolvePaths()` 只 resolve Qoder/Qwen/Qiniu/Log.Dir，CP 相对路径按进程 cwd 解析会错，
+    换启动方式即 `CP key not configured`）。
+  - `tools/model_alias.py`：删零调用死常量 `VENDOR_ORDER` + `vendor_rank`（对
+    `Gemini-3.6-Flash` 本会抛 `ValueError`）、删零代码引用的 `TAIL_HOPS`；
+    `("Gemini", "GEMINI")` → `("Gemini", "GEM")` 统一厂商码。行为等价实测
+    `vendor_of("Gemini-3.6-Flash")=GEM`、`anonymous_rank(...)=0`、`anonymous_rank("Beam-9")=1`。
+  - `gateways/zgate/main.go` 删零引用死常量 `taskName`（裸名计划任务已不存在）。
+
+- **附加优化（用户诉求）：改完自动换版 + 关 CMD / 退 DSH 网关不死**：
+  - 实况：`/admin/reload` 只热加载 `zgate.json` 策略（`supervisor.go:473` 注明 exe/端口
+    启动期固定），换 Go 代码必须换二进制；`cmd /c`、`Start-Process` 起的进程落在会话
+    Job Object（KILL_ON_JOB_CLOSE），会话结束整棵树被回收（14:4x 已实测）。唯一稳定父链
+    是计划任务 `\ModelBus-zgate-hidden`。
+  - 新增 `tools/zgate-lifecycle/` 9 正本：`deploy-zgate.ps1`（编候选→停 watchdog→停旧→
+    备份→替换→`schtasks /run /tn ModelBus-zgate-hidden`→/health 轮询 40×1s→恢复 watchdog，
+    catch 回滚并再次拉起）、`install-lifecycle.ps1`（部署 8 文件到 `%LOCALAPPDATA%\ZCodeGateway`
+    + 校正两任务动作）、`restart-zgate.cmd`（换版入口），另 6 个启动/包装脚本一律走计划任务
+    或薄包装，不再 `Start-Process`。
+  - `gateways/zgate/build.py` 加 `--candidate`：编译到 `zgate.candidate.exe`，不覆盖运行中的
+    exe（Windows 锁文件），产物强制 PE Subsystem=2（WINDOWS_GUI）。
+  - 换版两次成功 + 最终版 e2e 复验（16:33:12）：`zgate.exe` 10501120 B /
+    md5 `22877d735e3026245f7d2abb2932d9a4`，PID 30164 / PPID 在 Schedule 服务下，
+    `/health` 200，child wb2api 随之重启，hidden/watchdog 两任务 Ready。换版 CMD 退出后
+    全新进程复核仍存活 → 三点诉求全落地。
+  - `deploy-zgate.ps1` 精简 env 加固：`Resolve-LocalAppData`（三层回退）+ `Resolve-Python`
+    （PATH 无 Python 时回退绝对路径，实测 exit=0 解析到 Python312），并设
+    `PYTHONIOENCODING=utf-8` + `Console.OutputEncoding=UTF8` 修中文日志乱码。
+
+- **m00329「CI / 语法 / 文档怎么又来了」根因 + 堵漏**：
+  - 不是同一 bug 复发，是三道门禁中间全空、且没一道挡在「写入」这一刻：
+    `.githooks/pre-commit` 原只跑 `check-secrets.py`（gofmt / PS1 语法 / BOM / check-docs 全缺）；
+    CI 只在 push/PR 触发，本地改完不跑；`tools/check-docs.py` 只查链接/锚点/引言/孤儿，
+    门面写「2 child / 3 provider」照样 `[OK]`。
+  - 新增 `tools/check-project.py`：`--semantic`（真值取 `zgate.json`，扫门面旧口径 +
+    children/端口/任务名/索引）、`--lineendings`（PS1 必 BOM+LF，CMD/BAT/VBS/sh/py 无 BOM+LF）、
+    `--ps1`（PowerShell Parser 语法，无解释器则 SKIP）。
+  - `.githooks/pre-commit` 接线：`check-secrets` + `gofmt -l gateways/zgate`（非空 exit 1）
+    + `check-docs.py` + `check-project.py`；`.github/workflows/ci.yml` 加
+    `python3 tools/check-project.py`；`git config core.hooksPath .githooks` 已挂上。
+  - 证据脱敏：`evidence/agent-gateway-lifecycle.md` 7 处本机用户目录 → `<用户名>`；
+    `check-secrets.py` 转绿 `[OK] 已扫描 176 个文件`。
+
+- **验收（本轮真实输出，env 注入 GOCACHE / LOCALAPPDATA）**：
+  - `go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 exit 0
+    （alias/bridge/router/supervisor 全绿）；`gofmt -l .` 输出空。
+  - `python -m py_compile tools/model_alias.py` exit 0；`vendor_of` / `anonymous_rank` 实测如上。
+  - `tools/check-project.py --lineendings` exit 0（11 脚本）、`--ps1` exit 0（5 脚本 Parser）、
+    `tools/check-secrets.py` exit 0（176 文件）。
+  - 换版 e2e：`deploy-zgate.log` 中文无乱码，`/health` 200，PID/PPID/两任务实况如上。
+  - 门面文档对齐（3 children / 6 upstreams / 7863+8790+8317 / 新 `docs/ZGATE-LIFECYCLE.md`）
+    与 `check-docs.py` / `check-project.py --semantic` 转绿由并行子代理 01a7866d 收口，
+    结果另批次补记。
+
+## 状态: 已完成
+
+## 2026-11-09 16:4x 优化收口补记：门面对齐验收 + 全量门禁转绿
+
+### 门面对齐（子代理 01a7866d，13 文件，写域不越界）
+- [x] 新建 `docs/ZGATE-LIFECYCLE.md`（191 行 / 11516 B）：一句话引言块、双计划任务父链、Job Object 回收机制、九步换版流程、`/admin/reload` 边界、CMD/DSH 退出后仍存活的验证；全文用 `%LOCALAPPDATA%` 与相对路径，无本机绝对路径、无凭据真值。
+- [x] `docs/README.md:29` 登记索引（孤儿零容忍）；`docs/DOC-RULES.md:15/:59` 正本映射表补行。
+- [x] README / AGENTS / CHANGELOG / ARCHITECTURE / MAINTENANCE / TROUBLESHOOTING / TOOLS / PITFALLS / SECRETS / memories 逐条对齐真值：3 children（7863 / 8790 / 8317）、6 upstreams（OC/WB/QD/QW/QN/CP）、环境变量补 QD/QWEN/QINIU/CLIPROXY、`config.json`→`zgate.json`（ARCHITECTURE:140）、旧任务名 `ModelBus-zgate`→`ModelBus-zgate-hidden`。
+- [x] 语义门禁 6 项旧口径（三组 provider / 四个常驻进程 / 293 MB / 两个子进程等）清零 → `python tools/check-project.py --semantic` exit=0。
+- [x] `docs/README.md:47` 索引行随 AGENTS.md「四条硬规矩」同步更正（本轮引入的口径不一致，收口时修）。
+
+### 验收（真实命令 + 退出码）
+- [x] `python tools/check-docs.py` → exit=0 `[OK] 37 篇文档全部通过（链接 / 锚点 / 引言块 / 孤儿）`（11 个断链全随新文档落盘消失）。
+- [x] `python tools/check-project.py` → exit=0 `[OK] check-project: 3 项通过（语义 / 换行BOM / PS1）`。
+- [x] `python tools/check-secrets.py` → exit=0 `[OK] 已扫描 174 个文件，未发现疑似敏感信息`（证据分片 7 处本机路径已脱敏为 `<用户名>`）。
+- [x] `C:\Program Files\Git\bin\bash.exe .githooks/pre-commit` → exit=0，secrets / 37 篇文档 / 语义 / 换行BOM / PS1 五段全绿（钩子已由 `git config core.hooksPath .githooks` 挂上）。
+- [x] `gofmt -l .` 空、`go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 exit=0（alias 0.063s / bridge 2.666s / router 2.471s / supervisor 10.490s）。
+- [x] `python -m py_compile tools/model_alias.py tools/check-project.py` exit=0；`python gateways/zgate/build.py --check` exit=0 `Subsystem = 2 → WINDOWS_GUI`。
+- [x] 行为等价：`vendor_of("Gemini-3.6-Flash") = GEM` / `anonymous_rank("Gemini-3.6-Flash") = 0` / `anonymous_rank("Beam-9") = 1`（补 `HOME` 后 exit=0；精简 env 下 `Path.home()` 抛错属夹具问题，非代码缺陷）。
+- [x] P1/P2 硬口径：router.go `forwardSingle/acceptSingle/rawError/upstreamMessageOf`=0、`s.forward(`=2；router_test.go `TestLoneHop429`=0；model_alias.py `VENDOR_ORDER/vendor_rank/GEMINI`=0、`("Gemini", "GEM")`=1；config.go `c.CliproxyEnvFile = c.resolve(...)`=1；main.go `taskName`=0。
+- [x] 运行态跨进程存活（换版 CMD 已退出后的全新进程）：zgate pid=30164 / health=200 / child wb2api pid=30920 / hidden LastRun 16:33:08 Result=0 / watchdog LastRun 16:47:01 Result=0。
+
+### 待解决 / 注意事项
+- 历史口径保留：`docs/SECRETS.md:110` 与 `docs/ARCHITECTURE.md:159/:186/:320/:321` 的 `config.json` 属旧提案 / 回退预案 / 既有展示性描述，非现行配置入口（现行为 `gateways/zgate/zgate.json`）；按「不改历史行 + 不顺手重构」纪律保留，语义门禁不覆盖这些叙述位。
+- 清理：本会话 16 个 + docs/ 下 9 个 `*.dshclaim` 占位全删；反复由 spawnSync 生成的 `%SystemDrive%/` 字面量垃圾目录（Windows cache db，0 仓内引用）交付前清除。
+- 未做 `git add` / `commit` / `push`（用户未要求）。
+
+## 状态: 已完成
+
+# 2026-11-09 17:30–18:2x 按评估三表优化（适配性 / 聚合性 / 自动性）
+
+## 任务目标
+把 m00494 评估三张判定表里标「未达成 / latent gap / 不一致 / 主因差距」的项落地修复：聚合命名空间、/health 六段、QN Bearer、CP 凭据双来源、单一真值视图、门面口径、运行时源码门禁。三路子代理零落盘（§7 硬口径：self-report 不当结论），由 lead 接管独占全部写域。不改历史报告、不注册不可幂等的定时任务、不动无法反查的生成器。
+
+## 已完成变更
+- [x] A1 聚合 catalog：alias.go 新增 `type CatalogEntry struct` 与 `func (m *Map) Catalog() []CatalogEntry`（统一名 sort + legacy 同名跳过去重，确定性输出）；router.go:252-255 拦 `/models`（normalizePath 已剥 `/v1`，两条路径同一份），:701-707 `func (s *Server) models` 返回 `owned_by=zgate` 的 alias 命名空间，不再是 OC 30 条裸 id 逐字节透传。sha alias.go=9df774742a1d / router.go=c7f773ad9c6f。
+- [x] A2 QN Bearer：router.go:479 `case "WB", "QD", "QW", "QN", "CP":` 补 QN（原生 chat 跳不再透传客户端原始 Bearer 被回 401）。
+- [x] A3 CP 凭据：keys.go 头注释与 For() 注释写明 `zgate.json keyEnv=CLIPROXY_API_KEY` 是环境变量主来源、`cliproxy.env` 的 `CLIPROXY_ACCESS_KEY` 是 CLIProxyAPI 自身约定的回退键，二者来源不同非笔误；docs/SECRETS.md 补回退行。sha 1557dc4dac8a→639ec62cd0ef→2a7e0e95d9b8（中间一次插入注释漏 `//` 前缀致 `expected 'package', found CP`，按磁盘逐字修正）。
+- [x] A4 /health 六段：router.go:646-696 六段 opencode/workbuddy/qoder/qwen/qiniu/cliproxyapi 各带 base/key/child/state/last_error，本地 child 从 `states := s.sup.States()` 取 state/last_error/pid，远程由 key 推 up/no_key；payload 另有 alias{path,models}/children/cooling/uptime_s。
+- [x] A5 bridge.go 头注释改 Go 正本 + 双路径（`forwardStream` 逐 delta / `postJSON`+`sseOf` 单块退化），sha=29d45aa70b42；router_test.go 追加 TestHealthHasSixUpstreamsWithState / TestModelsIsAggregatedCatalog / TestQiniuChatHopGetsBearer，sha 272fe3748b59→e0922c146979。
+- [x] B1 单一真值视图：新建 `tools/zgate-lifecycle/current-models.ps1`（读 alias map + zgate.json 写 `%LOCALAPPDATA%/ModelBus/current-models.json`），`sync-models.ps1` 第五段追加调用、`tools/sync_report.py` 报告加「本文件是快照，真值以 current-models.json 为准」指针。PS 5.1 `ConvertFrom-Json` 大小写不敏感会把 `glm-5.3-flash` 与 `GLM-5.3-Flash` 判重复键，改用 `JavaScriptSerializer.DeserializeObject` 解析。sha sync-models.ps1 a22abcf0adf6→e5ee8498c1de / sync_report.py eb597712385a→09d9a0c9a814 / current-models.ps1=087d1c591651。
+- [x] B2 峰谷判 (b)：不注册任何峰谷任务。实证 `price_of` peak 0.22/0.77 vs offpeak 0.11/0.39 确有差异，但 `sync-models.ps1` 带榜单 --refresh --force --write / model_probe.py --timeout 45 / sync_report.py --write --push / 统一命名二轮四个副作用；夹具两次 `--slot auto --apply` 均 exit=0 但 alias sha cc34a91c0d02f4e0→ea543453c1aef7e9 逐字节不等（generated_at 每次刷新）。Get-ScheduledTask 实况只有 `ModelBus 模型同步`(Daily 12:00) / `ModelBus-zgate-hidden`(Logon) / `ModelBus-zgate-watchdog`(PT1M)。docs/MODEL-ALIAS.md:375-381 改成「每日 12:00 一次」实况口径，sha 1755258ba208→fcb08386c6b9。
+- [x] B3 不动生成器：换版前 GET /v1/models 30 条 OC 裸 id 反查 alias 真值 = legacy 11 / 统一名 0 / 链内 upstream 0 / 全不命中 19；19 个无法用 original/base_model/legacy_ids 证明对应统一名 → 「OC 独有型号直穿 OC 是兼容兜底」，不补 legacy。
+- [x] C 路门面 9 文件对齐：docs/MODEL-PROVIDERS.md 0515767b2fdb→0a1a95f88cc7（协议改 bridge.go 流式双路径）、CHANGELOG.md 7f887a8187dd→e14340d35cd8（/admin/reload 补 keys.Load 六通道 + ApplyConfig(children) + aliases.Reload）、docs/README.md b5fb8c0a0912→cfed0e5e79ec、docs/MAINTENANCE.md 8c8a141220fe→b9c415c37cc1（6 upstream / 3 child / 8317 / 六段 health / 聚合 catalog / 计划任务）、docs/TROUBLESHOOTING.md 035417ad0030→e8ab5a964824、docs/TOOLS.md 635addeeb881→3c68be51e5f8（登记两个新脚本 + 聚合视图 + OC 裸 id 兜底）、docs/SECRETS.md bc78546413ac→fa439dfd5515、AGENTS.md 3777f27d0205→03af32c75b4f、docs/ARCHITECTURE.md 6af59a9f93f0→bc2191102de3（:116 /health 六段含 state/last_error、:161-162 §3.5 待办改已落地实况）。
+- [x] lead 单写者文档：docs/ARCHITECTURE.md e36d3e65712e→5badfa29f71d→6af59a9f93f0→bc2191102de3（7 处：内存时点注 / 三组 / 6 upstream / Go 正本指针 ×3 / 三个 child）、docs/QWEN.md d06cc9317a2e→890b6665642b（§7.1 改「已支持流式（协议桥双路径）」）、docs/ZGATE-LIFECYCLE.md d38931ebb58b→b2c251c20cfe（:19-20 reload 正本措辞 + 三项必须换版）。
+- [x] 门禁扩项：tools/check-project.py 20ede6448d32→2824f3035ca7（check_canonical：bridge.go 在位 + tools/protocol_bridge.js 不在位 + `func forwardStream(`）→24bdad1fb065（check_gateway：router.go 含 `func (s *Server) models(` / `upstreamView("CP")` / `case "WB", "QD", "QW", "QN", "CP":` / 六段 payload，alias.go 含 `func (m *Map) Catalog(`）。
+- [x] 证据脱敏：evidence/agent-{adaptation,aggregation,automation}.md 共 13 处本机用户目录字面量改成 `C:\Users\<用户名>` 占位，sha 分别 7b553049ff43→ad764397ee1f / a31e6820d202→b5aede4a13c9 / d73b7a37d23d→8f3629f460cb；check-secrets 由 exit=1（11 处疑似本机用户目录）转 exit=0。
+
+## 验收
+- [x] `python -m py_compile tools/check-project.py` exit=0；`python tools/check-project.py` exit=0「[OK] check-project: 5 项通过」（zgate.json 真值 children=3 ports=7863,8317,8790 upstreams=6 / 正本指针 / 网关实现 / 换行BOM 13 脚本 / PS1 7 脚本 Parser）。
+- [x] `python tools/check-docs.py` exit=0「[OK] 37 篇文档全部通过（链接 / 锚点 / 引言块 / 孤儿）」；`python tools/check-secrets.py` exit=0「[OK] 已扫描 182 个文件」（控制台 GBK 乱码，退出码与计数为准）。
+- [x] `gofmt -l gateways/zgate` exit=0 输出空；`go build ./...` exit=0；`go vet ./...` exit=0；`go test ./... -count=1` exit=0（ok alias 0.056s / bridge 2.671s / router 2.480s / supervisor 10.493s，其余 no test files）。Go 命令 env 保留 process.env.PATH + 补 GOCACHE / LOCALAPPDATA / LocalAppData。
+- [x] `python tools/sync_report.py` exit=0「模型 22 个（主力 5 / 免费 5 / 省钱 12）」+「真值视图：%LOCALAPPDATA%/ModelBus/current-models.json（本输出是快照）」；`powershell -File tools/zgate-lifecycle/current-models.ps1` exit=0 写 7176 B，total=22 / legacy_keys=94 / upstreams 6 / children 3 / groups 5,5,12；`install-sync-schedule.ps1` exit=0「口径核对通过」且未注册任何任务。
+- [x] 行为等价：统一 GEM 码后 `vendor_of("Gemini-3.6-Flash")=GEM` / `anonymous_rank(...)=0` / `anonymous_rank("Beam-9")=1`（上一轮已证）；本轮 Catalog 用 sort.Strings 确定性输出，/v1/models 与 /models 同一 handler 故逐字节相同。
+- [x] 统一执行一次 `tools/zgate-lifecycle/restart-zgate.cmd` 换版 + 独立复现（/health 六段、/v1/models 聚合、QN 头、CP 凭据名、真值视图、峰谷任务、报告口径）：18:25 完成，见下方补记。
+
+## 待解决 / 注意事项
+- 历史口径保留：docs/reports/MODEL-SYNC-20261109-1201.md 的 18 是 12:01 快照，13:58 手动 apply 补 4 个 Gemini 后没重跑报告段；不是 sync_report.py 计数 bug（`--slot auto --check --arena` 当前 exit=0「无漂移」）。真值以 current-models.json 为准。
+- 未做 git add / commit / push（用户未要求）。
+
+## 状态: 已完成（本批代码 / 文档 / 门禁；换版与独立复现见下方补记）
+
+### 收口补记（18:25–18:27）
+
+- [x] 统一换版（AGENTS.md §6，本会话仅一次）：`powershell.exe -NoProfile -Command "& cmd.exe /c '...restart-zgate.cmd'"` 后台 job `bash-d9970bc181314092` status=completed。deploy 日志逐字：18:25:15 编译候选 `Subsystem = 2 → WINDOWS_GUI`；18:25:16 暂停 watchdog / 停旧实例 pid=30164 / 备份 `zgate.exe.bak-deploy-20261109-182516` / Move-Item 替换；`schtasks /run /tn ModelBus-zgate-hidden -> exit=0 SUCCESS`；18:25:20 `换版完成：/health 200，zgate pid=6140 ppid=23408` / `父链在 Task Scheduler 下` / 恢复 watchdog。zgate.exe 10511872 B / md5 `fb6fd81329c632553debe505000f9d94` / mtime 2026-11-09T10:25:15.832Z；候选残留=false。
+- [x] 独立复现 GET /health：status=200 bytes=1270，top keys=alias,children,cliproxyapi,cooling,ok,opencode,qiniu,qoder,qwen,uptime_s,workbuddy；六段 opencode/workbuddy/qoder/qwen/qiniu/cliproxyapi 全带 base/key/child/state/last_error（SIX_SEGMENTS_WITH_STATE=true），`cliproxyapi={"base":"http://127.0.0.1:8317/v1","child":"cliproxyapi","key":true,"state":"stopped","last_error":""}`；alias.models=22，children 三键齐全。
+- [x] 独立复现 GET /v1/models：status=200 bytes=11661 sha=e5d406035b75，`object=list owned_by=zgate data.count=94`（22 统一名 + 72 非同名 legacy，全部 owned_by=zgate），每条含 canonical_id/group/chain_hops，统一名 Beam/Conatus/Gemini-3.6-Flash/HY4/Qwen-3.8-Max/Space-Bunny 全出现，OC 裸 id deepseek-v4-pro/kimi-k3/grok-4.7 不再出现；GET /models status=200 bytes=11661 sha=e5d406035b75，与 /v1/models 逐字节 equal=true；与换版前基线 bytes=35541 equal=false（聚合命名空间已生效）。
+- [x] `go test ./internal/router -run 'TestHealthHasSixUpstreamsWithState|TestModelsIsAggregatedCatalog|TestQiniuChatHopGetsBearer' -v -count=1` exit=0：三例全 PASS（0.01s / 0.00s / 0.00s），ok zgate/internal/router 0.053s。QN Bearer / CP keyEnv 静态链路复核：`case "WB", "QD", "QW", "QN", "CP":`=true、`case "QN":\n return s.QN`=true、`case "CP":\n return s.CP`=true、zgate.json CP keyEnv=CLIPROXY_API_KEY=true、keys.go CLIPROXY_ACCESS_KEY 回退=true、config.go `c.CliproxyEnvFile = c.resolve(...)`=true、cliproxy.env 键名只有 CLIPROXY_BASE_URL / CLIPROXY_ACCESS_KEY（未取值）。
+- [x] 真值视图重跑 exit=0：`current-models.json` total=22 / legacy_keys=94 / models=22 / upstreams=CP,OC,QD,QN,QW,WB / children=cliproxyapi,qoder,workbuddy / groups={"主力":5,"免费":5,"省钱":12}。计划任务实况仅 `ModelBus 模型同步`(Daily) / `ModelBus-zgate-hidden`(Logon) / `ModelBus-zgate-watchdog`(PT1M)，三者 State=Ready，峰谷时段任务 0 个（B2 判 (b) 一致）。
+- [x] 跨进程存活：CMD 已退出后全新进程 zgate pid=6140 / ppid=23408 / CreationDate 2026/11/9 18:25:20 / CommandLine `"F:\Project\ModelBus\gateways\zgate\zgate.exe" serve`；会话 env 无任何指向 7871/7863/8790/8317 的条目，换版未切断本会话流量。
+- [x] 门禁最终全绿：`python -m py_compile tools/check-project.py` exit=0；`python tools/check-project.py` exit=0「[OK] 5 项通过」（zgate.json 真值 / 正本指针 / 网关实现 / 换行BOM 13 脚本 / PS1 7 脚本 Parser）；`python tools/check-docs.py` exit=0「[OK] 37 篇文档全部通过」；`python tools/check-secrets.py` exit=0「已扫描 179 个文件」；`gofmt -l gateways/zgate` exit=0 空；`go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 exit=0；`python tools/sync_report.py` exit=0。
+- [x] 清理：24 个 `*.dshclaim` 占位全删（剩余 0）；`%SystemDrive%/` 字面量垃圾目录 3 文件 987712 B 删除，exists_after=false；evidence 三份分片 13 处本机用户目录脱敏；PROGRESS 本批次自身一处本机用户名字面量改占位。
+- [x] 门面收口复核：`将改为` / `现在返回` 命中 0；docs/ARCHITECTURE.md:116/161-162、docs/MAINTENANCE.md:311、docs/TOOLS.md:85/94 均写「已落地 / 六段 / 聚合 catalog」，与换版后运行态一致。
+- 未做 git add / commit / push（用户未要求）；git diff --stat 35 files changed, 1296 insertions(+), 159 deletions(-)。
+
+- [x] 最终门禁 flaky 判定：一次 `go test ./... -count=1` 报 `--- FAIL: TestOnDemandStartAndIdleStop (7.16s)` / `FAIL	zgate/internal/supervisor	12.419s`；独立 `go test ./internal/supervisor -run TestOnDemandStartAndIdleStop -v -count=1` exit=0 `--- PASS (5.23s)`，连跑 3 次全绿；全量 `go test ./... -count=1` 重跑 2 次均 exit=0（supervisor 10.498s / 10.497s，alias/bridge/router 全 ok）。根因是 `gateways/zgate/internal/supervisor/supervisor_windows_test.go` 的 `TestOnDemandStartAndIdleStop` 起真实 `cmd /c ping -n 120 127.0.0.1`、monitor 每 5s tick、deadline 12s 轮询回收，并行全量负载波动会偶发超时；本轮 A 路只改 router/alias/bridge/keys，未碰 supervisor，非代码回归。
+- [x] 全门禁最终全绿复核：`python tools/check-project.py` exit=0「[OK] 5 项通过」；`python tools/check-docs.py` exit=0「37 篇文档全部通过」；`python tools/check-secrets.py` exit=0「已扫描 179 个文件」；`gofmt -l gateways/zgate` exit=0 空；`go build ./...` / `go vet ./...` / `go test ./... -count=1` 全 exit=0；`python gateways/zgate/build.py --check` exit=0「Subsystem = 2 → WINDOWS_GUI」；`python tools/sync_report.py` exit=0「模型 22 个」+ 真值视图指针。
+
+
+## 2026-11-09 · 检测性价比与口径正规化（用户 m01007 / m01046 / m01047）
+
+- 用户原话 m01007：「按你的想法去做，但是要考虑最性价比的打法。完善他就好了。然后之前有一次hy4free跑了很多积分，但是他标着free。我不知道你记录里有没有这回事，这个我也很担心。」；m01046/m01047：「关于模型收录判断是不是得统一一下了…按照deepseek的标准走就好…价格转换我统一成了workbuddy的积分」「还是按照之前的逻辑，只是正规化一点」。
+- 决策（最性价比 = 零新增推理请求）：不加任何「每次跑一遍好不好用」探测；改砍白花钱的骤降逐个探活 + 复用已采到的 credit/ms/ok_at 变结论 + 默认不自动 push + 口径带 as_of（sync_report.py 已有 generated_at / alias_generated_at / 快照声明，本轮不重复改）。
+- [x] 默认不 push：`sync-models.ps1` 把 `[switch]$NoPush` 翻成 `[switch]$Push`，`if ($Push) { --write --push } else { --write }`；`sync-models.vbs` 入口不带 -Push，故计划任务每天 12:00 只写报告、不 git commit/push（sha e5ee8498c1de→de733c11785e）。`tools/sync_report.py` docstring 自动化示例改成 `--write`（sha 09d9a0c9a814→9c451de257c9）。
+- [x] 口径对齐：`docs/PITFALLS.md` §35 追加「2026-11-09 现行口径」——go_model_sync.py 的体检不再发探测请求，去留只看上游清单（stale_reason 只判官方弃用日 + /models 与文档表都缺、PRUNE_GUARD_RATIO=0.34 刹车），历史「机场复测一次 / [经机场]」保留作来龙去脉。
+- [x] 新门禁：`tools/check-project.py` 增 `check_sync_policy(results)`（守 -Push 只出现在显式分支、vbs 不带 -Push、§35 含「不再发探测请求」），在 `check_semantic` 末尾调用（sha 24bdad1fb065→cf5e8e26b084）。
+- hy4free 担心（本机 usage.json 按 cr 字段重算，零请求）：`hy4free` 1871 次 cr=0.00、58/58 桶全零 = 真免费；真凶是同族 `cn:hy4-preview-f`（HY4-Pre）2462 次 cr=6601.08（2.68/次），已按 `CHANGELOG.md:83-84/92-93` 修为同族挂牌价 0.29 且不再进免费组；B 路 `billing_suspect` 守「免费标签 vs 实际扣费」漂移复发。
+
+## 状态: 已完成
+
+## 2026-11-09 · 检测性价比收口：A/B/C 三路验收与零请求证明（用户 m01007 / m01046 / m01047 / m01206）
+
+- 委派：§7 四条件全命中，同批 3 路（A 省掉零收益骤降探活 / B 零请求复用探测信号 / C 收录价格口径正规化）；A、C 线程超时未落分片，按验收硬口径由 lead 接管并补写三份 `evidence/agent-*.md`；B 早前已由 lead 接管实现。self-report 一律按磁盘 sha12 + 独立复现验收。
+- [x] A 路 `providers/workbuddy/workbuddy_fetch_pricing.py` sha e9f8fae65ec0→b8c9b0b17469：列表骤降（<70%）默认零请求保留旧价、照常写表并打印「本轮未发探活请求，省 N 次模型调用」；新增显式 `--probe` 供人工确认真下架，`--no-probe` 旧语义保留；修复 `--probe --dry-run` 会真实发请求的回归。离线夹具六组矩阵 `[default]/[--dry-run]/[--probe]/[--probe --dry-run]/[--no-probe]/[--no-probe --dry-run]` 全 PASS，`RESULT: ALL_PASS`，产物与今天 39 条逐对象全等。
+- [x] B 路 `tools/zgate-lifecycle/current-models.ps1` sha 087d1c591651→c1492bdd6b00（129→265 行，BOM+LF）：只读复用 `model_probe.json` + alias map，新增 `billing_suspect`（免费组/显示名带 free 但回包 credit>0，只告警不删不改价）、`stale_models`（ok_at 距今 >7 天且本轮非 ok）、`slow_models`（ms>10000），顶层补 `data_as_of` / `probe_as_of` / `probe_source`；用 JavaScriptSerializer 读 JSON（避开 PS5.1 ConvertFrom-Json 大小写不敏感导致的重复键）。实跑 exit=0「total=22 legacy_keys=94 billing_suspect=0 stale=0 slow=1」，groups 主力5/免费5/省钱12 原样保留；脚本零网络调用审计 urlopen / Invoke-WebRequest / Invoke-RestMethod / curl / Start-Process / chat-completions 全 false。
+- [x] C 路 `tools/model_alias.py` sha 87bf337b0bb5→be1a6224f4de：新增常量块 `DEEPSEEK_BASELINE_CREDITS = 0.11` / `LOW_MAX = DEEPSEEK_BASELINE_CREDITS` / `QD_FACTOR = 0.86` / `USD_PER_WB_CREDIT = 3.409`，注释写明「DeepSeek 标准两层（价格基准 0.11 + 竞技榜阈值）」与「各家统一折算 WorkBuddy 积分、OC_PRICES 是已折算结果表、price_of() 唯一取价出口」；行为零变化（`--check --arena` 输出 3869B 逐字 equal=True，末行「无漂移」）。`docs/MODEL-ALIAS.md` sha d3aa73e5c948→de0e087dea23 补「2026-11-09 现行口径校准」；`PROGRESS.md:1302` 陈旧 LOW_MAX 描述改指 DEEPSEEK_BASELINE_CREDITS。
+- [x] 零新增推理请求证明：`.work/verify-zero-request-baseline.json` 对比用户目录 `.zcode/v2/model_probe.json`（48352 B / d379ca4d178b）与 `providers/workbuddy/cache/wb_pricing.json`（14201 B / f39f306f1bcb）均 UNCHANGED=True；`gateways/upstream/workbuddy/data/usage.json` 为网关运行态持续写（saved 19:04:22→19:37:22，total_q 42914→43156 / total_cr 15804.13→15808.66）属会话与用户流量，本轮脚本只读或不碰。教训：`usage.json` 的 `c`=completion tokens，扣费积分字段是 `cr`（`gateways/upstream/workbuddy/internal/usage/usage.go:67/77`）。
+- [x] hy4free 担心（本机聚合，零请求）：`hy4free` q=2095 / cr=0.00 / 62 个桶 62 个零积分 = 真免费，比 11-06 文档快照 1154 次 0.00 更强；真凶 `cn:hy4-preview-f`（显示名 HY4-Pre）q=2462 / cr=6601.08 / 2.68 每次，硬证据 `CHANGELOG.md:83-84`（「credits 空字符串、list_rate 0，被判成免费；历史 2420 次请求实际扣了 6601 积分」）、`:92-93`（wb_prices 两遍重写 → 0.29）、`docs/MODEL-ALIAS.md:120-125`（定义两者非同类、保持分离）。已修，B 路 `billing_suspect` 守复发。
+- [x] 三分片补写与脱敏：`evidence/agent-detect-cost.md` 2690 B / `evidence/agent-detect-quality.md` 4255 B / `evidence/agent-admission-price.md` 3472 B，全部含 pre→post sha12、真实输出、线程结局；`agent-detect-quality.md` 3 处本机用户目录按 `docs/SECRETS.md` 改为 `~/.zcode/v2/...` 与 `%LOCALAPPDATA%/...`。
+- [x] 最终验收 `.work/verify-final.py` exit=0 `ALL_GREEN`：三分片存在性 + 写域 sha12 全对 + alias 行为等价 equal=True + 零请求 UNCHANGED + A 夹具 ALL_PASS + check-project exit=0「6 项通过」+ check-docs exit=0「37 篇文档全部通过」+ check-secrets(CI口径) exit=0「已扫描 149 个文件」+ py_compile exit=0 + 本轮 13 个写域同源脱敏扫描 dirty=[]。
+- 全仓 `check-secrets` 默认口径 exit=1 的 48 处命中全部落在 `evidence/agent-gemini-code.md`(27) / `evidence/agent-gemini-logs.md`(21)：两文件被其他活跃会话认领（who_claims 实况）、mtime 19:30-19:31 的未跟踪分片，属并发会话在写的产物，非本轮改动；`--tracked-only` 全绿，非并发项命中=[]。
+- 未做 git add / commit / push（用户未要求）。
+
+## 状态: 已完成
+
+## 2026-11-09 · 收尾六步：汇报风格定稿、索引补录、按对象提交推送（用户 m01421 / m01434 收尾）
+
+- 输出契约定稿：全局 AGENTS.md 第 1 节补「完整 Markdown 分层（大标题 / 小标题 / 表格 / 引用横幅 / 分隔线）」；第 13 节删「（不再是两段式）」失效句；热记忆首条 667→603 B 改成「结论 + 正本定位指针」，R0 / R8 门禁 PASS 14 / WARN 1 / FAIL 0。
+- 查遗漏落地：按需正本 delegation.md 把「子代理分片格式」与「对用户最终回复」分开并补 Markdown 指针；4 个技能文件补排版指针；修 5 行悬空交叉引用；DOCUMENTS-ROUTING.md 两条死链改指 archived / backups；third-party/README.md 补 cliproxyapi 索引行与 MIT 许可行。
+- 清垃圾：删本轮误建的 %SystemDrive%/ 字面目录（2 个 .bin / 344K）；并发会话 evidence 分片、zgate.exe.prev 回滚点、.restart.log 用 .git/info/exclude 本地排除，不入库、不删属主文件。
+- 门禁实况：check-secrets 默认全树「已扫描 180 个文件」exit=0；check-project「6 项通过」exit=0；check-docs「37 篇文档全部通过」exit=0；gofmt -l 空；记忆体检 PASS 14 / WARN 1 / FAIL 0（WARN 为历史 819 B 条目）。
+- 委派：§7 四条件全命中，派 3 路（查遗漏 / 独立自审 / 写法+待提交盘点），三份分片按磁盘字节与行数复核，self-report 未采信。
+- 提交门禁真 bug：`#!/usr/bin/env sh` 在 git 2.56.0.windows.4.niugit 下执行 hook 报逐字 `env: failed to run command '.githooks/pre-commit': Permission denied`；mini 仓对照 `#!/bin/sh` exit=0、`#!/usr/bin/env sh` exit=1 定位根因是 shebang 转发，非执行位（100644 亦通过）。改 `#!/bin/sh` 后前台真实 commit exit=0 且八行门禁全绿，独立提交 `6f48225`；连带修正 tools/check-project.py 头部「pre-commit 只跑 check-secrets.py」旧描述。
+
+## 状态: 已完成
+[[TASK_ALL_DONE]]
