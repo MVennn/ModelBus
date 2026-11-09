@@ -104,28 +104,34 @@ QN_FREE_UNTIL = "2026-11-30"
 # 主力顺序：组内按此顺序排（DeepSeek 置顶，Qwen 贵备份次之，千问尾跳最后）。
 # 组内排序的权威来源；MAIN_IDS 由它派生，避免"按厂商最低价排序把便宜厂商顶到前面"。
 MAIN_ORDER = [
-    # 竞技榜第一梯队（2026-11-06 实测）：hy4 在「建模」分区排 #8、「静态网页」#10，
-    # 是我们渠道里唯一进前十的型号（基准 deepseek-v4.1-flash 只到 #52）。
-    # 它 0.29 积分、比基准贵 2.6 倍，所以历史上一直被 LOW_MAX=0.11 挡在省钱档之外，
-    # 配置里留下的是 hy4-preview（#58）——等于把最好的模型换成了同族的弱变体。
-    # 用户 2026-11-06 拍板：主力第一位给 hy4std，价格差认了。
-    "chat:cn:hy4std",
-    # 日常主力：最便宜的付费档，兜住 hy4 的额度/限流
+    # 用户 2026-11-09 口径：主力组只放 DeepSeek 与 Gemini（"主力=deepseek+gemini"）。
+    # 原主力的 hy4std（2026-11-06 曾因竞技榜前十被拍到第一位）与
+    # qoder:Qwen3.8-Max（AA 1122 的贵备份）一起下沉省钱组，见 LOW_ORDER；
+    # 不补进 LOW_PICKS 的话它们价格 >0 又不在任何名单里，会被判 drop 直接掉档。
+    # 日常主力：最便宜的付费档，两跳同型号（WB cn / OC 直连）
     "chat:cn:deepseek-v4.1-flash",
     "chat:deepseek-v4.1-flash",
-    # 贵备份：AA 榜上唯一高于 DeepSeek 基准的模型（2026-10-28 1122 vs 1093，
-    # #44 vs #56），只在 DeepSeek 两跳同时不可用时手动切。
-    # 写显式渠道：没写前缀时 classify 只能猜，Qwen3.8-Max 会被判成 OC 的同名
-    # 条目、再被裸名去重吞掉（2026-11-06 实测链里只剩 QD 一跳，没有任何兜底）。
-    # OC 那条当前 OC_PRICES 缺价 → 只在 stderr 留「缺价未收录」，补价后自动成兜底。
-    "chat:qoder:Qwen3.8-Max",
-    "chat:oc:qwen3.8-max",
+    # Gemini：全部走 CLIProxyAPI（CP 渠道）的 Gemini API-key 路由，按 0 计价。
+    # 用户 2026-11-09 13:04 口径：opencode 的 Gemini（gemini-4-argon，1.76 积分）
+    # 从主力链上摘掉，避免回落过去把付费额度烧掉。
+    # 型号名 = AI Studio 上游真名（AQ. key，x-goog-api-key 实测 200）：
+    #   gemini-3.7-flash / 3.6-flash 为推理型（content 可能被 thinking 吃掉，需大 max_tokens）；
+    #   antigravity OAuth 仍 403 VALIDATION_REQUIRED，其独有 3.8-flash-high / 3-flash 不采用。
+    "chat:cp:gemini-3.6-flash",
+    "chat:cp:gemini-3-flash-preview",
+    "chat:cp:gemini-3.5-flash-lite",
+    "chat:cp:gemini-3.1-flash-lite",
     # 免费 DeepSeek（千问渠道，messages 协议）：¥300 预付额度先烧这一条。
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
 ]
 MAIN_IDS = set(MAIN_ORDER)
+
+# 竞技榜（~/.zcode/v2/arena-main.json）只负责给主力"补候选"，不推翻用户分组：
+# 用户 2026-11-09 口径是主力=DeepSeek+Gemini，而榜单 candidates 里还挂着
+# MiMo-2.6-Flash / Space-Bunny，不过滤会把它们重新拉回主力。
+MAIN_UPSTREAM_HINTS = ("deepseek", "gemini")
 # 省钱组：每个厂商留 1–2 个特色型号（用户 2026-10-28 口径：前旗舰/旧版本全砍，
 # 只留"最能代表这家、日常会用"的）。
 # ⚠️ 这是**严格有序白名单**：组内顺序由 LOW_ORDER 决定（不是按厂商最低价，
@@ -138,6 +144,10 @@ MAIN_IDS = set(MAIN_ORDER)
 # 价格随价格源走，不写死。LOW_PICKS 由它派生，避免两份名单各自维护而漂移。
 # 各行尾注释说明「为什么这家留这个型号」：
 LOW_ORDER = [
+    # 旗舰先行（用户 2026-11-09 从主力下沉，价格 >LOW_MAX 故必须留在名单里）；
+    # 同厂商仍受 VENDOR_QUOTA=2 约束：HY 为 hy4std + hy3-x，QW 为 Max + 一条 Flash。
+    "chat:cn:hy4std",                # 腾讯：旗舰（0.29，原主力第一位）
+    "chat:qoder:Qwen3.8-Max",        # Qwen：旗舰（0.43，原主力贵备份）
     "messages:qwen3.8-flash",        # Qwen：中文 / 长输出（AA 基准附近）
     "chat:qoder:Qwen3.8-Flash",      # Qwen：Qoder 侧错峰免费（pf 0.0；白天 0.1×0.86≈0.086）。
                                      # 与上一条同族，靠 MERGE_ACROSS_PROTOCOL 并成一条链：
@@ -172,9 +182,6 @@ SCORE_MIN_VALUE = 1.0
 MERGE_FREE_GB = {"deepseek-v4.1-flash", "qwen3.8-flash"}
 # 同一型号允许 chat 与 messages 跳并进同一条链（路由按每跳自己的协议派发）。
 MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash", "qwen3.8-flash"}
-# 这些跳排到链尾，不看价格：千问的额度是一年期预付，按「OC 先用完再用它」的
-# 顺序来花，所以它必须排在付费跳之后，只有当付费全挂时才轮到。
-TAIL_HOPS = {("QW", "deepseek-v4.1-flash")}
 
 # WB（WorkBuddy）永远是第一消费来源：排序键里给它最高的固定优先级，
 # 不看价格、不受任何「临时降级」开关影响。历史教训 2026-11-05：曾用一个
@@ -192,7 +199,7 @@ WB_FIRST_CHANNELS = {"WB"}
 #   · QN=3：限免渠道排最后 —— 免费不等于该优先烧，它的价值是兜底
 # 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
 # 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
-CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3}
+CHANNEL_RANK = {"WB": 0, "CP": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3}
 CHANNEL_RANK_DEFAULT = 4
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
@@ -231,10 +238,30 @@ def with_airport_fallback(hops: list[dict]) -> list[dict]:
         out.append(twin)
         have.add((h["channel"], h["upstream"]))
     return out
+# ── 收录 / 价格口径（统一真值源）──────────────────────────────────────────
+# 基准 = DeepSeek 标准（用户 2026-11-09：「按照 deepseek 的标准走就好」）：
+# 以 deepseek-v4.1-flash 在本渠道的 WorkBuddy 积分价 0.11 为收录 / 超价不收的参照，
+# 见下方 OC_PRICES["deepseek-v4.1-flash"]["off"] 与模块 docstring「Credit conversion」
+# （$0.15 in / $0.60 out，1:1 混合 = 0.11 积分）；性能参照另见下方「以 DeepSeek-4.1
+# 为参考」的竞技榜裁量口径与 SCORE_MIN_INTEL / SCORE_MIN_VALUE，两者是不同功能阈值。
+# 各家价格一律统一折算为 WorkBuddy 积分后再比较（用户 2026-11-09：「价格转换我统一
+# 成了 workbuddy 的积分」）：wb_prices() 给出 WB 积分权威价，price_of() 是唯一取价出口。
+# 本次仅正规化口径：数值 / 阈值 / 分支 / 执行顺序 / 输出格式一字不变
+# （用户 2026-11-09：「还是按照之前的逻辑，只是正规化一点」）。
+DEEPSEEK_BASELINE_CREDITS = 0.11
 FREE_MAX = 0.0
-LOW_MAX = 0.11
+LOW_MAX = DEEPSEEK_BASELINE_CREDITS          # = 0.11，省钱档上限与 DeepSeek 基准同值
+# Qoder price_factor → WorkBuddy 积分的统一折算倍率（同型号对 WB 中位比，见 docstring）。
 QD_FACTOR = 0.86
+# OpenCode-Go 美元挂牌价 → WorkBuddy 积分的折算锚：由基准反推
+# (0.15 + 0.60) / 2 / 0.11 = 3.409 USD per credit（1:1 输入 / 输出混合）。
+# 仅用于把 docs/MODEL-PROVIDERS.md §2 的 USD 价预折算进 OC_PRICES；运行时零折算。
+USD_PER_WB_CREDIT = 3.409
 
+# OC_PRICES 是「已折算完的 WorkBuddy 积分」结果表，不是 USD 挂牌价表：
+# 每条目录入时已按「统一折算为 WorkBuddy 积分」口径换算完毕，price_of() 直接取用、
+# 运行时不再做任何乘除。折算锚 = DeepSeek 标准（见 DEEPSEEK_BASELINE_CREDITS 与
+# USD_PER_WB_CREDIT）；flat 键表示该型号无峰谷计价，直接返回单一积分价。
 # OpenCode-Go prices from docs/MODEL-PROVIDERS.md §2, converted with the
 # deepseek-v4.1-flash anchor (1 credit = $3.409/M, 1:1 input/output blend).
 OC_PRICES = {
@@ -263,6 +290,12 @@ OC_PRICES = {
     "gpt-5.6-luna": {"flat": 0.21},
     "muse-spark-1.3-contributor": {"flat": 0.04},
     "muse-spark-1.2-contributor": {"flat": 0.04},
+    # Gemini 4 Argon（opencode zen go 唯一在售 Gemini 档）：官方目录 cost
+    # input 2 / output 10（USD per 1M），按 1:1 混合 (2+10)/2 ÷ 3.409 = 1.76 积分。
+    # 上式 ÷ 3.409 即 ÷ USD_PER_WB_CREDIT（统一折算为 WorkBuddy 积分）；
+    # 1.76 是预折算后写入本表的积分值，运行时 price_of() 直接取用、不再折算。
+    # 这是本表最贵的条目（比 hy4std 0.29 贵 6 倍），主力组不设价格上限故可收录。
+    "gemini-4-argon": {"flat": 1.76},
 }
 # Qoder fallback if the hub is not reachable; live /v1/models wins.
 QD_PRICES = {
@@ -275,10 +308,37 @@ QD_PRICES = {
     "Kimi-K2.8-Preview": 0.8,
 }
 
+# 补建条目（provider_config 里原本没有、由 whitelist_items 新建的型号）默认只有
+# enabled:true，DSH 侧只能吃 dsh_sync 的兜底值（1000000 ctx / 128000 output），
+# 一旦超过上游真实 output 上限就会被 400。这里给已知真值的型号补元数据，
+# 键是上游 id，值直接贴合 providerModelRules 的 config 形态。
+MODEL_META = {
+    # opencode zen go 目录原文：limit.context 1048576 / limit.output 65536，
+    # capabilities.tools true，reasoning.effort [low, medium, high]。
+    # Gemini 支持图片输入，inputFormat 显式打开，否则界面只给纯文本。
+    "gemini-4-argon": {
+        "properties": {
+            "contextWindow": 1048576,
+            "supportsToolCall": True,
+            "inputFormat": {"supportsImage": True},
+        },
+        "optionSpecs": {
+            "maxOutputTokens": {"max": 65536},
+            "reasoningLevel": {"values": ["disabled", "low", "medium", "high"]},
+        },
+    },
+}
+
 ABBR = {
     # 七牛云网关的 id 形如 `qiniu/conatus-free`：去掉 `qiniu/` 前缀，Conatus 自成系列。
     "qiniu/conatus-free": "Conatus",
     "moonshotai/kimi-k3-free": "Kimi-K3",
+    # CLIProxyAPI 四个 Gemini 档（2026-11-09 接入，渠道 CP，上游 AI Studio API key）。
+    # 型号名就是上游 id，不做缩写。
+    "gemini-3.6-flash": "Gemini-3.6-Flash",
+    "gemini-3-flash-preview": "Gemini-3-Flash",
+    "gemini-3.5-flash-lite": "Gemini-3.5-Flash-Lite",
+    "gemini-3.1-flash-lite": "Gemini-3.1-Flash-Lite",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
     "deepseek-v4-flash": "DeepSeek-4-Flash",
@@ -339,11 +399,15 @@ ABBR = {
     "claude-haiku-5-5": "Claude-Haiku-5.5",
     "gpt-6-luna": "GPT-6-Luna",
     "gpt-5.6-luna": "GPT-5.6-Luna",
+    "gemini-4-argon": "Gemini-4-Argon",
     "muse-spark-1.3-contributor": "Muse-Spark1.3",
     "muse-spark-1.2-contributor": "Muse-Spark1.2",
 }
-VENDOR_ORDER = ("DSP", "QW", "GLM", "MM", "KIMI", "HY", "MIMO", "LONG", "BEAM",
-                "CL", "GPT", "MUSE", "STEP", "SPB", "CONATUS", "OTHER")
+
+# 「无公司/匿名代号」模型（用户口径：一律沉到每组最下面）。名单顺序无关，
+# 判据只看厂商码是否落在这四个里：Beam / Space-Bunny / Conatus / 未识别(OTHER)。
+# Iceman 没有前缀，走 OTHER；Conatus 有独立前缀但仍是无公司代号。
+ANONYMOUS_VENDORS = ("BEAM", "SPB", "CONATUS", "OTHER")
 
 
 def config_path(explicit: str | None) -> Path:
@@ -573,6 +637,11 @@ def wb_prices() -> dict[str, dict]:
     #   · credits 空但 list_rate > 0 → 用 list_rate（老字段兜底）
     #   · 两者都缺 → 用「同族已知价」回填（同族 = 去掉 -f / -ctrl / -exp<N> 后缀）
     # 宁可高估也不能让付费型号冒充免费：冒充免费会进免费组被当无限兜底烧掉。
+    # 本函数把 WB 上游行统一折算为 WorkBuddy 积分：credits 字段权威 / list_rate 兜底 /
+    # 同族挂牌价回填（口径见上方 2026-11-06 注释与模块 docstring）。
+    # 注意两遍解析语义不同、不可合并成一次循环：第一遍仅为 family_rate 建索引
+    # （list_rate 缺失时回退 eff_rate），第二遍才产出结果（list_rate<=0 才回填）；
+    # 合并会改变如 list_rate=None / eff_rate=0.5 这类行的取值，故保持现状。
     claims: dict[str, float] = {}
     family_rate: dict[str, float] = {}
     parsed: list[tuple[str, dict, float | None]] = []
@@ -720,6 +789,10 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
              qd: dict[str, dict], slot: str) -> float | None:
     if channel == "QW":
         return 0.0 if qw_credit_active() else None
+    if channel == "CP":
+        # CLIProxyAPI / Antigravity：账号级免费额度，按 0 计。
+        # 它必须排在 opencode 付费档之前，否则用户额度会被静默烧掉。
+        return 0.0
     if channel == "QN":
         # 七牛限免只覆盖带 -free 后缀的模型（2026-11-30 前）。渠道级一律返 0
         # 会把将来播种的付费模型也误标成免费，所以必须按上游 id 判定。
@@ -738,6 +811,8 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
             if time_based and record["eff"] < record["list"]:
                 return record["eff"]
         return record["eff"]
+    # QD：price_factor 是相对倍率，乘 QD_FACTOR 才统一折算为 WorkBuddy 积分
+    # （见 QD_FACTOR 注释与 docstring「Credit conversion」）。这是唯一运行时折算。
     if channel == "QD":
         record = qd.get(upstream)
         if not record:
@@ -785,7 +860,7 @@ def abbreviate(model: str) -> str:
 VENDOR_PREFIXES = (
     ("DeepSeek", "DSP"), ("Qwen", "QW"), ("QwQ", "QW"), ("GLM", "GLM"), ("MiniMax", "MM"),
     ("Kimi", "KIMI"), ("HY", "HY"), ("MiMo", "MIMO"), ("LongCat", "LONG"),
-    ("Beam", "BEAM"), ("Claude", "CL"), ("GPT", "GPT"), ("Muse", "MUSE"),
+    ("Beam", "BEAM"), ("Claude", "CL"), ("GPT", "GPT"), ("Muse", "MUSE"), ("Gemini", "GEM"),
     ("Step", "STEP"), ("Space", "SPB"), ("Conatus", "CONATUS"),
 )
 
@@ -797,8 +872,14 @@ def vendor_of(abbr: str) -> str:
     return "OTHER"
 
 
-def vendor_rank(abbr: str) -> int:
-    return VENDOR_ORDER.index(vendor_of(abbr))
+def anonymous_rank(abbr: str) -> int:
+    """0 = 有公司可识别，1 = 匿名/无公司代号（排序时整组沉底）。
+
+    DSH GUI 侧不做二次排序（orderModelProviders 只把 account/official 提前，
+    组内保持 catalog 原序），所以「匿名置底」必须在这里生效，写进
+    personalModelIds/modelOrder 的最终顺序里。
+    """
+    return 1 if vendor_of(abbr) in ANONYMOUS_VENDORS else 0
 
 
 _PROTOCOL_HINTS: dict | None = None
@@ -898,6 +979,21 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "raw": model,
             "original": model,
             "channel": "OC",
+            "region": "",
+            "upstream": upstream,
+            "base_model": upstream,
+            "protocol": protocol,
+            "fallbacks": [],
+            "legacy_ids": [model],
+        }
+    if model.startswith("cp:"):
+        # CLIProxyAPI（本机 8317）：Gemini 走 Antigravity / Vertex / AI Studio，
+        # 与 OC 同名型号同价，靠链序决定先用哪条。
+        upstream = model[len("cp:"):]
+        return {
+            "raw": model,
+            "original": model,
+            "channel": "CP",
             "region": "",
             "upstream": upstream,
             "base_model": upstream,
@@ -1105,7 +1201,8 @@ def raw_models(cfg: dict, alias_models: dict, legacy: dict) -> list[dict]:
 
 
 QN_BASE = "https://api.qnaigc.com/v1"
-CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE, "QN": QN_BASE}
+CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE, "QN": QN_BASE,
+                "CP": "http://127.0.0.1:8317/v1"}
 
 
 def base_of(channel: str) -> str:
@@ -1279,7 +1376,7 @@ def pool_entries(pools: list[dict], slot: str) -> list[dict]:
     return entries
 
 
-CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:", "QW": "qwen:", "QN": "qn:"}
+CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:", "QW": "qwen:", "QN": "qn:", "CP": "cp:"}
 
 
 def hop_specs(protocol: str, hop: dict) -> list[str]:
@@ -1435,11 +1532,21 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
     # 池子只按价格归组 —— 0 积分就是免费。
     if entry.get("is_pool"):
         return ("free", "") if entry["price"] <= 0 else ("drop", "")
+    # CP（CLIProxyAPI）只收录人工白名单。它同时暴露 antigravity 的 8 个 403 模型
+    # 和若干 404 / 过载型号，价格一律按 0 计会把它们全灌进免费组 —— 界面上看着是
+    # 免费型号，实际调用分别回 404（gemini-3-flash 裸名不存在）、503（3.7-flash
+    # 高需求）、403（3.8-flash-high 需账号验证），会让客户端选到死路。
+    if all(hop["channel"] == "CP" for hop in entry["chain"]) and not any(
+        _picked(entry, hop, MAIN_IDS) for hop in entry["chain"]
+    ):
+        return "drop", "cp-whitelist"
     for hop in entry["chain"]:
         if _picked(entry, hop, MAIN_IDS):
             return "main", "manual"
     for hop in entry["chain"]:
-        if (hop["channel"], hop["upstream"]) in arena_targets:
+        if (hop["channel"], hop["upstream"]) not in arena_targets:
+            continue
+        if any(hint in str(hop["upstream"]).lower() for hint in MAIN_UPSTREAM_HINTS):
             return "main", "arena"
     price = entry["price"]
     if price <= 0:
@@ -1455,6 +1562,10 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
     if auto_ids and id(entry) in auto_ids:
         # 名单外但价格在省钱档、且是该厂商的新公司/新一代 —— 见 pick_auto_low。
         return "low", "auto"
+    # 「超价不收」落点：价格 > 0、又未命中 MAIN_IDS / LOW_PICKS 白名单或 auto_ids
+    # 的条目在此丢弃。省钱档上限 LOW_MAX = DEEPSEEK_BASELINE_CREDITS（DeepSeek 标准，
+    # 0.11）由 pick_auto_low 判定；LOW_PICKS 命中可豁免该上限（见上方白名单分支），
+    # 因此 docstring 里「> 0.11 即丢」只是简化描述，实际以本函数分支为准。
     return "drop", ""
 
 
@@ -1796,14 +1907,24 @@ def main() -> int:
                     return j
         return len(order)
 
+    # 匿名/无公司代号的模型（Beam / Space-Bunny / Conatus / Iceman）一律沉到
+    # 本组最下面 —— 这是用户 2026-11-09 反复强调的硬规则，且优先于人工名单：
+    # 光靠 LOW_ORDER 的位置不够，因为名单外的自动补位条目会插到名单条目之后、
+    # 匿名条目之前，于是"无 logo 的夹在中间"。anonymous_rank 排在最外层就堵死这条路。
+    # DSH GUI 侧不做二次排序（orderModelProviders 只提前 account/official），
+    # 这里排成什么顺序，界面就是什么顺序。
     for group, rows in grouped.items():
         if group == "main":
-            rows.sort(key=lambda r: (_pick_rank(r, MAIN_ORDER), r["new_id"]))
+            rows.sort(key=lambda r: (anonymous_rank(r["abbr"]),
+                                     _pick_rank(r, MAIN_ORDER), r["new_id"]))
         elif group == "low":
-            rows.sort(key=lambda r: (_pick_rank(r, LOW_ORDER), r["price"], r["new_id"]))
+            rows.sort(key=lambda r: (anonymous_rank(r["abbr"]),
+                                     _pick_rank(r, LOW_ORDER), r["price"], r["new_id"]))
         else:
-            # 免费组：常用优先（HY3 > HY4 > 其它），再按价格
-            rows.sort(key=lambda r: (0 if r["new_id"].startswith("HY") else 1, r["price"], r["new_id"]))
+            # 免费组：公司型号优先（HY3 > HY4-Free），匿名代号垫底，再按价格
+            rows.sort(key=lambda r: (0 if r["new_id"].startswith("HY") else 1,
+                                     anonymous_rank(r["abbr"]),
+                                     r["price"], r["new_id"]))
 
     transient_kept: list[str] = []
     if args.probe_file:
@@ -1950,6 +2071,13 @@ def main() -> int:
             )
             config = copy.deepcopy(original_config) if original_config else {}
             config["enabled"] = True
+            meta = MODEL_META.get(str(row.get("upstream") or "").lower())
+            if meta:
+                if not config.get("properties"):
+                    config["properties"] = copy.deepcopy(meta["properties"])
+                specs = config.setdefault("optionSpecs", {})
+                for key, value in copy.deepcopy(meta["optionSpecs"]).items():
+                    specs.setdefault(key, value)
             if row["protocol"] != "chat":
                 option_specs = config.setdefault("optionSpecs", {})
                 reasoning = option_specs.setdefault("reasoningLevel", {})

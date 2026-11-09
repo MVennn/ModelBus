@@ -10,8 +10,9 @@
 状态文件默认 `~/.zcode/v2/model-sync-state.json`，记录上一轮的
 「显示名 → 分组 / 最低价 / 链路」。第一次运行没有状态时写一份基线报告。
 
-自动化里放在最后一步（model_alias.py --apply 之后）：
-    python tools/sync_report.py --write --push
+自动化里放在最后一步（model_alias.py --apply 之后），默认只写报告、不 push：
+    python tools/sync_report.py --write
+需要一并提交推送时才显式加 --push（手动补跑，或 sync-models.ps1 的 -Push 开关会带上它）。
 """
 from __future__ import annotations
 
@@ -282,7 +283,10 @@ def render_report(current: dict, changes: dict, baseline: bool,
     total = sum(counts.values()) + other
     lines += ["", f"合计 {total} / 清单 {len(models)}"
               + ("" if total == len(models) else " ⚠️ 对不上，检查 GROUP_NAMES"), ""]
-    lines += [f"生成时间：{stamp}；alias map：{current.get('alias_generated_at') or '-'}", ""]
+    lines += [f"生成时间：{stamp}；alias map：{current.get('alias_generated_at') or '-'}",
+              "",
+              "> 当前生效清单以 `%LOCALAPPDATA%/ModelBus/current-models.json` 为准；本文件是该次同步生成时刻的快照，手动 `model_alias.py --apply` 之后的变更不会回写到这里。",
+              ""]
 
     if baseline:
         lines += ["## 基线", "", "首次生成，没有上一轮快照可比；当前清单见文末。", ""]
@@ -414,6 +418,7 @@ def main() -> int:
               f"{g} {sum(1 for m in current['models'].values() if m['group'] == g)}"
               for g in GROUP_NAMES
           ) + "）")
+    print("真值视图：%LOCALAPPDATA%/ModelBus/current-models.json（本输出是快照）")
     if baseline:
         print("首次运行：本次作为基线，没有可比的变化")
     else:

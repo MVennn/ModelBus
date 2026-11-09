@@ -13,18 +13,19 @@
       二、WorkBuddy2API（倍率上限 0.30）
       三、Qoder（含入口健康检查与直连回退）
       四、统一命名与分组
-      五、同步报告与推送
+      五、同步报告（默认不 push，显式 -Push 才推）
 
-.PARAMETER NoPush
-    只写报告，不做 git push。
+.PARAMETER Push
+    显式要求时才 git add/commit/push；默认只写报告、不推送。
+    计划任务（sync-models.vbs）不带此开关，即每天 12:00 只写报告。
 
 .EXAMPLE
     powershell -NoProfile -ExecutionPolicy Bypass -File sync-models.ps1
-    powershell -NoProfile -ExecutionPolicy Bypass -File sync-models.ps1 -NoPush
+    powershell -NoProfile -ExecutionPolicy Bypass -File sync-models.ps1 -Push
 #>
 [CmdletBinding()]
 param(
-    [switch]$NoPush
+    [switch]$Push
 )
 
 $ErrorActionPreference = "Continue"
@@ -347,10 +348,20 @@ if ($script:LastCode -ne 0) {
 
 # ---- 五、同步报告 --------------------------------------------------------
 Say "----- 五、同步报告 -----"
-if ($NoPush) {
-    Invoke-Py "写报告" @("tools\sync_report.py", "--write")
-} else {
+if ($Push) {
     Invoke-Py "写报告并推送" @("tools\sync_report.py", "--write", "--push")
+} else {
+    Invoke-Py "写报告" @("tools\sync_report.py", "--write")
+}
+
+# 单一真值视图：报告是生成时刻的快照，current-models.json 才是「当前生效清单」。
+# 只读 alias map / zgate.json，不写配置、不探活、不 push、不重启网关。
+$currentScript = Join-Path $ROOT "tools\zgate-lifecycle\current-models.ps1"
+if (Test-Path $currentScript) {
+    & powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File $currentScript
+    if ($LASTEXITCODE -ne 0) { Say "真值视图刷新失败（exit=$LASTEXITCODE）" }
+} else {
+    Say "真值视图脚本缺失，跳过"
 }
 
 # 从报告输出里取实际落盘路径

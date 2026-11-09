@@ -44,21 +44,25 @@
 
 用法
 ----
-    # 默认：写 cache/wb_pricing.json（先备份旧的）
+    # 默认：写 cache/wb_pricing.json（先备份旧的）。
+    # 列表骤降（疑似网关临时残缺）时零请求保留旧价、照常写表，不发任何探活请求。
     python workbuddy_fetch_pricing.py
 
-    # 只看会变成什么样，不落盘
+    # 只看会变成什么样，不落盘（报告模式，同样零探活请求）
     python workbuddy_fetch_pricing.py --dry-run
 
     # 指定输出位置
     python workbuddy_fetch_pricing.py --output cache/wb_pricing.json
 
-    # 确认是真实的大规模下架，跳过“列表骤降”保护（不逐个探活）
-    python workbuddy_fetch_pricing.py --force
+    # 人工确认是真实下架：逐个发最小对话请求，只把明确回“模型不可用”的判下架
+    python workbuddy_fetch_pricing.py --probe
 
-    # 列表骤降时默认逐个探活（经网关发最小对话请求）：还能调用的保留旧价格，
-    # 只有上游明确回「模型不可用」的才判下架；状态未知（429/5xx/超时）一律保留
-    python workbuddy_fetch_pricing.py --no-probe   # 旧行为：骤降直接拒写
+    # 兼容旧参数：骤降时直接拒写（退出码 2），既不探活也不保留旧价。
+    # 注意：这是 --probe 出现之前的旧语义，新默认已改为“零请求保留旧价并写表”。
+    python workbuddy_fetch_pricing.py --no-probe
+
+    # 确认是真实的大规模下架，按残缺上游清单落盘（不并回旧行）
+    python workbuddy_fetch_pricing.py --force
 
 环境变量
 --------
@@ -271,10 +275,12 @@ def main() -> int:
     ap.add_argument("--output", default=str(DEFAULT_OUTPUT), help="输出路径（默认 %(default)s）")
     ap.add_argument("--dry-run", action="store_true", help="只打印结果，不写文件")
     ap.add_argument("--force", action="store_true", help="列表骤降时仍然写入（确认是真实下架）")
+    ap.add_argument("--probe", action="store_true",
+                    help="列表骤降时逐个发最小对话请求确认真实下架（人工确认用；默认不发任何探活请求）")
     ap.add_argument("--no-probe", action="store_true",
-                    help="列表骤降时不做逐个探活，直接拒写（旧行为）")
+                    help="兼容旧参数：列表骤降时直接拒写（退出码 2）；语义未改，新默认是零请求保留旧价并写表")
     ap.add_argument("--probe-timeout", type=int, default=40,
-                    help="逐个探活的单次超时秒数（默认 %(default)s）")
+                    help="--probe 逐个探活的单次超时秒数（默认 %(default)s）")
     ap.add_argument("--timeout", type=int, default=25, help="请求超时秒数（默认 %(default)s）")
     args = ap.parse_args()
 
@@ -321,22 +327,30 @@ def main() -> int:
         print(f"   下架 {len(removed)} 个：{', '.join(removed[:8])}{' …' if len(removed) > 8 else ''}")
 
     # 安全阀：网关偶尔会返回残缺列表（例如只剩 global 池、或账号菜单被上游收窄）。
-    # 数量骤降时先**逐个探活**：网关的目录口径是「CLI 菜单」，比实际可调用面窄 ——
-    # 2026-11-02 实测旧表 52 条而菜单只回 20 条，被剔掉的 32 个里还有 15 个能正常出字。
-    # 所以「不在菜单里」不等于「下架」：只有上游明确回 11102/model_unavailable 才判死，
-    # 其余（429/5xx/超时）按未知处理，保留旧价格。
+    # 数量骤降时**默认零请求保留旧价并照常写表**：2026-11-09 12:00 实测旧表 39 条、
+    # 菜单只回 20 条，被剔掉的 19 个逐个发最小对话请求探活（17 个仍可调用 + 2 个状态未知），
+    # 结论全是「保留旧价格」，最终落盘仍是 39 条 —— 这 19 次 chat 请求对产物零影响，纯花 token。
+    # 所以「不在菜单里」不等于「下架」。要人工确认真实下架，显式加 --probe 才发探活请求。
     if old and len(rows) < len(old) * 0.7:
         pct = 100 - len(rows) * 100 // len(old)
         print(
-            f"!! 上游返回 {len(rows)} 条，旧表 {len(old)} 条，减少 {pct}%；疑似网关临时残缺，开始逐个探活。",
+            f"!! 上游返回 {len(rows)} 条，旧表 {len(old)} 条，减少 {pct}%；疑似网关临时残缺。",
             file=sys.stderr,
         )
         if removed:
-            print(f"   被判定为下架的 {len(removed)} 个：{', '.join(removed)}", file=sys.stderr)
-        if not args.force and not args.dry_run:
-            if args.no_probe:
+            print(f"   旧表多出 {len(removed)} 个（疑似残缺，非下架结论）：{', '.join(removed)}",
+                  file=sys.stderr)
+        # --no-probe 兼容：旧行为是骤降直接拒写（退出码 2），所有组合原样保留，不静默改写。
+        if args.no_probe and not args.force:
+            if not args.dry_run:
                 print("   未写入（--no-probe）；确认是真实下架后加 --force 重跑。", file=sys.stderr)
                 return 2
+        elif args.force:
+            # 确认是真实下架：按残缺上游清单落盘，不并回旧行（旧行为不变）。
+            pass
+        elif args.probe and not args.dry_run:
+            # 显式人工确认：逐个发最小对话请求，只有上游明确回 11102/model_unavailable 才判死，
+            # 其余（429/5xx/超时）按未知处理，保留旧价格。
             kept, dead, unknown = [], [], []
             for mid in removed:
                 verdict = probe_alive(args.base, args.api_key, mid, args.probe_timeout)
@@ -360,6 +374,17 @@ def main() -> int:
             if dead:
                 print(f"   已确认下架 {len(dead)} 个：{', '.join(dead)}", file=sys.stderr)
             removed = dead
+        else:
+            # 默认零请求路径（含 --dry-run 报告模式）：旧行全部并回，照常写表，不发任何模型请求。
+            if args.probe and args.dry_run:
+                print("（--dry-run 报告模式，--probe 未执行；如需人工确认真实下架请去掉 --dry-run 重跑）")
+            rows.extend(old[mid] for mid in removed)
+            rows.sort(key=lambda r: r["id"])
+            print(
+                f"本轮未发探活请求，省 {len(removed)} 次模型调用"
+                f"（旧价全保留，连续多轮残缺再人工确认）"
+            )
+            removed = []
 
     if args.dry_run:
         print("（--dry-run，未写文件）")
