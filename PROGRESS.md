@@ -2834,7 +2834,7 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 
 ## 2026-11-10 · Iceman 看不到思考：加密分流透明重抽 + 展示层展开（用户 m00912）
 
-- **优化了**：`cordis.patch.yml` 的 `ui-chat` 由 `standard / completion / final` 改成 `verbose / next-input / all`，`ui-skin-claude-style` 加 `reasoningDisplay: continuous`；刷新 GUI 即生效，`dsh_sync.py` 只重写 `llm-pi-ai` 段不会覆盖。
+- **优化了**：`cordis.patch.yml` 的 `ui-chat` 由 `standard / completion / final` 改成 `verbose / next-input / all`，`ui-skin-claude-style` 加 `reasoningDisplay: continuous`；刷新 GUI 即生效，`dsh_sync.py` 只重写 `llm-pi-ai` 段不会覆盖。　**（2026-11-10 晚订正：`ui-chat` 三键属用户偏好，已回退 `compact / completion / final`，任何会话不得再改；见 `docs/PITFALLS.md` §41-① 与全局 `~/.dsh/AGENTS.md` §16）**
 - **更新了**：`config.go` 零值禁用 `ReasoningGuard` + `zgate.json` 只圈 Iceman；`router.go` 在 `doForwardWith` 写头前探测首包，B 格式直接关流透明重抽同一跳（上限 3 次、沿用原 headers）；`model_stream_check.py` 加 `ENC` 列与加密分流标注、顺带修 YAML 1.1 裸 `off` → bool 的 `TypeError`；`check-project.py` 六处接线扩到七处并复核报告标注；MODEL-STREAM / PITFALLS §41 / TROUBLESHOOTING §17 / TOOLS / README / CHANGELOG 同步。
 - **修复了**：上游同别名随机只给 `reasoning.encrypted` 时 GUI 思考块留空、正文两行步进一节一节出；探针不再把该分流含糊判成模型故障。
 - **委派**：三路只读审计（GUI 运行时 / 思考字段渲染 / 上游资料）全部落盘验收，C 路失败分片由 lead 接管；30 次交错采样定案 B 与参数、耗时均无关。
@@ -3014,5 +3014,251 @@ catiecli 中转的特性决定了它不能按普通渠道接：链首两个型�
   结论等价。
 - **未做**：夹具验收（7999 假上游 + 7899 隔离实例）。真上游池空期间这是验降级 / 对冲 /
   冷却最省额度的办法，下一轮补；本轮已由 `race_test.go` 六项覆盖同等行为。
+
+# 2026-11-10 第十八轮：Gemini-AIS 3.8 加哈基米同代兜底（用户 m00001）
+
+## 任务目标
+
+ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之前**先兜一个同代模型：
+哈基米（gemai.cc）的 `[福利]gemini-3.8-flash`，位置夹在 ais 3.8 与 ais 3.7 之间。
+降级是换代，兜底是换站 —— 同代换站成功率远高于直接降代。
+
+## 改动
+
+### 别名层 `tools/model_alias.py`
+
+- 常量：`HJ_BASE = "https://api.gemai.cc/v1"`、`HJ_PRICES = {"[福利]gemini-3.8-flash": 0.05}`。
+  价格必须 >0：`family_entries` 遇到 0 价会把同一条链拆成付费 / -Free 两条。
+- `CHANNEL_BASE` 加 HJ；`CHANNEL_RANK` 加 `"HJ": 1`（与 OC/QD/GM 同档）；
+  `HOP_PRIORITY` 把福利档插在 ais 3.8 之后、ais 3.7 之前。
+- `PREFIXES` 加 `hjm:`；`classify()` 加 `hjm:` → HJ 分支（region GB，upstream 去掉前缀）。
+- `whitelist_items()` 的 explicit_channel 前缀元组加 `hjm:`。
+- `price_of()` 加 HJ 分支（口径同 GM：只认 HJ_PRICES，未收录返 None → 该跳被丢弃）。
+- `hop_specs()` 的渠道前缀表加 `"HJ": "hjm:"`。
+
+### 网关层 `gateways/zgate`
+
+- `internal/keys/keys.go`：`Channels` 加 HJ；`Set` 加 `HJ` 字段；加载顺序
+  env `HJM_API_KEY` → `providers/hajimi/.env.local` → provider_config 里按 `gemai\.cc` 基址回推；
+  `For()` 加 `case "HJ"`。
+- `internal/config/config.go`：`Upstreams["HJ"]` 默认 `{base: https://api.gemai.cc/v1, keyEnv: HJM_API_KEY}`。
+- `internal/router/router.go`：`forwardHeaders` 的 Bearer 覆盖 case 加 HJ；`healthSegments` 加 `"HJ": "hajimi"`。
+- `zgate.json`：upstreams 加 HJ；新增 `channelPolicy.HJ`，参数与 GM 完全一致
+  （softCooldown 90 s / silence 20 s / rateLimitBackoffMs -1 / firstBlockMs 4000 /
+  hedgeAfterMs 500 / maxParallel 2 / authFailCooldownHours 24）—— `racePolicyFor` 读 Chain[0] 渠道，
+  两段参数不同会让同一条链前后跳用不同节奏。
+
+### 凭据
+
+- `providers/hajimi/.env.local`：`HJM_API_KEY=…`（真值来自 `~/.dsh/.credentials.yaml`，不入库；
+  `.gitignore` 的 `*.env.local` 已覆盖。仓库惯例是每个 provider 目录只放 `.env.local`，变量说明写进文档）。
+
+### 测试与门禁
+
+- `tests/test_model_alias_hop_order.py`：GEMINI_CHAIN 改为 8 跳并加位置断言
+  （HJ 只一跳、index==1、chain[0]=3.8、chain[2]=3.7、price==0.05）；HOP_PRIORITY 覆盖断言同步。
+- `tools/check-project.py`：「6 个 upstreams」旧口径（且正则里是双反斜杠、早已失效）改成 7；
+  Bearer needle 加 HJ；新增「渠道集合一致性」闸：`zgate.json` 的 upstreams/channelPolicy 与
+  `keys.go` 的 `var Channels` 两两比对集合对称差，并校验 channelPolicy ⊆ Channels。
+
+### 文档
+
+- README / docs/README / ARCHITECTURE / TOOLS / ZGATE-LIFECYCLE / MAINTENANCE 的
+  「6 个 upstreams / 六段」全部改 7 / 七段（OC / WB / QD / QW / QN / GM / HJ）。
+- `docs/MODEL-PROVIDERS.md`：§4.11 改 8 跳链；§4.11.2 HOP_PRIORITY 序号重排并补「降级换代、
+  兜底换站」的理由；§4.11.3 标题改 channelPolicy.GM / channelPolicy.HJ（hedgeAfterMs 按 zgate.json 真值 500，
+  修正文档里 1500 的旧值）；新增 §4.11.5 同代兜底（含「加新渠道要动的四处」清单）。
+- `CHANGELOG.md` [未发布] 顶部加条目：链序、价格不能写 0、四登记点、凭据落点、门禁加固、额度纪律。
+
+## 验收
+
+- `python -m unittest discover -s tests -q` → 60 项 OK。
+- `python tools/check-project.py` → 8 项全 OK，upstreams=7。
+- `python tools/check-docs.py` → 39 篇全通过（链接 / 锚点 / 引言块 / 孤儿），exit 0。
+- `gofmt -l` 空、`go build ./...` / `go vet ./...` / `go test ./...` 全绿。
+- `python tools/model_alias.py --apply` exit 0：备份 `provider_config.json.bak-alias-20261110-180629-162800`；
+  `model-alias-map.json` 里 `models["Gemini-AIS"].chain` 为 8 跳 ——
+  GM:ais-gemini-3.8-flash → **HJ:[福利]gemini-3.8-flash** → GM:ais-gemini-3.7-flash → 3.6 → 3.5 →
+  3.5-flash-lite → 3.1-flash-lite → 3-flash-preview，price 0.11；DSH 侧同步「3 个 provider / 19 个模型」，
+  `cordis.patch.yml` 的 ui-chat 三键未被动（compact / completion / final）。
+
+### 待办
+
+- **换二进制才生效**：keys.go / router.go 是编译期代码，`/admin/reload` 只热加载 zgate.json 的策略。
+  旧二进制下 HJ 跳会因「缺 key」被跳过 —— 表现为退回原 7 跳、不报错但也没有兜底。
+  部署按 `~/.dsh/AGENTS.md` §6 由用户执行：
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1`，
+  起来后 `/health` 应多一段 `hajimi`。
+- 哈基米这条上游同样是转售站，真实调用的额度纪律与 ais 一致：验收一律走夹具，不反复探。
+
+[[TASK_ALL_DONE]]
+
+# 2026-11-10 第十九轮：Gemini-AIS 一分钟零输出（串行退化）+ 流式响应头看门狗
+
+## 任务目标
+
+用户报 m00490 / m00516：「gemnias 1 分钟无任何输出」「反代后台也没看到任何的请求记录」。
+第十八轮刚给这条链插了 `HJ` 跳，先查是不是新链路的问题。
+
+## 定位（实况取证，不靠猜）
+
+- `zgate.log` 行 20021-20022：`2026-11-10 18:51:07 INFO POST /chat/completions model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)` 连续两行，**之后该请求零日志**（无 `[race] 发出`、无冷却、无 fallback、无 502）；对照 15:41 / 16:11 的同类请求都有 `[race] 全部 7 跳都没给出可用的首块`。18:49 之后全日志零条 `[race]` 行，同时 DeepSeek 系请求一直正常。
+- 方向：`[race] 发出`（`race.go:452`，起 goroutine 之前打印）缺席 ⇒ 走的是 `attemptChain` 串行链；`router.go:1283` 那行 `(1/8)` 两种模式都会打，不能用来区分。
+- `racePolicyFor`（`race.go:305-333`）要求**全链渠道都在 `cfg.ChannelPolicy`**（`race.go:324`）；运行中的 `zgate.exe` 是 15:46 构建（uptime 11200s@18:52，二进制里 `hajimi` / `HJM_API_KEY` / `gemai.cc` 全部 absent），启动时读的 `zgate.json` 还没有 `HJ` → 内存 `channelPolicy` 只有 `GM` → 8 跳链判定失败 → 取消竞速。
+- 首块看门狗只在竞速模式生效（`router.go:734` 的 `at != nil && at.policy.FirstBlockMs > 0`）；`main.go:152` 的 `http.Client` 只有 `TLSHandshakeTimeout` / `DialContext`，没有整体超时 ⇒ 上游收下请求不发头就无限期挂着。三条叠加 = 客户端零字节、网关零日志、反代零记录。
+
+## 改动
+
+- `internal/router/router.go`：新增 `upstreamHeaderTimeout = 45s` 与 `Server.headerWait`；新增 `errUpstreamSilent`、`cancelOnClose`、`doForward`（流式才设响应头看门狗，超时 cancel 后丢 resp 返回 `errUpstreamSilent`，非流式直接透传）；`doForwardWith` 改走 `doForward`，沉默分支直接 `retry` 换跳、不走 `txRetry`；`routeChain` 落串行前调 `noteSerialFallback`。
+- `internal/router/race.go`：新增 `noteSerialFallback`（扫链找出不在 `channelPolicy` 里的渠道，按 `首渠道|缺失渠道` 做 10 分钟去重后 WARN）与 `uniqueStrings`。
+- `internal/router/router_test.go`：新增 `TestStreamingHeaderWatchdogGivesUp` / `TestStreamingHeaderWatchdogPassesThrough`。
+
+## 验收
+
+- `gofmt -l internal/router/` 空；`go build ./...` / `go vet ./...` exit 0；`go test ./...` 全 ok（router 13.890s，两例 watchdog PASS）。
+- `python gateways/zgate/build.py --candidate` → `zgate.candidate.exe`（10688000 B），内容检索 `hajimi` / `HJM_API_KEY` / `gemai.cc` / `upstream silent` 全部命中。
+- 文档：`MODEL-PROVIDERS.md` §4.11.3 补第 7 条（看门狗 + 退化告警）；`TROUBLESHOOTING.md` 新增 §18；`PITFALLS.md` 新增 §42；`CHANGELOG.md` [未发布] 顶部加条目。
+
+## 待办
+
+- **换二进制才生效**（长驻网关，会话不自动重启）：由用户执行
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1`；
+  起来后 `/health` 的 `segments` 应多出 `hajimi`，再打一次 Gemini-AIS 看日志里有 `[race] 发出 1/8`。
+
+[[TASK_ALL_DONE]]
+
+# 2026-11-10 第二十轮：换版后仍要 4 分半 —— 响应头容忍 45s → 12s（可配）
+
+## 任务目标
+
+第十九轮换版后不再零字节，但用户报 m00707 / m00742 / m00808：一句话要 3-4.5 分钟（实测 4 分 31 秒），
+且后台面板只看到 ais 系列一跳跳往下跑、看不到福利跳。要回答两件事：为什么慢、福利跳到底跑没跑。
+
+## 定位（实测，不靠猜）
+
+- **福利跳确实跑了**：面板只记 catiecli（GM），不记 gemai（HJ），所以「面板里没有福利」不能作为判据。
+  `zgate.log` 里 19:37:55 起每轮都有 `[race] 发出 2/8 HJ|[福利]gemini-3.8-flash|`。
+- **慢的真因是容忍窗口太长**：每跳都稳定等满 45 秒才判沉默 —— 一段日志里连续出现
+  `WARN [router] https://api.gemai.cc/v1 上游 45s 内没给响应头，判这一跳沉默并换跳`、
+  `[router] [福利]gemini-3.8-flash -> 上游沉默（无响应头）, fallback GM:ais-gemini-3.7-flash`、
+  `[race] HJ|[福利]gemini-3.8-flash| 本路放弃：上游沉默（无响应头）`；8 跳全灭告警出现 4 次，每次 3-4.5 分钟。
+- **单点实测（各一次真实调用）**：GM `ais-gemini-3.8-flash` 要 **60.241s** 才回 503
+  （`This model is currently experiencing high demand`）；HJ `[福利]gemini-3.8-flash` 直连 2.5-3.1s 出首块，
+  经 zgate 单跳 3.1s 200 —— 链路代码没问题，是上游排队 + 我们把窗口按「最慢那一档」取了。
+- **「发一句打两枪」的解释**：`maxParallel=2` 轮转 8 跳、每轮 45s，客户端等不到首字节自动重试，
+  于是后台出现两条「请求中」（19:39:51 / 19:40:16），不是同一链重复发车。
+
+## 改动
+
+- `internal/router/router.go`：`upstreamHeaderTimeout` 45s → **12s**（注释记下 60.2s vs 3s 的实测依据）；
+  新增 `func (s *Server) headerTimeout()`（显式 `headerWait` > `cfg.UpstreamHeaderTimeoutSec` > 常量，负数=关掉），
+  `doForward` 改用它；沉默 WARN 带上 `model=`，同 base 下不同模型的差异能看出来。
+- `internal/config/config.go`：新增 `UpstreamHeaderTimeoutSec`，`applyDefaults` 缺省 12。
+- `gateways/zgate/zgate.json`：写入 `"upstreamHeaderTimeoutSec": 12,`（`/admin/reload` 即可改）。
+- 测试：`TestHeaderTimeoutFollowsConfig`（3s 生效 / 缺省回落 / 负数 0 / `headerWait` 最优先）、
+  `config_test.go` 补缺省与负数两断言。
+
+## 验收
+
+- `gofmt -l .` 空；`go build ./...` / `go vet ./...` exit 0；`go test ./...` 全 ok
+  （router 用缓存，supervisor 10.5s 两例通过）。
+- 全量 `go test` 第一次跑出两条红：`supervisor_windows_test.go` 报
+  `exec: "cmd": executable file not found in %PATH%` —— 是我给的子进程 PATH 少了 `C:\Windows\System32`，
+  不是代码问题；补上即绿。顺带记一句：`go test` 经 `run_code` 直调时需要 `GOCACHE` / `LOCALAPPDATA`，
+  而 `ops_bash` 当时正报 `EXECUTOR_UNAVAILABLE: Niubash preparation failed ... awk.exe`（执行器解包问题），两者都不是本轮改动引入的。
+- 文档：`MODEL-PROVIDERS.md` §4.11.3 第 7 条改成默认 12s + 来历段；`TROUBLESHOOTING.md` 新增 §18.1；
+  `PITFALLS.md` §42 补「同日第二轮」条目；`CHANGELOG.md` [未发布] 顶部加条目。
+
+## 待办
+
+- **仍要换二进制才生效**（常量 + `headerTimeout()` 是编译期代码）：由用户执行
+  `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1`；
+  换完复验日志里应是「12s 内没给响应头」，一次请求最坏 ≈ 48s 出结论。
+- 12 秒是经验值：若上游整体变慢（合法首头 > 4s），先调 `upstreamHeaderTimeoutSec`，不要改代码。
+
+[[TASK_ALL_DONE]]
+
+# 2026-11-10 第二十一轮：8 跳全灭、兜底跳被 12s 门槛切掉（按渠道分窗口）
+
+## 任务目标
+
+用户 m00988：只想知道「下次跑，福利 3.8 到底能不能真兜底」。20:03 他实测一次仍然 50 秒干净失败，
+后台也没记录 —— 要给出能站住的结论，不能靠安慰。
+
+## 定位（实测）
+
+- 20:03:07 起日志已经是 **12s** 口径（说明用户已换过上一版二进制），但 8 跳全部
+  `上游 12s 内没给响应头`，**包括 `channel=HJ`**；50 秒后 `全部 8 跳都没给出可用的首块`。
+- 直连哈基米实测（同一 key，当晚 20:0x）：60KB 系统提示 `hdr=10233ms`、200KB `hdr=7505ms`；
+  而 19:45 同一跳只要 2.5-3.1 秒。12 秒只剩 1.2-1.6 倍余量 —— 卡在抖动边缘。
+- 反代面板没有记录不是「没发请求」：GM 从没回过包（上游自己在等），哈基米不在这张表里。
+
+## 改动
+
+- `internal/config/config.go`：`ChannelPolicy` 新增 `HeaderTimeoutSec`（`headerTimeoutSec`，0=继承全局，负数=该渠道不设看门狗）。
+- `internal/router/router.go`：`headerTimeout(channel string)` 优先级改为「`headerWait` 显式 > 渠道 > 全局 > 常量」；
+  `doForward` / `doForwardWith` 增 `channel` 参数（串行链传 `hop.Channel`，桥接路径传 `""`）；
+  沉默告警补 `channel=`。
+- `zgate.json`：`channelPolicy.GM.headerTimeoutSec = 12`、`channelPolicy.HJ.headerTimeoutSec = 25`。
+- `router_test.go`：新增 `TestHeaderTimeoutPerChannel`（HJ 25 / GM 12 / 渠道负数 / 渠道 0 回落 / 不在表里回落 / 显式字段优先）。
+
+## 验收
+
+- `gofmt -l .` 空；`go build ./...` / `go vet ./...` exit 0；`go test ./...` 全绿（router 13.230s、supervisor 10.493s）。
+- 文档：`MODEL-PROVIDERS.md` §4.11.3 第 7 条补「按渠道分开」与 20:05 实测；
+  `TROUBLESHOOTING.md` 新增 §18.2；`PITFALLS.md` §42 补「同日第三轮」；`CHANGELOG.md` 条目同步。
+
+## 结论（给用户的那句）
+
+兜底跳**本身是通的**（直连与经网关单跳都实测 200），能不能兜住取决于它多久出首头：
+带上按渠道 25 秒窗口后，正常 10 秒内出字；只有哈基米自己也排队到 25 秒以上才兜不住。
+
+## 待办
+
+- 又要换一次二进制（`headerTimeoutSec` 是编译期字段）：`tools/zgate-lifecycle/deploy-zgate.ps1`。
+- 换完复验：日志里 GM 应写 `12s`、HJ 应写 `25s`；一次请求正常 10 秒左右出字。
+
+[[TASK_ALL_DONE]]
+
+## 第二十二轮：沉默跳补静默冷却（2026-11-10 20:20）
+
+**背景**：用户连发两句「嗨」，后台两条「请求中」、两分钟无输出，并追问「带 high 推理头连日志都进不去，关掉推理就多一条请求中」。
+
+**实测（直连 catiecli，各一次真实调用，GEMINI_API_KEY 同一个）**：
+- `ais-gemini-3.8-flash`：**不带推理 80s 无响应、带 `reasoning_effort=high` 与 `disabled` 同样无响应** → 不是推理字段导致，是这个模型当时整体排队（更早实测它 60.241s 才回 503 high demand）。
+- `ais-gemini-3.7-flash`：不带推理 80s 无响应。
+- `ais-gemini-3.5-flash-lite`：纯文本 4.1s 200、带 `reasoning_effort=high` **1.8s 200** → 推理字段对该模型无副作用。
+- 结论：面板「请求中」表示请求已经进了 AIS 并在排队（不是「没到」）；3.8/3.7 当时确实不可用，与推理档位无关。
+
+**根因（代码）**：`doForwardWith` 的 `errUpstreamSilent` 分支只 `retry()` 换下一跳，**没有写 `silence` 表** → 每个新请求都从第一跳重新等一个 12s 窗口，死跳被反复重撞。
+
+**改动**：`doForwardWith` 末尾加 `hop *alias.Hop`（`forward` / `forwardChain` 传 nil，`attemptChain` 传 `&hop`）；命中沉默按渠道 `silenceCooldownSeconds`（GM/HJ = 20s）打 `markSilence` 并打日志 `沉默，静默冷却 20s 后再试这一跳`。`config.ChannelPolicy.SilenceCooldownSeconds` 注释同步为「首块超时 + 连响应头都不给」两种情况共用。
+
+**验证**：`gofmt -l .` 空；`go build ./...` / `go vet ./...` exit 0；`go test ./...` 全绿（router 13.9s，新增 `TestSilentHopGetsShortCooldown`）。
+
+**文档**：TROUBLESHOOTING 新增 §18.3；PITFALLS §42 补「同日第四轮」；CHANGELOG `[未发布]` 顶部条目。
+
+**待办**：换二进制（`tools/zgate-lifecycle/deploy-zgate.ps1`）；换完日志里应看到「12s 判沉默 → 静默冷却 20s → 下一个请求 冷却中，跳过 到 HJ」。
+
+## 第二十三轮：哈基米福利 3.8 拆成独立模型 `Gemini-3.8-Flash`（2026-11-10 22:27）
+
+**背景**：用户 m01235「ais 现在已经全部都 error 了，确实是没法推理了，所以直接切换到福利 3.8 不就行了，这样吧，把福利 3.8 从里面拆出来，改名 Gemini 3.8-Flash 吧，放在主力内，ais 前」。
+
+**判断**：链内兜底吃链首的规则（对冲参数、响应头窗口都取 `Chain[0]` 的渠道），链首 GM 又常态 60 秒才回 503，兜底永远排在白等之后；AIS 整片不可用时，独立模型一个请求就能打到 HJ。所以按用户要求拆成独立条目，而不是继续调链。
+
+**改动（`tools/model_alias.py`）**：
+- `ABBR`：`[福利]gemini-3.8-flash` 改映射成 `Gemini-3.8-Flash`（原来并进 `Gemini-AIS`）。
+- `HOP_PRIORITY`：删掉 HJ 项，ais 重编 0-6（3.8=0 / 3.7=1 / 3.6=2 / 3.5=3 / 3.5-lite=4 / 3.1-lite=5 / 3-preview=6）。
+- `MAIN_ORDER`：`chat:hjm:[福利]gemini-3.8-flash` 移到整套 `chat:gem:*` 之前。
+- `NAME_RENAMES`：清空。原先它把 `Gemini-3.8-Flash` 当 `Gemini-AIS` 的旧名，新模型复用这个 id 后同名映射会把老会话指到 AIS。
+- 新增 `_consistent_legacy_ids(row)`：带 `:` 前缀的 legacy id 必须 `_bare()` 命中本模型某跳 upstream 才保留；写盘处改用赋值覆盖，并在 `valid_ids` 之后扫一遍 `legacy`，pop 掉「与 live 模型同名」及「前缀对不上目标跳表」的存量脏条目。
+
+**测试（`tests/test_model_alias_hop_order.py`）**：`GEMINI_HOPS` 改 7 跳，用例重写为 `test_ais_chain_is_seven_gm_hops_in_version_order` / `test_hajimi_is_standalone_single_hop_model` / `test_hop_priority_covers_every_ais_hop`（断言 HJ 不在表里）/ `test_main_order_puts_hajimi_before_ais` / `test_non_gemini_hops_keep_default_priority` / `test_on_disk_alias_map_has_split_gemini_models`（磁盘守卫）。`python -m unittest discover -s tests` → Ran 62 tests OK。
+
+**落盘与实测**：`model_alias.py --apply`（备份 `provider_config.json.bak-alias-20261110-202537-597800`）→ alias map 20 个模型，`Gemini-AIS` 7 跳全 GM、`Gemini-3.8-Flash` 单跳 HJ 0.05；`dsh_sync.py --apply` → 3 provider / 20 模型 / 主力 3，patch 70 行新增 `Gemini-3.8-Flash`、73 行仍是 `Gemini-AIS`；`/admin/reload` 200；实打 `model=Gemini-3.8-Flash` → 200、响应头 4395ms、SSE 出字；`/v1/models` 两条都主力（hops 1 / 7）。
+
+**文档**：MODEL-PROVIDERS §4.11 一句话与分组、降级链两行改 7 跳；§4.11.2 重写（7 跳链、HOP_PRIORITY 0-6、主序、NAME_RENAMES 清空理由、脏 legacy 清理）；§4.11.3 补「链首决定节奏」的新事实；§4.11.5 整节重写为「跨站同代 `Gemini-3.8-Flash`」并记演进与代价。
+
+**待办**：用户重启 DSH 客户端后模型列表才会出现 `Gemini-3.8-Flash`。
 
 [[TASK_ALL_DONE]]
