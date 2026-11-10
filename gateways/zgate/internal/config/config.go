@@ -121,10 +121,10 @@ type ChannelPolicy struct {
 	AuthFailCooldownHours int `json:"authFailCooldownHours"`
 	// HeaderTimeoutSec：这一渠道「等上游响应头」的容忍上限（秒），覆盖全局
 	// upstreamHeaderTimeoutSec。0 = 用全局的那一档；负数 = 这一渠道不设看门狗。
-	// 为什么按渠道给：2026-11-10 20:05 实测，catiecli 的 ais-gemini-3.8-flash 要
-	// 60.241 秒才回 503（窗口多长都是白等），而哈基米的 [福利]gemini-3.8-flash
-	// 同一天从 2.5 秒漂到 7.5-10.2 秒（窗口太短会把唯一能用的兜底跳切掉）。
-	// 一个全局值必然牺牲一边，所以 GM 12 秒、HJ 25 秒分开给。
+	// 按渠道给窗口的两轮历史：20:05 想让「慢」的哈基米活下来（HJ 25s）、让「死」的
+	// catiecli 早让位（GM 12s）；21:30 又全部收回 —— 当天 GM 判死 125 次里上游真说过
+	// 503 的只占 5.3%，HJ 判死 32 次有一半与 502 同秒。本地判死 → 502 → 客户端重试 →
+	// 上游重跑，这才是「后台在跑 token、本地已断开」的来源。判死权归上游，两个渠道都 -1。
 	HeaderTimeoutSec int `json:"headerTimeoutSec"`
 }
 

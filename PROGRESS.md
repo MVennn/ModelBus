@@ -2874,7 +2874,6 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 - 文档：CHANGELOG「守卫第三次修复」、TROUBLESHOOTING §17 第 6 步、PITFALLS §41 三次修复条目。
 - 待办：线上 7871 仍是旧二进制，换版由用户执行 tools/zgate-lifecycle/restart-zgate.cmd。
 
-[[TASK_ALL_DONE]]
 
 ---
 
@@ -2904,7 +2903,7 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 - 线上（PID 27360，12:59:31 启动的二进制内含 `endpoint is unavailable` marker）：`Beam` 200（直连冷却 → 2/2 机场跳）、`Conatus` 200、`Claude-Haiku-5.5` 200（日志「地区受限（HTTP 403），冷却 30m0s」→ (2/2) 200）；裸名 `beam-free` / `claude-haiku-5-5` 同样 200，`/v1/models` 含三条显示名。
 - 已知上游限制（非本 bug）：`qn:qiniu/conatus-free` 免费型号会回 429「Too many requests for this free model」，冷却后重试即可。
 
-[[TASK_ALL_DONE]]
+
 
 ---
 
@@ -3260,5 +3259,29 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 **文档**：MODEL-PROVIDERS §4.11 一句话与分组、降级链两行改 7 跳；§4.11.2 重写（7 跳链、HOP_PRIORITY 0-6、主序、NAME_RENAMES 清空理由、脏 legacy 清理）；§4.11.3 补「链首决定节奏」的新事实；§4.11.5 整节重写为「跨站同代 `Gemini-3.8-Flash`」并记演进与代价。
 
 **待办**：用户重启 DSH 客户端后模型列表才会出现 `Gemini-3.8-Flash`。
+
+[[TASK_ALL_DONE]]
+
+## 第二十四轮：判死权归上游 —— HJ/GM 关掉本地看门狗（2026-11-10 21:30）
+
+**背景**：用户 m00222「hjm 不需要超时，hjm 就是普通的模型供应，上游做的已经很好了，可能就 gm 需要适配一下」；m00267「后台看到 hj 确实在跑 token，但本地无响应直接跑重试」；m00318「今晚很多测试是本地自己杀的，判断应该由上游给而不是本地判断」；m00340「客户端不改了，先优化然后收尾」。
+
+**取证（只读日志，零真实调用）**：GM 当天被判死 125 次（沉默 79 + 首块 46），上游真说过 `503 high demand` 仅 7 次（5.3%）；HJ 判死 32 次（25s 档 15 + 12s 档 17），上游被受理 81 次，判死一大半与 502 同秒；`Gemini-AIS` 66 次客户端请求平均打 4.77 跳（41% 打满 7 跳）。链路遗迹：`12s 无响应头 → fallback (none) → 同秒 502 → 13s 后客户端重试 → 再砍`。
+
+**判断**：502 是本地造的。DSH `retryPolicy` 把 `SERVER` 列为可重试（`maxRetries: 1`），本地判死一次 = 一次 502 + 一次客户端重试 + 一次上游重跑，用户看到的就是「后台在跑 token、本地断开又跑一遍」。慢是这条链的常态，判死阈值给多少都是赌；改成**只由上游判定死活**，本地只保留「并排多问一家」（对冲）与「按上游回话冷却」。
+
+**改动（`gateways/zgate/zgate.json`，`/admin/reload` 热加载 200，零重启）**：
+- `upstreamHeaderTimeoutSec`：12 → **45**（只兜 WB / OC / QD / QN 等无 policy 渠道）。
+- `channelPolicy.GM`：`headerTimeoutSec` -1、`firstBlockMs` 0、`silenceCooldownSeconds` 0、`hedgeAfterMs` 500 → **18000**、`softCooldownSeconds` 90 → 60、`maxParallel` 2、`rateLimitBackoffMs` -1、`authFailCooldownHours` 24。
+- `channelPolicy.HJ`：整段收敛为 `{"headerTimeoutSec": -1}`（其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块），与 `QN` 同级普通供应商口径。
+- 备份：`zgate.json.bak-policy-HJ-out-20261110-2115`、`zgate.json.bak-hj-noheaderwatch-20261110-2128`、`zgate.json.bak-nokill-20261110-2132`。
+
+**源码注释同步**：`internal/router/router.go` 的 `const upstreamHeaderTimeout` 上方追加「第四次收敛」段；`internal/config/config.go` 的 `HeaderTimeoutSec` 字段注释改写为「按渠道给窗口的两轮历史 + 判死权归上游」。仅注释，无行为变化。
+
+**文档**：MODEL-PROVIDERS §4.11.3 参数表按渠道重写（含 -1/0/18000 真值）、第 7 条改为「当前 GM / HJ 均 -1」并新增「21:30 第四次收敛」段；§4.11.5 的「渠道策略」行改为单跳链口径；TROUBLESHOOTING §18.1 / §18.2 的旧处置标注已推翻，新增 §18.4「后台明明在跑 token、本地却断开了又重跑一次」。
+
+**遗留（需 rebuild + 重启，本会话不动长驻网关）**：① 流式请求先回 200 + `text/event-stream`，等上游头期间每 10s 发 `: zgate keepalive` 心跳，失败改写 SSE error 事件而不是 502 —— 从根上掐掉客户端的「空转重试」；② 单跳链判沉默时不再 `markSilence`；③ `config` 校验禁止单跳渠道配 `channelPolicy`（现在靠注释约束）；④ `docs/PITFALLS.md` §42 需补一条「本地判死制造重试」。
+
+**回退**：`cp zgate.json.bak-nokill-20261110-2132 gateways/zgate/zgate.json` 后 `/admin/reload`。
 
 [[TASK_ALL_DONE]]

@@ -10,27 +10,20 @@
   "hajimiEnvFile": "../../providers/hajimi/.env.local",
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
-  "upstreamHeaderTimeoutSec": 12,
+  "upstreamHeaderTimeoutSec": 45,
   "channelPolicy": {
     "GM": {
-      "softCooldownSeconds": 90,
-      "silenceCooldownSeconds": 20,
+      "softCooldownSeconds": 60,
+      "silenceCooldownSeconds": 0,
       "rateLimitBackoffMs": -1,
-      "firstBlockMs": 4000,
-      "hedgeAfterMs": 500,
+      "firstBlockMs": 0,
+      "hedgeAfterMs": 18000,
       "maxParallel": 2,
       "authFailCooldownHours": 24,
-      "headerTimeoutSec": 12
+      "headerTimeoutSec": -1
     },
     "HJ": {
-      "softCooldownSeconds": 90,
-      "silenceCooldownSeconds": 20,
-      "rateLimitBackoffMs": -1,
-      "firstBlockMs": 4000,
-      "hedgeAfterMs": 500,
-      "maxParallel": 2,
-      "authFailCooldownHours": 24,
-      "headerTimeoutSec": 25
+      "headerTimeoutSec": -1
     }
   },
   "reasoningGuard": {

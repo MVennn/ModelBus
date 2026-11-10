@@ -17,6 +17,18 @@
 
 ## [未发布]
 
+### 判死权归上游：HJ / GM 关掉本地看门狗，全局兜底 12s → 45s（2026-11-10 21:30）
+
+> 当晚 GM 被判死 125 次（沉默 79 + 首块 46），上游真说过 `503 high demand` 的只有 7 次（5.3%）；HJ 判死 32 次，一大半与 502 同秒返回，而同一时段上游一直在正常吐 token。502 是本地造的 —— DSH 的 `retryPolicy` 把 `SERVER` 当可重试，判死一次就换来「一次 502 + 一次客户端重试 + 一次上游重跑」，用户看到的就是「后台在跑 token、本地断开又跑一遍」。
+
+- **改（配置，热加载即可）**：`channelPolicy.HJ` 收敛为 `{"headerTimeoutSec": -1}`；`channelPolicy.GM` 的 `headerTimeoutSec` → `-1`、`firstBlockMs` → `0`、`silenceCooldownSeconds` → `0`、`hedgeAfterMs` → `18000`、`softCooldownSeconds` → `60`；`upstreamHeaderTimeoutSec` → `45`。
+- **口径**：本地只做两件事 —— 「并排多问一家」（`hedgeAfterMs` 对冲只多开一路、不取消前一路）与「按上游回话冷却」（429 / 5xx / 403）。**上游没说我死了，就不替他下死亡通知**。
+- **为什么不是继续调窗口**：慢是这条链的常态（catiecli 3.8 常态 9-14s 才出正文，哈基米首头从 2.5s 漂到 10s），阈值给多少都在赌，赌错一次就是一次重试 + 一次上游重跑。
+- **源码注释同步**：`internal/router/router.go`（`upstreamHeaderTimeout` 上方追加第四次收敛段）、`internal/config/config.go`（`HeaderTimeoutSec` 字段注释改写）。仅注释，无行为变化，二进制可继续用。
+- **文档**：[docs/MODEL-PROVIDERS.md](docs/MODEL-PROVIDERS.md) §4.11.3 参数表按渠道重写 + 「第四次收敛」段、§4.11.5 渠道策略行；[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) 新增 §18.4（含判据表与处置表），§18.1 / §18.2 旧处置标注已推翻。
+- **验收**：`/admin/reload` → 200 `{"ok":true,"applied":["workbuddy","qoder"]}`；`go build ./...` / `go vet ./...` exit 0；`tools/check-docs.py` / `tools/check-project.py` exit 0。
+- **回退**：`cp gateways/zgate/zgate.json.bak-nokill-20261110-2132 gateways/zgate/zgate.json` 后 `POST http://127.0.0.1:7871/admin/reload`。
+
 ### 哈基米福利 3.8 拆成独立模型 `Gemini-3.8-Flash`：主力组内压在 Gemini-AIS 之前（2026-11-10 22:27）
 
 > 兜底塞在链里只能吃链首的规则：对冲参数与响应头窗口都取 `Chain[0]`（GM），而链首 `ais-gemini-3.8-flash` 常态「等到 60 秒才回 503 high demand」，每轮先白等一个窗口才轮到哈基米；AIS 一家整片 error 时更是纯浪费。用户 20:20 拍板：拆出来、改名、放主力、压在 AIS 前面。

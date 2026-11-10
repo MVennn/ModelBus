@@ -109,6 +109,13 @@ const transportRetryDelay = 300 * time.Millisecond
 // 3.8 是「60 秒后才回 503」，窗口给多长都只是白等。一个全局值必然牺牲其中一边，
 // 所以加了按渠道覆盖（channelPolicy[<渠道>].headerTimeoutSec）：GM 用 12 秒，
 // HJ 用 25 秒。
+// 2026-11-10 21:30（第四次收敛，方向反过来）：按渠道分窗口治不了根 —— 当天 GM 被判死
+// 125 次（沉默 79 + 首块 46），其中上游真说过 503 的只有 7 次（5.3%）；HJ 判死 32 次，
+// 一大半与 502 同秒返回。网关一判死就回 502 → 客户端 retryPolicy 命中 SERVER 必然重打
+// → 上游那边又在跑 token → 用户看到「本地断开、又跑一次」。根因是把「上游慢」当成「上游死」。
+// 结论：判死权归上游。HJ（与 QN 同级的普通供应商）headerTimeoutSec = -1 不设看门狗；
+// GM 同样 -1，只用 hedgeAfterMs 18s 对冲（对冲不取消前一路，只多开一路）。
+// 全局兜底 12s → 45s，只兜住「真的挂了」的渠道。见 docs/MODEL-PROVIDERS.md §4.11.3。
 const upstreamHeaderTimeout = 12 * time.Second
 
 // timeoutCooldown 是桥接上游「连上但不说话」超时后的冷却时长。
