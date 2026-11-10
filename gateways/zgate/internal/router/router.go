@@ -827,6 +827,25 @@ func retryHint(head []byte) string {
 	return ""
 }
 
+// healthSegments 把渠道名映射成 /health 的段名。没登记的渠道退回小写渠道名，
+// 所以新增渠道即便忘了写段名也不会漏段；要换人类可读名再加一行。
+var healthSegments = map[string]string{
+	"OC": "opencode",
+	"WB": "workbuddy",
+	"QD": "qoder",
+	"QW": "qwen",
+	"QN": "qiniu",
+	"GM": "gemini",
+}
+
+// healthSegmentName 返回渠道在 /health 里的段名。
+func healthSegmentName(channel string) string {
+	if name, ok := healthSegments[channel]; ok {
+		return name
+	}
+	return strings.ToLower(channel)
+}
+
 func (s *Server) health(w http.ResponseWriter) {
 	s.aliases.Reload()
 	states := s.sup.States()
@@ -861,13 +880,7 @@ func (s *Server) health(w http.ResponseWriter) {
 		return view
 	}
 	payload := map[string]any{
-		"ok":        true,
-		"opencode":  upstreamView("OC"),
-		"workbuddy": upstreamView("WB"),
-		"qoder":     upstreamView("QD"),
-		"qwen":      upstreamView("QW"),
-		"qiniu":     upstreamView("QN"),
-		"gemini":    upstreamView("GM"),
+		"ok": true,
 		"alias": map[string]any{
 			"path":   s.aliases.Path(),
 			"models": s.aliases.Count(),
@@ -875,6 +888,10 @@ func (s *Server) health(w http.ResponseWriter) {
 		"children": states,
 		"cooling":  s.coolingCount(),
 		"uptime_s": int(time.Since(s.started).Seconds()),
+	}
+	// 段名与渠道的对应关系只由 keys.Channels 驱动：加渠道不用再回来改这里。
+	for _, channel := range keys.Channels {
+		payload[healthSegmentName(channel)] = upstreamView(channel)
 	}
 	writeJSON(w, 200, payload)
 }

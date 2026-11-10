@@ -17,10 +17,17 @@ import (
 	"strings"
 )
 
-// Set is the five credentials; empty means "not configured".
+// Set is the six credentials; empty means "not configured".
 type Set struct {
 	OC, WB, QD, QW, QN, GM string
 }
+
+// Channels 是全部上游渠道的规范名，也是新增渠道的唯一登记点。
+//
+// /health 的段表（router.healthSegmentName）直接遍历这份清单，测试也遍历它，
+// 因此加渠道只要在这里加一行 + Set 加一个字段，不会出现「源码加了段、测试
+// 还断言旧段名」的 CI 红（2026-11-10 的 cliproxyapi 残留就是这么红的）。
+var Channels = []string{"OC", "WB", "QD", "QW", "QN", "GM"}
 
 func env(name string) string { return strings.TrimSpace(os.Getenv(name)) }
 

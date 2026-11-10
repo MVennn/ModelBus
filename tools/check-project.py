@@ -39,6 +39,7 @@ ZGATE_JSON = os.path.join(ROOT, "gateways", "zgate", "zgate.json")
 LIFECYCLE = os.path.join(ROOT, "tools", "zgate-lifecycle")
 GATEWAY_ROUTER = "gateways/zgate/internal/router/router.go"
 GATEWAY_ALIAS = "gateways/zgate/internal/alias/alias.go"
+GATEWAY_KEYS = "gateways/zgate/internal/keys/keys.go"
 
 
 def read_bytes(rel: str) -> bytes:
@@ -117,13 +118,24 @@ def check_gateway(results: list) -> None:
     for needle, why in checks:
         if needle not in router:
             results.append(('FAIL', 'router.go: 缺 ' + why + ' -> ' + repr(needle)))
-    for seg in ('opencode', 'workbuddy', 'qoder', 'qwen', 'qiniu', 'gemini'):
-        if ('"' + seg + '":') not in router:
-            results.append(('FAIL', 'router.go: /health payload 缺 ' + seg + ' 段'))
+    # /health 段表自 2026-11-10 起由 keys.Channels 驱动（去脆性）：加渠道只改
+    # keys.Channels + Set 字段，段名有兜底，测试也遍历同一份清单。这里只守这条
+    # 链路在位，不再逐个写死段名 —— 写死正是那次 CI 红（残留 cliproxyapi 断言）的根因。
+    try:
+        keyfile = read_text(GATEWAY_KEYS)
+    except OSError as e:
+        results.append(('FAIL', 'keys 源码缺失: ' + repr(e)))
+        keyfile = ''
+    if 'var Channels = []string{' not in keyfile:
+        results.append(('FAIL', 'keys.go: 缺 var Channels：渠道登记点丢失，/health 段表无源可循'))
+    if 'for _, channel := range keys.Channels' not in router:
+        results.append(('FAIL', 'router.go: /health 未遍历 keys.Channels，新增渠道会漏段'))
+    if 'func healthSegmentName(' not in router:
+        results.append(('FAIL', 'router.go: 缺 healthSegmentName()，渠道到段名的映射丢失'))
     if 'func (m *Map) Catalog(' not in alias:
         results.append(('FAIL', 'alias.go: 缺 func (m *Map) Catalog(...)：聚合视图退回 OC 透传'))
     if len(results) == before:
-        results.append(('OK', '网关实现: /v1/models 聚合 + /health 六段 + QN/GM Bearer 在位'))
+        results.append(('OK', '网关实现: /v1/models 聚合 + /health 段表由 keys.Channels 驱动 + QN/GM Bearer 在位'))
 
 
 def check_semantic(results: list) -> None:

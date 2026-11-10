@@ -15,16 +15,42 @@ fi
 "$PY" tools/check-secrets.py || exit 1
 
 # 本地格式/语法/文档闸门：CI 只在 push/PR 触发，提交前这道必须挡住。
+# Go 工具链定位顺序 PATH -> $GOROOT/bin：Windows 上 go 常只在系统 Path 里，
+# 从 IDE 或精简终端提交时 PATH 可能没有它，静默跳过才是 2026-11-10 那次
+# 「本地全绿、远端 go test 红」的真正原因。
+GOBIN=$(command -v go 2>/dev/null)
+GOFMT=$(command -v gofmt 2>/dev/null)
+if [ -n "$GOROOT" ]; then
+  [ -z "$GOBIN" ] && [ -x "$GOROOT/bin/go" ] && GOBIN="$GOROOT/bin/go"
+  [ -z "$GOFMT" ] && [ -x "$GOROOT/bin/gofmt" ] && GOFMT="$GOROOT/bin/gofmt"
+fi
+
 # 1) Go 格式（与 .github/workflows/ci.yml 同判据）。
-if command -v gofmt >/dev/null 2>&1; then
-  unformatted=$(gofmt -l gateways/zgate)
+if [ -n "$GOFMT" ]; then
+  unformatted=$("$GOFMT" -l gateways/zgate)
   if [ -n "$unformatted" ]; then
     echo "[FAIL] 以下 Go 文件未过 gofmt（先 gofmt -w 再提交）：" >&2
     echo "$unformatted" >&2
     exit 1
   fi
+else
+  echo "[WARN] 未找到 gofmt，跳过格式检查（CI 仍会跑）" >&2
 fi
 # 2) 文档结构 + 项目语义（真值 zgate.json）+ 新脚本 LF/BOM + PS1 语法。
 "$PY" tools/check-docs.py || exit 1
 "$PY" tools/check-project.py || exit 1
+
+# 3) Go 构建与测试：只在暂存了 Go 文件时跑，纯文档提交不为此多等十几秒。
+STAGED=$(git diff --cached --name-only --diff-filter=ACMR)
+if printf '%s\n' "$STAGED" | grep -q '\.go$'; then
+  if [ -n "$GOBIN" ]; then
+    ( cd gateways/zgate && "$GOBIN" build ./... && "$GOBIN" test ./... ) || exit 1
+  else
+    echo "[WARN] 未找到 go，跳过 Go 构建与测试（CI 仍会跑）" >&2
+  fi
+fi
+# 4) Python 单元测试：动了 tools/ 或 tests/ 下的 .py 才跑（全离线用例）。
+if printf '%s\n' "$STAGED" | grep -Eq '^(tools|tests)/.*\.py$'; then
+  "$PY" -m unittest discover -s tests -q || exit 1
+fi
 exit 0

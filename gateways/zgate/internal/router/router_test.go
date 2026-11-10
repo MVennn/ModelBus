@@ -599,7 +599,134 @@ func TestRegionBlockedDoesNotCoolALoneHop(t *testing.T) {
 	}
 }
 
-func TestHealthHasSixUpstreamsWithState(t *testing.T) {
+// TestBridgeEndpointUnavailable403FallsBackToAirportTwin 复刻 2026-11-10 的
+// Claude-Haiku-5.5 实况：messages 桥接跳直连出口 403，上游 body 只有一句
+// {"error":{"message":"Upstream request failed: Endpoint is unavailable."}}，
+// bridge 再包一层 "bridge upstream error: "。这句既没有 RegionError 也没有
+// country 字样，只认前四串地区 marker 时 403 会直接漏给客户端，链尾的机场
+// 孪生跳（10.0.0.1:7896）永远轮不到 —— 用户看到的就是「模型连不上」。
+func TestBridgeEndpointUnavailable403FallsBackToAirportTwin(t *testing.T) {
+	var mu sync.Mutex
+	directHits := 0
+	blocked := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		directHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(403)
+		_, _ = w.Write([]byte(`{"error":{"message":"Upstream request failed: Endpoint is unavailable.","type":"upstream_error"}}`))
+	}))
+	defer blocked.Close()
+	airport := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","model":"claude-haiku-5-5",
+			"content":[{"type":"text","text":"ok"}],"stop_reason":"end_turn",
+			"usage":{"input_tokens":1,"output_tokens":1}}`))
+	}))
+	defer airport.Close()
+
+	srv, _ := newServer(t, `{
+		"models":{"Claude-Haiku-5.5":{"channel":"OC","upstream":"claude-haiku-5-5","protocol":"messages",
+			"chain":[
+				{"upstream":"claude-haiku-5-5","base":"`+blocked.URL+`","channel":"OC","protocol":"messages","price":0},
+				{"upstream":"claude-haiku-5-5","base":"`+airport.URL+`","channel":"OC","protocol":"messages","price":0,"proxy":"http://10.0.0.1:7896"}
+			]}},
+		"legacy":{}
+	}`, blocked.URL)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	body := `{"model":"Claude-Haiku-5.5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`
+	resp, raw := postJSON(t, front.URL+"/v1/chat/completions", body)
+	if resp.StatusCode != 200 {
+		t.Fatalf("bridge 'Endpoint is unavailable' 403 must fall back to the airport twin, got %d %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "ok") {
+		t.Fatalf("twin content missing: %s", raw)
+	}
+
+	direct := alias.Hop{Channel: "OC", Upstream: "claude-haiku-5-5", Protocol: "messages"}
+	twin := alias.Hop{Channel: "OC", Upstream: "claude-haiku-5-5", Protocol: "messages", Proxy: "http://10.0.0.1:7896"}
+	if !srv.cooling(direct) {
+		t.Fatal("the blocked direct hop must be cooled so later requests skip it")
+	}
+	if srv.cooling(twin) {
+		t.Fatal("the airport twin carries its own hopKey and must stay usable")
+	}
+
+	resp2, raw2 := postJSON(t, front.URL+"/v1/chat/completions", body)
+	if resp2.StatusCode != 200 {
+		t.Fatalf("second request failed: %d %s", resp2.StatusCode, raw2)
+	}
+	mu.Lock()
+	n := directHits
+	mu.Unlock()
+	if n != 1 {
+		t.Fatalf("cooled direct hop must be skipped, it got %d requests", n)
+	}
+}
+
+// TestBridgeClient400IsNotRegionBlocked：真正的客户端 4xx（拼错的请求、坏 key）
+// 不能被误判成地区受限。误判会让每个坏请求都多绕一次机场孪生跳，
+// 还会把一条本来好用的出口冷却掉。
+func TestBridgeClient400IsNotRegionBlocked(t *testing.T) {
+	var mu sync.Mutex
+	twinHits := 0
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(400)
+		_, _ = w.Write([]byte(`{"error":{"message":"messages: thinking is not enabled for this model","type":"invalid_request_error"}}`))
+	}))
+	defer bad.Close()
+	twin := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		twinHits++
+		mu.Unlock()
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(200)
+		_, _ = w.Write([]byte(`{"id":"msg_1","type":"message","role":"assistant","content":[{"type":"text","text":"ok"}]}`))
+	}))
+	defer twin.Close()
+
+	srv, _ := newServer(t, `{
+		"models":{"Claude-Haiku-5.5":{"channel":"OC","upstream":"claude-haiku-5-5","protocol":"messages",
+			"chain":[
+				{"upstream":"claude-haiku-5-5","base":"`+bad.URL+`","channel":"OC","protocol":"messages","price":0},
+				{"upstream":"claude-haiku-5-5","base":"`+twin.URL+`","channel":"OC","protocol":"messages","price":0,"proxy":"http://10.0.0.1:7896"}
+			]}},
+		"legacy":{}
+	}`, bad.URL)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	resp, raw := postJSON(t, front.URL+"/v1/chat/completions",
+		`{"model":"Claude-Haiku-5.5","max_tokens":8,"messages":[{"role":"user","content":"hi"}]}`)
+	if resp.StatusCode != 400 {
+		t.Fatalf("a real client 400 must reach the caller unchanged, got %d %s", resp.StatusCode, raw)
+	}
+	mu.Lock()
+	n := twinHits
+	mu.Unlock()
+	if n != 0 {
+		t.Fatalf("client 400 must not burn a twin hop, twin got %d requests", n)
+	}
+	if srv.cooling(alias.Hop{Channel: "OC", Upstream: "claude-haiku-5-5", Protocol: "messages"}) {
+		t.Fatal("a client 4xx must not cool the hop: it is the caller's fault, not the egress")
+	}
+	// regionBlocked 是全部判据的唯一出口，直接钉住它的边界。
+	if regionBlocked(400, []byte(`{"error":{"message":"invalid_request_error"}}`)) {
+		t.Fatal("plain 400 must not look region-blocked")
+	}
+	if !regionBlocked(403, []byte(`{"error":{"message":"bridge upstream error: Upstream request failed: Endpoint is unavailable."}}`)) {
+		t.Fatal("the bridge-wrapped 403 must be recognised as region-blocked")
+	}
+}
+
+// TestHealthHasEveryChannelSegmentWithState 遍历 keys.Channels 断言 /health 段，
+// 不再写死段名清单：2026-11-10 的 CI 红就是因为测试里留着已删除的 "cliproxyapi"
+// 段名，而源码的段名本来是对的。段名唯一性也在这里守，避免两个渠道互相覆盖。
+func TestHealthHasEveryChannelSegmentWithState(t *testing.T) {
 	srv, _ := newServer(t, `{"models":{},"legacy":{}}`, "http://127.0.0.1:1")
 	front := httptest.NewServer(srv.Handler())
 	defer front.Close()
@@ -613,10 +740,16 @@ func TestHealthHasSixUpstreamsWithState(t *testing.T) {
 	if err := json.Unmarshal(raw, &body); err != nil {
 		t.Fatalf("health is not JSON: %s", raw)
 	}
-	for _, seg := range []string{"opencode", "workbuddy", "qoder", "qwen", "qiniu", "cliproxyapi"} {
+	seen := make(map[string]string, len(keys.Channels))
+	for _, channel := range keys.Channels {
+		seg := healthSegmentName(channel)
+		if prev, dup := seen[seg]; dup {
+			t.Fatalf("channels %q and %q share /health segment %q", prev, channel, seg)
+		}
+		seen[seg] = channel
 		view, ok := body[seg].(map[string]any)
 		if !ok {
-			t.Fatalf("/health missing segment %q: %s", seg, raw)
+			t.Fatalf("/health missing segment %q (channel %s): %s", seg, channel, raw)
 		}
 		if _, ok := view["state"]; !ok {
 			t.Fatalf("/health %q missing state: %s", seg, raw)
