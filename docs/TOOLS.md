@@ -26,7 +26,7 @@
 |---|---|---|---|
 | `providers/opencode-go/ops/go_model_sync.py` | 四源并集检测 Go 套餐新模型 → 三协议探测 → 按成本档 + 备用档分组 → 写 `provider_config.json`（`--reclassify-only` 只搬备用档；统一模式下三个 chat 组（主力 / 免费 / 省钱）指向统一路由）。已配置模型**跑不通即清**（400/402/404/410/5xx 移除，仅豁免 401/429），复通后自动加回；**探测遇到「地区受限」标记（403 + `RegionError` / `unsupported_country_region_territory` 等）会先经机场 `AIRPORT_PROXY` 复测一次**，机场也不通才移除（`GO_AIRPORT_PROXY` 可改地址、空值关闭），见 [PITFALLS.md](PITFALLS.md) §35。已配置的 `W/…`、`O/…`、`Q/…` 显示名会先按 `model-alias-map.json` 还原成上游裸 id 再体检，WorkBuddy/Qoder 渠道跳过，不会拿显示名去 Go 上游探测 | 报告 `go-model-sync-<时间戳>.md`；备份 `provider_config.json.bak-gosync-<时间戳>` | ✅ 长期 |
 | `providers/opencode-go/ops/opencode-header-proxy.js` | 给不支持自定义头的客户端（ChatBox / Open WebUI 等）补 `x-opencode-session` | 常驻 HTTP 代理，默认 `127.0.0.1:8787` | ✅ 长期 |
-| `gateways/zgate/` | **统一入口（Go）**：监听 `127.0.0.1:7871`，按 `model-alias-map.json` 分流；无 map 时回退旧前缀（`cn:`/`global:`/`qoder:`）；messages/responses 模型内置协议桥；按 `zgate.json` 分流到 6 个 upstreams（OC / WB / QD / QW / QN / GM），同时按策略拉起/回收 2 个 child（workbuddy :7863、qoder :8790，均 `ondemand`）。子命令 `serve` / `status` / `reload` / `install` / `uninstall` / `version`；子进程默认全部 `ondemand`，签到/保活用 `windows` 定时窗口兜底；改策略后 `zgate reload` 热加载。策略与配置见 [MAINTENANCE.md](MAINTENANCE.md) §8 | 日志 `%LOCALAPPDATA%\ZCodeGateway\zgate.log`（5 MB 轮转）；子进程输出同目录 `workbuddy.*` / `qoder.*` | ✅ 长期 |
+| `gateways/zgate/` | **统一入口（Go）**：监听 `127.0.0.1:7871`，按 `model-alias-map.json` 分流；无 map 时回退旧前缀（`cn:`/`global:`/`qoder:`）；messages/responses 模型内置协议桥；按 `zgate.json` 分流到 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ），同时按策略拉起/回收 2 个 child（workbuddy :7863、qoder :8790，均 `ondemand`）。子命令 `serve` / `status` / `reload` / `install` / `uninstall` / `version`；子进程默认全部 `ondemand`，签到/保活用 `windows` 定时窗口兜底；改策略后 `zgate reload` 热加载。策略与配置见 [MAINTENANCE.md](MAINTENANCE.md) §8 | 日志 `%LOCALAPPDATA%\ZCodeGateway\zgate.log`（5 MB 轮转）；子进程输出同目录 `workbuddy.*` / `qoder.*` | ✅ 长期 |
 | `gateways/zgate/build.py` | **zgate 构建入口**：带 `-H windowsgui` 编译（GUI 子系统 → 登录自启零窗口），并**强制校验产物的 PE `Subsystem` 必须为 2**；`--candidate` 编译到 `zgate.candidate.exe`（不覆盖运行中的 exe，供 `tools/zgate-lifecycle/deploy-zgate.ps1` 换版用）；`--check` 只校验现有产物，`--cross-check` 交叉编译一份 windows/amd64 到临时目录再校验（CI 用，Linux 上也生效） | `gateways/zgate/zgate.exe`（`.gitignore` 排除）；临时目录里的交叉编译产物 | ✅ 长期 |
 | `gateways/zgate/smoke_test.py` | 冒烟测试：四条通道 + 两种桥 + 流式各打一发微小请求，断言 200 / `chat.completion` / `[DONE]` | 只打印 PASS/FAIL；`ZGATE_BASE` 可改目标 | ✅ 长期（每次改路由后跑） |
 | `tools/model_alias.py` | **最终写入者**：把当前配置里的模型归一成纯型号名，同型号跨渠道合并成 `chain`（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），按人工有序名单分**三组**（主力 `MAIN_ORDER` / 免费按 0 价 / 省钱 `LOW_ORDER` 严格白名单），组内顺序也按名单下标，生成 alias map；**价格每轮从源重算、不继承旧值**（死跳直接剔除）；`--probe-file` 只保留 ok（或曾 ok 的瞬时限流，超过 `--probe-max-age-hours` 默认 72h 视为未知）；`--check` 只做漂移检测（有差异退出码 1）；`--arena-main` 读榜单候选扩充主力，`--no-arena` 回到纯人工。使用默认 ZCode 配置路径时，`--apply` 会在写完后调用 `tools/dsh_sync.py --apply` 投影到本机 DeepSeekRuntime（DSH 未安装则跳过；`--config` 指向沙盒时默认不投影；`--no-dsh` 关闭） | `provider_config.json.bak-alias-<时间戳>`；`~/.zcode/v2/model-alias-map.json`；DSH patch / 凭据备份（见下行） | ✅ 长期 |
@@ -81,13 +81,13 @@
 | 统一模式（默认） | 不带 `--separate` | WorkBuddy 模型并进 OpenCode 的三组，三组的 `baseUrl` 指向统一入口 `gateways/zgate`（`127.0.0.1:7871`） |
 | 分离模式 | `--separate` | 重建四个独立的 `workbuddy-*` provider（免代 / 低代 / 高代 / 备用），`baseUrl` 直指网关 |
 
-统一入口按 alias map 分流：统一名（如 `Qwen-3.8-Max` / `HY4`）解析成跨渠道 `chain` 逐跳回落，legacy 键映射到对应统一名；`chain` 覆盖 6 个 upstreams（OC / WB / QD / QW / QN / GM）。
+统一入口按 alias map 分流：统一名（如 `Qwen-3.8-Max` / `HY4`）解析成跨渠道 `chain` 逐跳回落，legacy 键映射到对应统一名；`chain` 覆盖 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ）。
 它由 `gateways/zgate` 常驻提供（登录自启，见
-[MAINTENANCE.md](MAINTENANCE.md) §8），健康检查 `GET http://127.0.0.1:7871/health`（六段 upstream + `children` / `alias` / `cooling` / `uptime_s`）。
+[MAINTENANCE.md](MAINTENANCE.md) §8），健康检查 `GET http://127.0.0.1:7871/health`（七段 upstream + `children` / `alias` / `cooling` / `uptime_s`）。
 
 模型怎么分档、哪些模型进哪一组，见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.0、§4.2；
 守护器与开机自启，见 [MAINTENANCE.md](MAINTENANCE.md) §8。
-统一入口按 `zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / QN / GM）；自启父链、换版与回滚正本在 `tools/zgate-lifecycle/`，见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
+统一入口按 `zgate.json` 配 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ）；自启父链、换版与回滚正本在 `tools/zgate-lifecycle/`，见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 **当前生效清单单一真值**：`tools/zgate-lifecycle/current-models.ps1` 读 alias map + `zgate.json` 写出
 `%LOCALAPPDATA%/ModelBus/current-models.json`（22 统一名 + 94 legacy 键 + 6 upstreams + 3 children）；

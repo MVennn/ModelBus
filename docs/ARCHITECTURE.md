@@ -1,12 +1,12 @@
 # 运行架构整合方案
 
 > **一句话**：把「PowerShell 守护 + Node 路由 + 本地网关进程」收敛成
-> **一个 Go 入口进程 + 6 个 upstream / 2 个按需拉起的 child**（WB / Qoder），
+> **一个 Go 入口进程 + 7 个 upstream / 2 个按需拉起的 child**（WB / Qoder），
 > 落地时实测常驻内存从 293.4（MB，改造前 4 进程）降到 ~128 MB（ZCode 关闭时 ~20 MB）；2026-11-09 空闲态另测 64.0 MB（zgate + wb2api，qoder 未拉起），数字随时点与子进程状态变化，目录按「运行层 / 接入层」两轴重排。
 
 **状态：已落地（2026-10-23），现行架构 2026-11-09 对齐。**
 运行层现在是 `gateways/`：`zgate`（Go）监听 `127.0.0.1:7871`，按 `zgate.json` 托管
-6 个 upstream（OC / WB / QD / QW / QN / GM）与 2 个 child（workbuddy :7863、qoder :8790）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
+7 个 upstream（OC / WB / QD / QW / QN / GM / HJ）与 2 个 child（workbuddy :7863、qoder :8790）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
 [MAINTENANCE.md](MAINTENANCE.md) §8，自启与换版见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 ---
@@ -73,7 +73,7 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 | 约束 | 来源 | 对方案的影响 |
 |---|---|---|
 | ZCode 每个 provider 只能填一个 `api.baseUrl` | 客户端机制 | 三组（主力 / 免费 / 省钱）必须共用 7871 入口 → 路由不能去掉 |
-| 三组里混着 6 个 upstream 的模型 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | 分流必须按 alias map 的 `chain` 做，不能按组做 |
+| 三组里混着 7 个 upstream 的模型 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | 分流必须按 alias map 的 `chain` 做，不能按组做 |
 | 两个上游是 git clone，更新方式是 `git pull --ff-only` | [MAINTENANCE.md](MAINTENANCE.md) §8 | 不能改上游源码；只能当子进程管 |
 | Qoder 自带调度器（09:00 / 21:00 签到、22:00 保活） | [QODER.md](QODER.md)、`qoder_scheduler.py` | 停掉即漏任务，除非由外部在窗口内拉起 |
 | WorkBuddy 自带签到/活跃/夜猫子/额度刷新，且**只在进程活着时跑** | [MAINTENANCE.md](MAINTENANCE.md) §8 副作用 | 现状已经因为跟 ZCode 起停而漏跑；整合时可以顺手修 |
@@ -99,7 +99,7 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 ```
 ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
-             │  zgate.json 配 6 个 upstream：OC / WB / QD / QW / QN / GM
+             │  zgate.json 配 7 个 upstream：OC / WB / QD / QW / QN / GM / HJ
              ├─ OC / QW / QN ──▶ 远程（opencode.ai / 千问 / 七牛云，无本地进程）
              ├─ WB 通道 ──▶ 子进程 wb2api.exe :7863          （按需拉起 / 空闲回收）
              └─ QD 通道 ──▶ 子进程 python qoder_proxy.py :8790（按需拉起 / 空闲回收）
@@ -111,7 +111,7 @@ ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
 - **单飞（single-flight）拉起**：同一通道并发首请求只触发一次启动，其余请求排队等
   健康检查就绪（`zgate.json` 的 `startTimeoutSeconds`：WB 30 s / Qoder 40 s，源码缺省 25 s，超时返回 503 而不是挂死）。
 - **崩溃重启**：带指数退避（1s → 2s → 4s → … → 60s，见 `internal/supervisor/supervisor.go`）；
-  `failCount` 只喂给退避计算；`/health` 六段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`（本地 child 取 `sup.States()`，远程由 key 推 `up` / `no_key`），`children` 段是 `sup.States()` 原样（含 `state` / `pid` / `idle_s` / `last_error`）。
+  `failCount` 只喂给退避计算；`/health` 七段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`（本地 child 取 `sup.States()`，远程由 key 推 `up` / `no_key`），`children` 段是 `sup.States()` 原样（含 `state` / `pid` / `idle_s` / `last_error`）。
 
 ### 3.3 子进程回收策略（三档，可配置）
 
@@ -156,7 +156,7 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
 1. `opencode-go/ops/opencode-header-proxy.js`（8787，给第三方客户端补
    `x-opencode-session`）→ zgate 的第二个监听器，`config.json` 里 `profiles.client-headers`。
    它现在根本没在跑，但迟早要跑，别再多一个 Node 进程。
-2. `/health` 已落地为统一视图：六段 upstream（OC / WB / QD / QW / QN / CP）各带 `base` / `key` / `child` / `state` / `last_error`，
+2. `/health` 已落地为统一视图：七段 upstream（OC / WB / QD / QW / QN / GM / HJ）各带 `base` / `key` / `child` / `state` / `last_error`，
    加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias.models`、`cooling`、`uptime_s`；`GET /v1/models` 返回 alias 聚合 catalog。
 3. 日志合并：`zgate.log`（按大小轮转）+ 子进程 stdout/stderr 各一份，
    目录统一到 `%LOCALAPPDATA%\ZCodeGateway\`。今天的四套日志名保留一版兼容。

@@ -564,7 +564,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 **排查步骤**：
 
 1. 看探针 `ENC` 列：`python tools/model_stream_check.py --model Iceman --no-heal`；`THINK=0` 且 `ENC>0` = 上游加密分流，不是模型故障。
-2. 看展示配置：`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `ui-chat` 是否还是 `standard / completion / final`，`ui-skin-claude-style` 有没有 `reasoningDisplay`。
+2. 看展示配置（**只读，不改**）：`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `ui-chat` 现值、`ui-skin-claude-style` 有没有 `reasoningDisplay`。`ui-chat` 三键（`transcriptView / collapseTiming / foldedReplies`）是用户偏好，用户要的是 `compact / completion / final`，排查时**不许**改成 `verbose / next-input / all` —— 一改用户就以为配置自己回退，见 [PITFALLS.md](PITFALLS.md) §41-①。
 3. 看网关守卫是否真生效：`zgate.json` 有 `reasoningGuard` 不等于二进制有新代码 —— 改过 Go 就必须换 `zgate.exe`（§16.2），`/admin/reload` 只热加载配置。守卫日志这几行就能定性：
    - `上游返回加密思考分流…换连接+换会话重抽 1/5`：探针判定成功，正在重抽（行里带上游模型名，一眼能看出是哪个模型被判成加密分流）；
    - 下一行 `连续 N 次加密思考，达上限放行最后一次` 之后的流首出现 `ⓘ 上游本次只下发加密思考`：上游这一段窗口全在加密后端，属上游行为；
@@ -577,7 +577,70 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 7. **每个请求都要先空等十几秒才出字**：正常流被 `probeSeconds` 误判成静默了。看日志有没有 `内没有可判定的思考信号（上游静默）` —— 有就说明探针没等到首块。先量正常流的首字节耗时（`tools/model_stream_check.py` 的 TTFB），把 `reasoningGuard.probeSeconds` 调到明显大于它（现配置 15，明文实测最高 13.5 秒）；窗口期把 `maxRetries` 调大的做法无效，重抽几乎必然落回同一后端，只会让用户多等。想完全关掉这套探测就把 `probeSeconds` 设负数并把 `maxRetries` 设 0。
 8. **新模型也这样怎么办**：不用改 `models` 白名单，`mode: "auto"` 已覆盖「客户端声明要思考」的所有流式请求；真要停手只把 `giveUpAfter` / `giveUpForSeconds` 调小调大。适配规则见 [PITFALLS.md](PITFALLS.md) §41「同类模型免配置适配」与 [MODEL-STREAM.md](MODEL-STREAM.md) §10。
 
-**原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层改完**刷新 GUI** 即生效；网关层要换版二进制，会话内不自动重启长驻网关。
+**原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层只动 `reasoningDisplay`（刷新 GUI 即生效），`ui-chat` 折叠三键属于用户偏好，不动；
+
+---
+
+## 18. 某个模型一分钟没有任何输出，反代面板也没有记录 【通用】
+
+**现象**：选 `Gemini-AIS` 发一句话，客户端一分钟零字节（最后手动点「停止」）；上游反代后台**一条请求记录都没有**；同一时刻别的模型（DeepSeek 系）一切正常。
+
+> **口径更新（2026-11-10 22:27）**：`Gemini-AIS` 现在是 **7 跳全 GM** 链，哈基米福利 3.8 已拆成独立模型
+> `Gemini-3.8-Flash`（单跳 `HJ`）。本节及 §18.1-§18.3 里出现的 `(x/8)` 与 HJ 跳都是当晚的历史日志，
+> 排障时按 `(x/7)` 对照，别把「链里没有 HJ」当成回归。见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.5。
+
+
+**一句话结论**：降级链上多了一个新渠道，运行中的 `zgate.exe` 内存里没有对应的 `channelPolicy` → 整条链静默退回串行 → 首跳把连接挂住却不给响应头，而串行链没有首块超时，于是两头都静默。
+
+**排查步骤**：
+
+1. **看日志尾部是不是「只有派发行、没有后续」**：
+
+   ```bash
+   tail -80 "$LOCALAPPDATA/ZCodeGateway/zgate.log" | grep -E "model=Gemini-AIS|\[race\]"
+   ```
+
+   只有 `POST /chat/completions model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)`、完全没有 `[race] 发出 1/8` → 走的是串行链，竞速根本没上场（`[race] 发出` 是在起 goroutine 之前打印的，没有它就不是竞速）。
+2. **搜那条 WARN**：`grep "不在 channelPolicy" zgate.log`。命中即坐实第 1 步的原因，处置见 [PITFALLS.md](PITFALLS.md) §42。
+3. **核对二进制与配置的时序**：`/health` 的 `uptime_s` 反推进程启动时刻，与 `zgate.exe` 的 mtime、`model-alias-map.json` 的 `generated_at` 对比。进程启动早于「改链 / 加渠道」= 内存里是旧配置。也可以直接查二进制里有没有新代码：
+
+   ```bash
+   python -c "import os;s=open(os.path.expandvars(r'%LOCALAPPDATA%/ZCodeGateway/zgate.exe'),'rb').read(); print(b'hajimi' in s, b'upstream silent' in s)"
+   ```
+
+   两个都 `False` = 换版没生效。
+4. **反代后台没记录本身就是证据**：反代要开始回包时才记账，请求停在「连接建好、响应头没发」这一段不会留痕；配合客户端零字节，指向的是上游首字节沉默，而不是「请求根本没发出去」。
+5. **换版后复验**：`curl -s http://127.0.0.1:7871/health` 的 `segments` 里应出现 `hajimi`；再打一次目标模型，日志应有 `[race] 发出 1/8` 与最终赢家那一跳。
+
+**原因 / 解法**：正本见 [PITFALLS.md](PITFALLS.md) §42，机制见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.3 第 7 条。两件事都要做：① 换二进制（§16.2）；② 确认 `/health` 列出 `hajimi`（没列就是还在旧进程）。
+
+### 18.1 换版之后有输出了，但一次请求仍要 3-4 分钟（2026-11-10 19:45 实测）
+
+**现象**：换成新二进制后不再零字节，可一次请求要 3-4.5 分钟才出结果（用户实测 4 分 31 秒，期间界面只有「请求中」，反代后台同一句话出现两条记录）。
+
+**怎么判**：`grep -E "\[race\] 发出|上游 .* 内没给响应头" zgate.log | tail -30`。若每一跳之间都稳定隔约 45 秒、且末尾是「全部 8 跳都没给出可用的首块」，就不是链路问题，是**容忍窗口太长**：那一跳其实早就该被判死了。
+
+**根因**：同一跳 `ais-gemini-3.8-flash` 每次都要 60.241 秒才回 503 high demand（实测响应头耗时 60241ms），45 秒的响应头看门狗每次都等满；`maxParallel=2` 轮转 8 跳 = 4 轮。期间客户端等不到首字节会自动重试，所以后台看到两条。
+
+**处置**：`zgate.json` 的 `upstreamHeaderTimeoutSec`（缺省 12，负数关闭）调到 10-15 之间，`/admin/reload` 即生效，不用重编译。12 秒对正常首头（哈基米福利跳实测 2.5-3.1 秒）有 4 倍余量，全灭时最坏 4 轮 × 12 秒 ≈ 48 秒就给出结论。
+
+### 18.2 全体跳都沉默、几十秒后干净失败，兜底那家其实能回（2026-11-10 20:03 实测）
+
+**现象**：一次请求在 50 秒左右干脆地失败，日志里 8 跳全部 `上游 12s 内没给响应头`，包括哈基米那一跳；可单独打哈基米却是有响应的（当晚 7.5-10.2 秒出首头），反代面板依旧一条记录都没有。
+
+**判据**：日志里 `（channel=HJ model=[福利]gemini-3.8-flash）上游 12s 内没给响应头` —— 说明不是这条腿坏了，是**窗口卡在它抖动的边缘**。当天更早时候同一跳只要 2.5-3.1 秒，晚上漂到 7.5-10.2 秒，12 秒只剩 1.2-1.6 倍余量，赶上排队就被切。
+
+**处置**：给渠道单独设窗口 —— `zgate.json` 的 `channelPolicy.HJ.headerTimeoutSec = 25`（GM 保持 12）。两路同时在场时 GM 到 12 秒先被判死、链继续往下走，哈基米那一路还在等它的 10 秒，谁先出首块谁赢。RPM/TPM 面板上哈基米那一栏能证明它在正常出码，只是慢。
+
+### 18.3 换了跳却没埋跳：同一个死跳每个请求都要重新撞一遍（2026-11-10 20:20 实测）
+
+**现象**：首块看门狗已经生效（日志里每跳 12 秒判沉默、按序换跳），但**每一次**请求都要从第一跳起手重新等一遍 —— 用户连发两句，两分钟里大部分时间都花在「撞已知死跳」上。
+
+**判据**：日志里反复出现同一跳的 `上游 12s 内没给响应头`，而它前面从没有 `冷却中，跳过` 这行。说明换跳做了、冷却没做：`errUpstreamSilent` 分支只调 `retry()` 回落下一跳，跳的 `silence` 表一次都没写。
+
+**处置**：沉默也埋（`router.go` 的 `doForwardWith`，命中 `errUpstreamSilent` 后按渠道 `silenceCooldownSeconds` 打 `markSilence`，GM/HJ 各 20 秒）。埋了之后日志应变成「第一轮 12 秒判沉默 → 打 `沉默，静默冷却 20s 后再试这一跳` → 下一个请求直接 `冷却中，跳过` 到哈基米」。全链都在短冷却时 `raceChain` 会清掉软冷却重试一次（`clearSilence`），不会因为冷却把自己饿成 502。
+
+**口径**：静默冷却要短（20 秒）；它只是「这次先说别人」，不是「这跳死了」。真冷却（429 / 5xx / 额度过期）仍走 45 秒 - 24 小时那一套。
 
 ---
 

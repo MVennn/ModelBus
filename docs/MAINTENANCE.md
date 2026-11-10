@@ -308,7 +308,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 注册登录自启（现行） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（写两个计划任务；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 移除登录自启 | `gateways/zgate/zgate.exe uninstall` |
 | 热加载配置 / 上游 base / 凭据（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload`；监听地址 / 新增子进程 / alias map 路径 / Go 代码用 `restart-zgate.cmd` |
-| 健康检查 | `curl http://127.0.0.1:7871/health`（六段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
+| 健康检查 | `curl http://127.0.0.1:7871/health`（七段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
 | 只重启 WorkBuddy 上游 | `taskkill /IM wb2api.exe /F`，下一次 WB 请求自动拉起 |
 | 只重启 Qoder 上游 | `taskkill /IM python.exe /F` 后用下面的 bat 兜底，或重启 zgate |
 | 重新构建 zgate | `python gateways/zgate/build.py` |

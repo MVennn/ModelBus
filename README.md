@@ -24,7 +24,7 @@
 
 仓里的 `providers/opencode-go/`、`providers/workbuddy/` 与 `providers/qoder/` 是三个跑通的**完整示例**（OpenCode-Go 套餐、
 WorkBuddy2API 网关、qoder2api-hub 网关）；现在统一成**三组**（主力 / 免费 / 省钱），
-模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同型号跨渠道合并成一条链路（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程，监听 `127.0.0.1:7871`）按 alias map 分流到 6 个 upstreams（OC / WB / QD / QW / QN / GM），并按需托管 2 个本地网关子进程（WorkBuddy `7863` / Qoder `8790`）。方法本身与供应商无关，接一个新供应商要做的四步见
+模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同型号跨渠道合并成一条链路（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程，监听 `127.0.0.1:7871`）按 alias map 分流到 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ），并按需托管 2 个本地网关子进程（WorkBuddy `7863` / Qoder `8790`）。方法本身与供应商无关，接一个新供应商要做的四步见
 [docs/MODEL-PROVIDERS.md](https://github.com/MVennn/ModelBus/blob/main/docs/MODEL-PROVIDERS.md) §0。
 
 **边界**：本仓库**不含 ZCode 客户端**，只读写它的配置文件 `provider_config.json`，
