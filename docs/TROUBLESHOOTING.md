@@ -601,7 +601,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
    ```
 
    只有 `POST /chat/completions model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)`、完全没有 `[race] 发出 1/8` → 走的是串行链，竞速根本没上场（`[race] 发出` 是在起 goroutine 之前打印的，没有它就不是竞速）。
-2. **搜那条 WARN**：`grep "不在 channelPolicy" zgate.log`。命中即坐实第 1 步的原因，处置见 [PITFALLS.md](PITFALLS.md) §42。
+2. **看串行原因**（2026-11-10 深夜改）：`grep "走串行回落" zgate.log` 与 `curl -s 127.0.0.1:7871/health | python -c "import sys,json;print(json.load(sys.stdin)['race']['disabled'])"`。旧版那条 `不在 channelPolicy` 的 WARN 已随逐跳取值取消 —— 现在缺配的渠道只是那一跳拿不到对冲节奏，不再整链退回串行，判据见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §1；这条历史成因见 [PITFALLS.md](PITFALLS.md) §42。
 3. **核对二进制与配置的时序**：`/health` 的 `uptime_s` 反推进程启动时刻，与 `zgate.exe` 的 mtime、`model-alias-map.json` 的 `generated_at` 对比。进程启动早于「改链 / 加渠道」= 内存里是旧配置。也可以直接查二进制里有没有新代码：
 
    ```bash

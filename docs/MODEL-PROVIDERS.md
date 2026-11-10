@@ -578,9 +578,12 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 两个渠道**不再共用一套参数**：`GM` 是 7 跳降级链的链首，需要的只是「慢一点也先让下一跳并排跑」。
 `HJ` 是单跳直连的普通供应商（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
 「一次 502 + 客户端重试 + 上游重跑」，所以它那份收敛到只剩 `headerTimeoutSec: -1`
-（其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数取被请求那条链的**首跳**渠道
-（`racePolicyFor` 读 `Chain[0]`），所以 `Gemini-AIS` 的节奏由 GM 那份决定，
-`Gemini-3.8-Flash` 那份只作用于自己。
+（其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数**逐跳取值**（2026-11-10 深夜改）：
+`racePlanFor` 按链上每一跳自己的 `channelPolicy` 聚合 —— `hedgeAfterMs` 取各跳**最小正值**、
+`maxParallel` 取**最大值**、只配 `firstBlockMs` 时用它当发车间隔（兜底 1200ms / 2）；
+`headerTimeoutSec`、两个冷却、`rateLimitBackoffMs`、`authFailCooldownHours` 本来就按被尝试的那一跳查。
+所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上七跳各自那份共同决定；
+`Gemini-3.8-Flash` 那份仍然只作用于自己。完整口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md)。
 
 四件事必须一起看：
 
@@ -606,12 +609,12 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 7. **响应头看门狗 + 串行退化告警**（2026-11-10 夜补）：上游「连上了、但迟迟不给响应头」时，
    `doForward` 对流式请求最多等这一跳的容忍上限（**全局默认 12s**，`zgate.json` 的 `upstreamHeaderTimeoutSec` 当前 45s 且可改，负数 = 关掉；**单个渠道可用 `channelPolicy[<渠道>].headerTimeoutSec` 覆盖** —— 当前 `GM` / `HJ` 都是 `-1`，即不设看门狗，来历见本节末「窗口的第四次收敛」），超时判这一跳沉默
    （`errUpstreamSilent`）直接换下一跳 —— 不再依赖 `http.Client` 的无限期 `Do`
-   （它只配了 `DialContext` / `TLSHandshakeTimeout`，没有整体超时）。同时 `routeChain` 在落到
-   串行之前会调 `noteSerialFallback`：链上任何一个渠道没写在 `channelPolicy` 里，就打一条
-   `[race] 链上有渠道不在 channelPolicy 里（…），整条链退回串行、取消首块对冲` 的 WARN
-   （按渠道组合做 10 分钟去重）。**这条 WARN 是排障第一信号** —— 出现即说明「降级链已经带上新渠道、
-   运行中的进程还是旧配置」，对冲与首块看门狗全部失效，症状正是客户端一分钟零字节，
-   见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18 与 [PITFALLS.md](PITFALLS.md) §42。
+   （它只配了 `DialContext` / `TLSHandshakeTimeout`，没有整体超时）。串行仍然可能发生，但只在**真的没人要求对冲**时发生：`routeChain` 会调 `noteSerialChain`
+   打一条 `[race] 走串行回落` 的 Info，说明是哪条链、为什么（按链做 10 分钟去重）。
+   **旧判据已删除**：以前是「链上任何一个渠道没写在 `channelPolicy` 里 → 整条链退回串行、取消对冲」的
+   WARN；2026-11-10 深夜改成逐跳取值后这条判据不再成立（缺配只是那一跳拿不到对冲节奏，不连坐整条链）。
+   现在要查「对冲为什么没开」，看 `/health` 的 `race.disabled` 与 `noteSerialChain` 的 Info，口径见
+   [ROUTING-POLICY.md](ROUTING-POLICY.md) §1；症状是客户端一分钟零字节时，先按 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18 查。
 
    **45s → 12s 的来历（2026-11-10 19:45 实测）**：换上新二进制后对冲确实恢复了（日志里 `[race] 发出 1/8`…`8/8`），但一次请求仍要 3-4.5 分钟、用户实测 4 分 31 秒。原因是同一跳 `ais-gemini-3.8-flash` 每次都要**等满 60.241 秒才回 503 high demand**，而哈基米 `[福利]gemini-3.8-flash` 直连只要 2.5-3.1 秒就出首块。45 秒一档等于「每轮白等 45 秒」，8 跳按 `maxParallel=2` 轮转就是 4 分钟；期间 DSH 没有首字节会自动重试，反代后台于是出现两条「请求中」。降到 12 秒后：正常情况对冲到第二跳 ~3 秒出字，全灭时最坏 4 轮 × 12 秒 ≈ 48 秒给结论。12 秒相对观测到的合法首头（2.5-3.1 秒）还有 4 倍余量，需要更松时改配置即可，不必重编译。
 
@@ -683,7 +686,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 **演进：先在链里当兜底，后被拆成独立模型**（2026-11-10 两轮）。第一版把它夹在 AIS 链的
 3.8 与 3.7 之间当「同代兜底」，被三件事证明不合适：
 
-1. **链内兜底只能吃链首的规则**。对冲参数与响应头窗口都取 `Chain[0]` 的渠道，HJ 在第二位
+1. **链内兜底只能吃链首的规则**（当时；2026-11-10 深夜已改成逐跳取值，见 [ROUTING-POLICY.md](ROUTING-POLICY.md)）。对冲参数与响应头窗口都取 `Chain[0]` 的渠道，HJ 在第二位
    只能分到对冲余量；链首 `ais-gemini-3.8-flash` 又常态「60 秒后才回 503 high demand」，
    每轮先白等一个窗口，才轮到它。
 2. **AIS 整片不可用时，最优解是「根本不试 AIS」**。当晚 catiecli 七个型号整片 error / 排队，

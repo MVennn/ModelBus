@@ -3285,3 +3285,71 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 **回退**：`cp zgate.json.bak-nokill-20261110-2132 gateways/zgate/zgate.json` 后 `/admin/reload`。
 
 [[TASK_ALL_DONE]]
+
+# 2026-11-10 复盘批次：当日改动整理书（17 提交 / 是否生效 / 作用半径 / 整合建议）
+
+## 任务目标
+
+用户 m00001：今天修的东西太杂，不知道修了什么、是否是好的、是否真对全局生效；要一份整理书，并分析多种功能能否整合、有没有更优实现。
+
+## 产出
+
+- 新增 `docs/REVIEW-2026-11-10.md`（已登记 `docs/README.md` 四、参考资料）。
+- 取证三路并行：git 变更考古（`evidence/agent-git.md`）、运行时生效验证（`evidence/agent-runtime.md`）、文档台账核对（`evidence/agent-docs.md`）。
+
+## 结论摘要
+
+- **真生效**：GM / HJ 渠道接入（全局，/health 七段 + /v1/models 93 条）、Gemini-3.8-Flash 单跳 HJ（1 条）、CI 与文档门禁（全局）、流式提前交卷（全局，但零日志零字段）。
+- **半生效**：首字竞速只覆盖 `Gemini-AIS` 1/20（`race.go:306-334` 五条件 + 取 `Chain[0]` 渠道策略）；思考守卫限 2 个模型且 `/health` 不输出。
+- **未生效**：推理档位保活改动（`model_alias.py` + `dsh_sync.py`）尚未落盘 —— `provider_config.json` mtime 20:57:38 早于 21:1x 的改动。
+- **未覆盖风险**：`DeepSeek-4.1-Flash` 四跳 WB→OC→OC→QW 全部没有 `channelPolicy` → 无对冲、无静默冷却、每跳 45s 本地判死，「502 + 客户端重试 + 上游重跑」的自伤机制仍在默认模型上。
+- **整合方向**：超时判定三处合一（wait / failMode / commitEarly）、冷却三表合一（hopState 状态机）、档位保护两层收敛为一层、竞速与串行合并成一个执行器 + 调度策略。
+
+## 验收
+
+- `go test ./...` exit 0（config / router 14.1s / supervisor 11.0s 全 ok）。
+- `python -m unittest discover -s tests -q` → 91 项 OK。
+- `python tools/check-project.py` → 8 项 OK；`python tools/check-docs.py` → 41 篇 OK（新文档先 `git add -N` 才能过「链接目标不会进仓库」闸）。
+- 运行态：`zgate.exe` buildinfo `vcs.revision=bfd6b9e`、`vcs.modified=true` —— 未提交的 race TTL 改动已编进正在跑的二进制。
+
+[[TASK_ALL_DONE]]
+
+# 2026-11-10 优化批次：把「逐跳策略 / 链预算 / 单跳豁免」落地
+
+## 任务目标
+
+用户 m00198：「按照你的推荐去优化项目吧。」即按 `docs/REVIEW-2026-11-10.md` §6 的 P0-1…P2 九项动手。
+
+## 决策（为什么这么改）
+
+- **P0-1 逐跳取值**：旧 `racePolicyFor` 读 `Chain[0]`，导致「给 OC / QD / WB 补策略」等于配了也读不到 —— 这是当天不得不把 Gemini-3.8-Flash 从 AIS 链里拆出去的真正原因。改成 `racePlanFor` 从每一跳的 `channelPolicy` 聚合（hedge 取最小正值、maxParallel 取最大、只配 firstBlock 时当发车间隔、兜底 1200ms/2），混合链（GM 慢 + HJ 快）就能自然得到「慢的并发问快的」，不必为每个组合建模型。
+- **P0-2 默认模型裸奔**：DeepSeek-4.1-Flash 走 WB→OC→OC→QW 四跳全无策略。给 WB / OC / QD 补 `channelPolicy`，并加**链预算** `chainBudgetSec: 90`：预算只管「等响应头」这一段，到点回 504 `gateway_timeout` 且**不埋冷却**（本地选择不算上游的错）。
+- **P1-1 扩面**：单跳链的豁免从「沉默」扩到**全部冷却**（软冷却 / 超时 / 地区受限 / 不可用），只有 429 与额度仍冷却 —— 前者是「这跳现在挤」，后者是上游明确拒绝，继续打只会更糟。判据 `singleHopChain(ctx)`。
+- **P1-2 启动自检**：`channelPolicy` 原先在 `applyDefaults` 里零校验、全仓零调用点，渠道名写错完全静默。新增 `ValidatePolicies`：渠道**只**服务单跳模型又配了对冲字段 → Fatal 拒绝启动；同时服务多跳模型 → 只 Warn（同一份策略在多跳链上确实有效，不能拦合法配置）。
+- **P0-3 观测**：提前交卷原本零日志零字段。新增 `earlyStats` 五个计数器 + 三条日志（交卷 / 心跳失败 / 交卷后失败改写），`/health` 出 `early` 段；同批补 `chain` 与 `guard` 段。
+- **P1-3 模型表分档**：`/v1/models` 默认只给 `canonical`（20 条），`?scope=legacy` 73 条、`?scope=all` 93 条，未知 scope 400。
+- **P2**：守卫改能力表驱动（`upstreams.<渠道>.guardReasoning` + `mode=channels`）；`EarlyCommitMs` 负数=关写进注释（0 仍被 `applyDefaults` 归一成 8000）；判死日志改打**本次实际生效窗口**（`silentErr{wait,budget}`），预算到点单独回 504。
+
+## 代码落点
+
+- 新增 `gateways/zgate/internal/router/policy.go`：链预算 ctx、`singleHopChain`、`hopBase`、`coolHop`/`coolWhyOf`、`ValidatePolicies`。
+- `internal/router/race.go`：`racePlanFor`/`racePlan`/`hopProtocol` 取代 `racePolicyFor`；`noteSerialFallback` → `noteSerialChain`（缺配不再退回串行，只记原因）。
+- `internal/router/router.go`：`hopBase` 接管 base 解析（别名跳没写 base 时回落 `Upstreams[ch].Base`，此前会拿空地址请求）、`/models` 收口、`/health` 三段、`guardWanted(model, channel, …)` 三档、沉默分支按 `silentErr` 打实际窗口。
+- `internal/router/early_sse.go`：`earlyStats` + `attach` + 三条日志。
+- `internal/config/config.go`：`ChainBudgetSec`、`Upstream.GuardReasoning`、`ReasoningGuard.Mode` 增 `channels` 档。
+- `internal/alias/alias.go`：`Chains()` 只读快照（给启动自检用）。
+- `zgate.json`：`chainBudgetSec: 90`；新增 WB / OC / QD 三份 `channelPolicy`；`upstreams.OC.guardReasoning: true`。
+- 测试：新增 `internal/router/policy_test.go`（逐跳聚合 / 兜底 / 缺配串行 / 单跳不冷却 / 预算 504 / 自检两档 / 守卫档位 / hopBase 回落 / 软冷却豁免）；`router_test.go` 的 `TestModelsIsAggregatedCatalog` 改写为按 scope 断言。
+
+## 文档
+
+- 新增 `docs/ROUTING-POLICY.md`（路由策略正本，已登记 `docs/README.md` 二、流程与规范）。
+- `docs/MODEL-PROVIDERS.md`：§4.11.3「对冲参数取链首」段改逐跳取值并指向新文档；第 7 条的串行退化告警改 `noteSerialChain` 新语义；§4.11.5 的「只吃链首规则」标注为当时。
+- `docs/PITFALLS.md` §42、`docs/TROUBLESHOOTING.md` §18 第 2 步同步新判据（旧 `不在 channelPolicy` WARN 已取消）。
+- `docs/REVIEW-2026-11-10.md` 追加 §8 落地状态表。
+
+## 门禁
+
+结果见本批次末尾「验收」。
+
+[[TASK_ALL_DONE]]

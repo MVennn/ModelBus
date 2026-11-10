@@ -812,6 +812,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   2. 退回串行后没有任何首块看门狗：`router.go:734` 的 `if at != nil && at.policy.FirstBlockMs > 0` 只在竞速模式成立，串行链就是「发出去、等下去」。
   3. `http.Client`（`main.go:152`）只配了 `TLSHandshakeTimeout` 与 `DialContext` 超时，**没有整体超时 / 响应头超时**，上游建好连接却不发头就无限期挂着。
   三者一合：客户端零字节、网关零日志、反代零记录。旧二进制还认不出新渠道，连「缺 key」这种错误都报不出来。
+- **口径更新（2026-11-10 深夜）**：下文第 ① 层的「每个 hop 的渠道都要在 `channelPolicy` 里」已随**逐跳取值**取消（`racePolicyFor` → `racePlanFor`，见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §1）：缺配的渠道只是自己拿不到对冲节奏，不再连坐整条链退回串行；串行仍会发生，但只有一条 `noteSerialChain` 的 Info 说明原因。**「配置加了渠道、进程没重载」这个坑本身仍然成立** —— 差异在症状：以前是整链静默串行，现在是链上那一跳没有对冲、也没有它自己的看门狗窗口。
 - **怎么避**：① 加渠道 / 改链之后**必须换二进制并重启** —— `/admin/reload` 只热加载 `zgate.json` 的策略，改不了编译期登记的渠道与进程内已读的配置快照（流程见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16.2）；② 代码侧已补两道网（2026-11-10 夜）：流式请求的**响应头看门狗**（`doForward`，默认 12s 拿不到响应头就判这一跳沉默并换跳，`errUpstreamSilent`；`zgate.json` 的 `upstreamHeaderTimeoutSec` 可调，负数关掉 —— **但 2026-11-10 21:30 起 GM / HJ 两个渠道都不设这个窗口，理由见本条第五轮**）与**串行退化告警**（`routeChain` → `noteSerialFallback`，打 `[race] 链上有渠道不在 channelPolicy 里…整条链退回串行、取消首块对冲`，按渠道组合 10 分钟去重）；③ 排查时先 `grep "不在 channelPolicy"`，命中就不用再猜。
 - **验证**：`gofmt -l internal/router/` 空、`go build ./...` / `go vet ./...` exit 0、`go test ./...` 全 ok。新增两例：`TestStreamingHeaderWatchdogGivesUp`（handler 不给头、`headerWait=150ms`，断言 5s 内返回 `errUpstreamSilent` 收手）与 `TestStreamingHeaderWatchdogPassesThrough`（正常 SSE 必须原样透出、Close 正常取消）。候选二进制 `python gateways/zgate/build.py --candidate` 内容检索 `hajimi` / `HJM_API_KEY` / `upstream silent` 全部命中。
 

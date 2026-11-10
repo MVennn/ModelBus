@@ -27,6 +27,7 @@
 | [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：2 个 child（7863 / 8790）与 7 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
 | [MAINTENANCE.md](MAINTENANCE.md) | 日常维护：刷价格表、探测限速、快照保留、`--apply` 备份与回退、热重载注意事项 |
 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) | **zgate 生命周期正本**：计划任务双任务自启、CMD/DSH 会话树与 Job Object 问题、`build.py --candidate` + `tools/zgate-lifecycle/` 换版流程、失败回滚与常见故障 |
+| [ROUTING-POLICY.md](ROUTING-POLICY.md) | **路由策略正本**：一条请求「先打哪一跳、等多久、失败算谁的、什么时候不许判死」—— 逐跳参数聚合、链预算 `chainBudgetSec`、单跳链冷却豁免、两张冷却表、启动自检 `ValidatePolicies`、`/v1/models?scope=`、`/health` 的 early/chain/guard 段、各渠道当前实际值与回退 |
 | [TOOLS.md](TOOLS.md) | **工具清单正本**：运行环境、每个脚本的产物与去留标记、统一模式与 `--separate` 的区别 |
 | [CONSOLE.md](CONSOLE.md) | **可视化后台正本**：8 页信息架构与字段来源、独立 Python 服务而非塞进网关的取舍、MD3 选型（Beer CSS 单 CSS）、API 契约、脱敏红线、P0–P3 分期与验收 |
 | [VERSIONING.md](VERSIONING.md) | **版本晋升正本**：三段式进位、仓库发布号在哪维护、什么时候不动版本号。发版规则并入本篇 |
@@ -51,6 +52,7 @@
 | 仓库根 [PROGRESS.md](../PROGRESS.md) | 本仓唯一进度台账（追加式批次日志） |
 | 仓库根 [NOTICE](../NOTICE) | 第三方声明：WorkBuddy2API Panel（MIT）、qoder2api-hub（MIT）、OpenCode Go（商业）、ZCode（Apache-2.0）等 |
 | [UPSTREAM.md](UPSTREAM.md) | **上游调研正本**：同类型项目清单、深读结论、借鉴落地、随仓分发的上游文件与来源凭证 |
+| [REVIEW-2026-11-10.md](REVIEW-2026-11-10.md) | **2026-11-10 改动复盘**：当日 17 个提交按功能面归并、逐项判定是否真生效与作用半径（哪些只覆盖 1/20 模型）、同一条链改四轮的根因、可整合的四组重复判断与 P0–P2 优化建议 |
 | [BENCHMARKS.md](BENCHMARKS.md) | **外部跑分参考**：AI 能力专项测试（2026-09-11 快照）+ ArenaGalleri 实时榜；主力自动扩充的基准、窗口与候选表 |
 | 仓库根 [third-party/](../third-party/README.md) | 随仓分发的上游文件：ZCode 规则数据与引擎源码、ZCodium 规则切片，各带来源凭证 |
 | 仓库根 [LICENSE](../LICENSE) | 许可证全文（**MIT**），与 [NOTICE](../NOTICE) 配套 |
