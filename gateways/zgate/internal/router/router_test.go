@@ -782,22 +782,31 @@ func TestModelsIsAggregatedCatalog(t *testing.T) {
 	if string(v1) != string(plain) {
 		t.Fatalf("/v1/models and /models differ:\n%s\n%s", v1, plain)
 	}
+	type catalogEntry struct {
+		ID          string `json:"id"`
+		OwnedBy     string `json:"owned_by"`
+		CanonicalID string `json:"canonical_id"`
+		Group       string `json:"group"`
+		ChainHops   int    `json:"chain_hops"`
+	}
 	var body struct {
-		Object  string `json:"object"`
-		OwnedBy string `json:"owned_by"`
-		Data    []struct {
-			ID          string `json:"id"`
-			OwnedBy     string `json:"owned_by"`
-			CanonicalID string `json:"canonical_id"`
-			Group       string `json:"group"`
-			ChainHops   int    `json:"chain_hops"`
-		} `json:"data"`
+		Object       string         `json:"object"`
+		OwnedBy      string         `json:"owned_by"`
+		Scope        string         `json:"scope"`
+		Total        int            `json:"total"`
+		CatalogTotal int            `json:"catalog_total"`
+		Data         []catalogEntry `json:"data"`
 	}
 	if err := json.Unmarshal(v1, &body); err != nil {
 		t.Fatalf("catalog not JSON: %s", v1)
 	}
 	if body.Object != "list" || body.OwnedBy != "zgate" {
 		t.Fatalf("catalog envelope wrong: %s", v1)
+	}
+	// 默认只给 canonical：面板与客户端看到的是 zgate 承诺的命名空间，
+	// 历史 id 不往里倒（否则同一模型在一张表里出现三四次，没法挑）。
+	if body.Scope != "canonical" || body.Total != 1 || body.CatalogTotal != 2 || len(body.Data) != 1 {
+		t.Fatalf("default scope should be canonical only: %s", v1)
 	}
 	byID := map[string]bool{}
 	count := 0
@@ -812,15 +821,45 @@ func TestModelsIsAggregatedCatalog(t *testing.T) {
 				t.Fatalf("Alpha metadata wrong: %+v", e)
 			}
 		}
-		if e.ID == "alpha-legacy" && (e.CanonicalID != "Alpha" || e.Group != "主力") {
-			t.Fatalf("alpha-legacy metadata wrong: %+v", e)
-		}
 	}
-	if !byID["Alpha"] || !byID["alpha-legacy"] {
-		t.Fatalf("catalog missing unified/legacy id: %s", v1)
+	if !byID["Alpha"] || byID["alpha-legacy"] {
+		t.Fatalf("canonical scope wrong: %s", v1)
 	}
 	if count != 1 {
 		t.Fatalf("Alpha duplicated %d times: %s", count, v1)
+	}
+	// ?scope=legacy 只给历史 id，且仍指回 canonical 名字（老配置照旧可用）。
+	var legacyBody struct {
+		Scope string         `json:"scope"`
+		Data  []catalogEntry `json:"data"`
+	}
+	if err := json.Unmarshal(get("/v1/models?scope=legacy"), &legacyBody); err != nil {
+		t.Fatalf("legacy scope not JSON")
+	}
+	if legacyBody.Scope != "legacy" || len(legacyBody.Data) != 1 ||
+		legacyBody.Data[0].ID != "alpha-legacy" || legacyBody.Data[0].CanonicalID != "Alpha" ||
+		legacyBody.Data[0].Group != "主力" {
+		t.Fatalf("legacy scope wrong: %+v", legacyBody)
+	}
+	// ?scope=all 是老行为（93 条的形态），排查与兼容检查用。
+	var allBody struct {
+		Scope string         `json:"scope"`
+		Data  []catalogEntry `json:"data"`
+	}
+	if err := json.Unmarshal(get("/v1/models?scope=all"), &allBody); err != nil {
+		t.Fatalf("all scope not JSON")
+	}
+	if allBody.Scope != "all" || len(allBody.Data) != 2 {
+		t.Fatalf("all scope wrong: %+v", allBody)
+	}
+	// 认不出的 scope 直接 400，不静默退回默认 —— 否则客户端拼错永远发现不了。
+	resp, err := http.Get(front.URL + "/v1/models?scope=nonsense")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != 400 {
+		t.Fatalf("unknown scope should be 400, got %d", resp.StatusCode)
 	}
 }
 

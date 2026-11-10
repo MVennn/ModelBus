@@ -218,3 +218,36 @@ func TestRankedChainOrdersProvenHopsByLatency(t *testing.T) {
 		t.Fatalf("应当 preview 先发车: %v", got)
 	}
 }
+
+// 观测有保鲜期：失败过的强跳过了 10 分钟要重新回到「没测过」那档被发车，
+// 成功观测超过 1 小时也要重测，否则一次 503 就能把 3.8 永久压到最后。
+func TestRankedChainRetriesStaleObservations(t *testing.T) {
+	chain := []alias.Hop{
+		{Channel: "GM", Upstream: "ais-gemini-3.8-flash"},
+		{Channel: "GM", Upstream: "ais-gemini-3.7-flash"},
+		{Channel: "GM", Upstream: "ais-gemini-3.6-flash"},
+	}
+	now := time.Now()
+	k38 := hopKeyForLog(chain[0])
+	k36 := hopKeyForLog(chain[2])
+	s := &Server{raceStat: map[string]hopStatSnap{
+		k38: {Verdict: "Service Unavailable ", At: "21:30:36", Seen: now.Add(-11 * time.Minute)},
+		k36: {FirstBlockMs: 2910, Verdict: "ok", At: "21:30:54", Seen: now.Add(-30 * time.Second)},
+	}}
+	// 3.6 有新鲜首块 → 第一；3.8 的失败已过期 → 回声明顺序，排在没测过的 3.7 前。
+	if got := s.rankedChain(chain); got[0] != 2 || got[1] != 0 || got[2] != 1 {
+		t.Fatalf("过期失败应当重新给机会: %v", got)
+	}
+	// 新鲜失败必须仍压在最后，否则刚撞完 503 又去撞一次。
+	s.raceStat[k38] = hopStatSnap{Verdict: "Service Unavailable ", Seen: now.Add(-time.Minute)}
+	if got := s.rankedChain(chain); got[0] != 2 || got[1] != 1 || got[2] != 0 {
+		t.Fatalf("新鲜失败仍应排最后: %v", got)
+	}
+	// 成功观测超过 1 小时也过期：不能用一小时前的速度决定现在的发车顺序。
+	// 3.8 一并设成过期失败，三跳都回到「没测过」，顺序必须等于声明顺序。
+	s.raceStat[k38] = hopStatSnap{Verdict: "Service Unavailable ", Seen: now.Add(-20 * time.Minute)}
+	s.raceStat[k36] = hopStatSnap{FirstBlockMs: 2910, Verdict: "ok", Seen: now.Add(-2 * time.Hour)}
+	if got := s.rankedChain(chain); got[0] != 0 || got[1] != 1 || got[2] != 2 {
+		t.Fatalf("过期成功观测应回到声明顺序: %v", got)
+	}
+}

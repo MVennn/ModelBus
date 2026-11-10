@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -73,6 +74,10 @@ type Server struct {
 	// serialMu/serialAt 给「本可对冲却退回串行」的提醒做去重（每链条签名 10 分钟一条）。
 	serialMu sync.Mutex
 	serialAt map[string]time.Time
+	// early 是提前交卷的观测计数（包装数 / 交卷数 / 窗口内回头数 / 心跳数 / 流内报错数）。
+	// 提前交卷本身是「对客户端撒谎：先说 200」，没有计数就没人能回答「它到底起了几次作用」
+	// —— 这是 2026-11-10 复盘里唯一一项「全量生效却零观测」的功能。
+	early *earlyStats
 }
 
 // hopCooldown 是死跳的默认冷却时长；与额度窗口同一量级的短周期，够跨过一轮使用。
@@ -247,15 +252,41 @@ func (s *Server) markChannelOff(channel string) time.Duration {
 	return d
 }
 
-// hopStatSnap 是一个竞速跳的最近观测值，只给 /health 看。
+// hopStatSnap 是一个竞速跳的最近观测值：给 /health 看，也决定发车顺序。
 type hopStatSnap struct {
 	FirstBlockMs int64  `json:"firstBlockMs"`
 	Verdict      string `json:"verdict"`
 	At           string `json:"at"`
+	// Seen 是这条观测的写入时刻，只在进程内用。观测过期后 rankedChain 会把
+	// 这一跳当「没测过」重新给机会，避免一次失败被永远记住。
+	Seen time.Time `json:"-"`
+}
+
+// 观测保鲜期。失败跳只记 10 分钟：上游 503 多是短时拥挤，过了这段时间要
+// 重新试一次强跳，否则 3.8 恢复后也会被一直跳过（实测 21:32-21:47 有 15
+// 分钟一次没碰过 3.8）。成功跳记 1 小时：排序靠它压首字时间，太频繁重测
+// 会把首字从 2 秒拖回十几秒。
+const (
+	raceFailTTL = 10 * time.Minute
+	raceOKTTL   = time.Hour
+)
+
+// stale 判断一条观测是否已经过了保鲜期。Seen 零值（测试里直接构造的
+// raceStat）按新鲜处理，保持原有断言的语义。
+func (h hopStatSnap) stale(now time.Time) bool {
+	if h.Seen.IsZero() {
+		return false
+	}
+	ttl := raceFailTTL
+	if h.Verdict == "ok" && h.FirstBlockMs > 0 {
+		ttl = raceOKTTL
+	}
+	return now.Sub(h.Seen) > ttl
 }
 
 // noteRaceHop 记一次竞速跳的首块观测。
 func (s *Server) noteRaceHop(tag string, d time.Duration, verdict string) {
+	now := time.Now()
 	s.raceMu.Lock()
 	if s.raceStat == nil {
 		s.raceStat = map[string]hopStatSnap{}
@@ -263,7 +294,8 @@ func (s *Server) noteRaceHop(tag string, d time.Duration, verdict string) {
 	s.raceStat[tag] = hopStatSnap{
 		FirstBlockMs: d.Milliseconds(),
 		Verdict:      verdict,
-		At:           time.Now().Format("15:04:05"),
+		At:           now.Format("15:04:05"),
+		Seen:         now,
 	}
 	s.raceMu.Unlock()
 }
@@ -300,7 +332,7 @@ func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervi
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
 		started: time.Now(), cool: map[string]time.Time{}, silence: map[string]time.Time{},
 		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{},
-		serialAt: map[string]time.Time{}}
+		serialAt: map[string]time.Time{}, early: newEarlyStats()}
 }
 
 // headerTimeout 解析「等上游响应头」的实际容忍上限，优先级：测试/显式字段 >
@@ -457,13 +489,13 @@ func (s *Server) retryBridgeOn429(r *http.Request, hop alias.Hop, cw *bridgeChun
 }
 
 // coolBridgeFailure 给桥接失败分级冷却：429 短暂摘掉，上游静默超时（504）摘得久一些。
-func (s *Server) coolBridgeFailure(hop alias.Hop, result bridge.Result) {
+func (s *Server) coolBridgeFailure(ctx context.Context, hop alias.Hop, result bridge.Result) {
 	switch result.Status {
 	case 429:
-		s.markCoolingFor(hop, rateLimitCooldown)
+		s.coolHop(ctx, hop, rateLimitCooldown, coolWhyRateLimit)
 	case 504:
 		s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
-		s.markCoolingFor(hop, timeoutCooldown)
+		s.coolHop(ctx, hop, timeoutCooldown, "静默超时")
 	}
 }
 
@@ -537,7 +569,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if path == "/models" {
-		s.models(w)
+		s.models(w, r)
 		return
 	}
 	if path == "/admin/reload" {
@@ -575,10 +607,17 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		if window := s.earlyCommitWindow(); window > 0 {
 			early = newEarlySSEWriter(w)
 			defer early.finish()
+			// 观测（计数 + 日志）从这里开始记：交卷了没有、交完上游有没有翻脸，
+			// 以前在 /health 和日志里都是空白，看不出它到底在干活还是空转。
+			early.attach(s.early, s.log, model)
 			early.start(window, s.earlyKeepalive())
 			w = early
 		}
 	}
+
+	// 链层首字节预算：判死权交回上游之后，单跳可以无限挂，只有这里知道用户等多久。
+	// 预算到点由 doForward 统一收口（504 + 不埋冷却、不再换跳）。
+	r = r.WithContext(withChainContext(r.Context(), s.chainBudget(), false))
 
 	s.aliases.Reload()
 	if target, ok := s.aliases.Resolve(model); ok {
@@ -838,6 +877,21 @@ func (c *cancelOnClose) Close() error {
 // 非流式请求保持原样 —— 有的上游要等整段生成完才发头，给它设上限会误杀长回答。
 func (s *Server) doForward(req *http.Request, body []byte, channel string) (*http.Response, error) {
 	wait := s.headerTimeout(channel)
+	// 链层「首字节预算」：整条链从收到请求到交出第一个字节的总上限，逐跳只取剩下多少。
+	// 为什么必须在这一层做：判死权交回上游之后（headerTimeoutSec = -1）单跳可以无限期
+	// 挂着，而 DeepSeek-4.1-Flash 那种四跳链串起来就是四段无上限等待。跳层只能回答
+	// 「每跳等多久」，加起来仍无上界；只有链层知道「用户愿意等多久」。
+	budgetBound := false
+	if dl, ok := chainDeadline(req.Context()); ok {
+		remaining := time.Until(dl)
+		if remaining <= 0 {
+			return nil, &silentErr{budget: true}
+		}
+		if wait <= 0 || remaining < wait {
+			wait = remaining
+			budgetBound = true
+		}
+	}
 	if wait <= 0 || !wantsStream(body) {
 		return s.client.Do(req)
 	}
@@ -871,7 +925,9 @@ func (s *Server) doForward(req *http.Request, body []byte, channel string) (*htt
 			_, _ = io.Copy(io.Discard, io.LimitReader(out.resp.Body, 1<<20))
 			_ = out.resp.Body.Close()
 		}
-		return nil, fmt.Errorf("%w within %v", errUpstreamSilent, wait)
+		// 带上**本次实际生效**的窗口：日志里若按 s.headerTimeout(channel) 现读配置，
+		// 热加载换过值之后会把「25 秒判死」写成「0s 内没给响应头」，排查直接跑偏。
+		return nil, &silentErr{wait: wait, budget: budgetBound}
 	}
 }
 
@@ -941,16 +997,35 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				// 带上 model：同一个 base 下不同模型表现能差一个量级（2026-11-10 19:45
 				// 实测 gemai 的 [福利]gemini-3.8-flash 直连 3 秒出首块，网关内却整段挂住），
 				// 只打 base 根本分不清是哪个模型被上游晾着。
+				// 窗口打的是**本次实际生效值**（可能被链预算压低），不是配置里的现读数。
+				var se *silentErr
+				applied := s.headerTimeout(channel)
+				budgetHit := false
+				if errors.As(err, &se) {
+					applied = se.wait
+					budgetHit = se.budget
+				}
 				s.log.Warnf("[router] %s（channel=%s model=%s）上游 %v 内没给响应头，判这一跳沉默并换跳",
-					base, channel, requestModel(body), s.headerTimeout(channel))
+					base, channel, requestModel(body), applied)
+				if budgetHit {
+					// 预算耗尽不是这一跳的错：给它静默冷却会让下一个请求又从死跳起手，
+					// 而且再换跳也只是把剩下的预算耗在一模一样的等待上。直接收工并说清楚。
+					s.log.Warnf("[router] 整条链的首字节预算用完（最后一跳实际等 %v），停止换跳并回 504", applied)
+					writeJSON(w, 504, errorBody("gateway gave up waiting for the first byte buffer ("+applied.String()+")", "gateway_timeout"))
+					return
+				}
 				// 沉默也要埋这一跳：catiecli 的 3.8/3.7 现在是「收下请求、几十秒不发头」，
 				// 只换跳不冷却的话，下一个请求又从死跳起手，每个请求都白付一个窗口。
 				// 冷却时长按渠道的 silenceCooldownSeconds（GM/HJ = 20s），到期自动回链。
-				if hop != nil {
+				// 单跳链例外：它没有「别人」可说，埋下去等于把这个模型关 20 秒 ——
+				// 2026-11-10 21:40 的 Gemini-3.8-Flash 就是这样从「偶尔慢」变成「连片 502」的。
+				if hop != nil && !singleHopChain(r.Context()) {
 					if d := s.silenceCooldownFor(hop.Channel); d > 0 {
 						s.markSilence(*hop, d)
 						s.log.Infof("[router] %s 沉默，静默冷却 %v 后再试这一跳", hopKeyForLog(*hop), d)
 					}
+				} else if hop != nil {
+					s.log.Infof("[router] %s 是单跳链，沉默不埋冷却（没有下一跳可说）", hopKeyForLog(*hop))
 				}
 				if retry != nil {
 					retry("上游沉默（无响应头）")
@@ -1022,7 +1097,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		guard := s.Config().ReasoningGuard
 		model := requestModel(body)
 		if resp.StatusCode < 300 && wantsStream(body) && isEventStreamGuard(resp) &&
-			s.guardWanted(model, guard, body) {
+			s.guardWanted(model, channel, guard, body) {
 			// 重抽预算已经花完，或者这个模型正处在「近期拿不到明文思考」的窗口期：都不再探测。
 			// 加密那一路探针要么等到整段思考结束才判得出（实测 11 s / 61 s），
 			// 要么白等满上限；而窗口期内重抽几乎必然落回同一路后端（12:01 连续 3/3、
@@ -1317,17 +1392,62 @@ func (s *Server) health(w http.ResponseWriter) {
 	// 全在 no-first-block。空表也要输出 {}，别让消费方拿 null 崩掉。
 	race := map[string]any{"hops": s.raceSnapshot(), "disabled": s.disabledChannels()}
 	payload["race"] = race
+	// early 段：提前交卷到底交了多少次、心跳发了多少、交完上游翻脸几次。
+	// 以前这一整块是黑盒（文件里 0 个日志调用、/health 0 个字段），
+	// 「它有没有在干活」只能靠用户体感猜。
+	payload["early"] = s.early.view(s.earlyCommitWindow(), s.earlyKeepalive())
+	// chain 段：链层首字节预算（0 = 不限）。判死权交回上游之后，
+	// 这是「一次请求最多等多久」的唯一出处。
+	payload["chain"] = map[string]any{"budget_s": int(s.chainBudget().Seconds())}
+	// guard 段：思考守卫的档位、带能力位的渠道、正在被跳过的模型。
+	payload["guard"] = s.guardView()
 	writeJSON(w, 200, payload)
 }
 
 // models 是 zgate 自己的聚合命名空间视图。GET /v1/models 与 GET /models 都落到
 // 这里（normalizePath 去掉 /v1），ZCode 看到的是 zgate-owned catalog，不再是
 // OpenCode-Go 自家 /models 的逐字节透传。
-func (s *Server) models(w http.ResponseWriter) {
+//
+// scope 三档（?scope=canonical|legacy|all，缺省 canonical）：
+//
+//	canonical  只给 zgate 真正承诺的命名空间（20 条），客户端与面板只需要这些；
+//	legacy     73 条历史 id，只为老配置/老会话留着，默认不往客户端倒；
+//	all        两拨都给（老行为，排查用）。
+//
+// 为什么默认收紧：93 条混在一张表里，同一个模型会出现三四次（显示名 + 各上游裸
+// id），面板上没法挑；而 legacy id 又不能删——历史会话里还写着它们。分开取用，
+// 谁需要谁自己点名要 legacy。
+func (s *Server) models(w http.ResponseWriter, r *http.Request) {
+	all := s.aliases.Catalog()
+	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
+	if scope == "" {
+		scope = "canonical"
+	}
+	data := all
+	switch scope {
+	case "all":
+	case "canonical", "legacy":
+		data = make([]alias.CatalogEntry, 0, len(all))
+		for _, e := range all {
+			isCanonical := e.CanonicalID == e.ID
+			if isCanonical == (scope == "canonical") {
+				data = append(data, e)
+			}
+		}
+	default:
+		writeJSON(w, 400, errorBody("unknown scope: "+scope+" (want canonical|legacy|all)", "invalid_request_error"))
+		return
+	}
+	// total 是**本次返回**的条数（客户端直接拿来数「我有几个模型」），
+	// 全量目录的条数单独放 catalog_total —— 两个数混成一个会让 20 条的响应
+	// 写着 93，看起来像分页没给完。
 	writeJSON(w, 200, map[string]any{
-		"object":   "list",
-		"owned_by": "zgate",
-		"data":     s.aliases.Catalog(),
+		"object":        "list",
+		"owned_by":      "zgate",
+		"scope":         scope,
+		"total":         len(data),
+		"catalog_total": len(all),
+		"data":          data,
 	})
 }
 
@@ -1344,13 +1464,18 @@ func (s *Server) routeChain(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	// 每跳按自己的协议派发（chat 直转 / messages·responses 过桥），
 	// 所以一条链里可以既有原生 chat 跳也有桥接跳。
-	// 配了 channelPolicy 的渠道（GM / HJ）走「首块对冲」：前几跳同时在路上，
-	// 谁先给出真实内容首块谁赢。没配的渠道一行都不改，仍然是原来的串行链。
-	if pol, ok := s.racePolicyFor(t, body); ok {
-		s.raceChain(w, r, body, model, t, path, search, pol)
+	// 链上有跳开了对冲（hedgeAfterMs）或首块看门狗（firstBlockMs）就走「首块对冲」：
+	// 前几跳同时在路上，谁先给出真实内容首块谁赢；每跳的看门狗与冷却按**自己**
+	// 渠道的策略取。没有任何跳要求竞速就走原来的串行链，一行都不改。
+	// 单跳链的标记：沉默时不埋静默冷却（没有「下一跳」可说），只此一处传下去。
+	if len(t.Chain) == 1 {
+		r = r.WithContext(withChainContext(r.Context(), 0, true))
+	}
+	if plan, ok := s.racePlanFor(t, body); ok {
+		s.raceChain(w, r, body, model, t, path, search, plan)
 		return
 	}
-	s.noteSerialFallback(t, body)
+	s.noteSerialChain(t, body)
 	s.attemptChain(w, r, body, model, t, path, search, 0, nil)
 }
 
@@ -1416,7 +1541,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		cw := newBridgeChunkWriter(w)
 		opts := bridge.Options{
 			Protocol:      proto,
-			Base:          hop.Base,
+			Base:          s.hopBase(hop),
 			Key:           key,
 			Body:          body,
 			UpstreamModel: hop.Upstream,
@@ -1439,21 +1564,21 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		result = s.retryBridgeOn429(r, hop, cw, opts, result)
 		if hopFatal(result.Status, result.Body) {
 			m, d := s.coolDurationFor(hop, result.Status, result.Body)
-			s.markCoolingFor(hop, d)
+			s.coolHop(r.Context(), hop, d, coolWhyOf(m))
 			s.logQuotaCooling(m, hop, result.Status, d)
 			if index+1 < len(t.Chain) {
 				s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
 				return
 			}
 		}
-		s.coolBridgeFailure(hop, result)
+		s.coolBridgeFailure(r.Context(), hop, result)
 		// 地区受限按失败处理：桥接路径不走 chainAccept，必须单独判，
 		// 否则 gpt-6-luna 这类 responses 模型会拿 403 直接返回给客户端。
 		// 冷却规则与 chat 路径一致：有同上游的出口孪生跳才冷却这一跳。
 		if regionBlocked(result.Status, result.Body) && proxyTwinAfter(t.Chain, index) {
 			s.log.Infof("[router] %s 地区受限（HTTP %d），冷却 %v；同上游机场孪生跳继续可用",
 				hopKeyForLog(hop), result.Status, regionCooldown)
-			s.markCoolingFor(hop, regionCooldown)
+			s.coolHop(r.Context(), hop, regionCooldown, "地区受限")
 		}
 		// 流里已经写过 chunk 就不能再换跳：客户端手里已经有半截 SSE，再写第二个响应体
 		// 只会得到一条脏流。bridge 目前保证「写过 chunk 之后一律返回 200」（bridge.go:279-282），
@@ -1492,7 +1617,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		if hopFatal(status, head) {
 			m, d := s.coolDurationFor(hop, status, head)
-			s.markCoolingFor(hop, d)
+			s.coolHop(r.Context(), hop, d, coolWhyOf(m))
 			s.logQuotaCooling(m, hop, status, d)
 			return false
 		}
@@ -1501,24 +1626,24 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			// 直连跳的 403 再走机场孪生跳，白付一次往返。
 			s.log.Infof("[router] %s 地区受限（HTTP %d），冷却 %v；同上游机场孪生跳继续可用",
 				hopKeyForLog(hop), status, regionCooldown)
-			s.markCoolingFor(hop, regionCooldown)
+			s.coolHop(r.Context(), hop, regionCooldown, "地区受限")
 		}
 		if status == 504 {
 			// 与桥接路径的 coolBridgeFailure 对齐：上游静默超时（连上不说话）
 			// 也冷却这一跳，否则链上后续每个请求都要先撞一遍这个僵死上游再回落。
 			s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
-			s.markCoolingFor(hop, timeoutCooldown)
+			s.coolHop(r.Context(), hop, timeoutCooldown, "静默超时")
 		}
 		if d := s.softCooldownFor(hop.Channel); d > 0 && status >= 500 {
 			// 5xx 不在 chainAccept 的冷却名单里：老行为是「每个请求都先撞一遍」。
 			// 对 503 high demand 这种分钟级窗口，冷却 d 让后续请求直接跳过它，
 			// 到期自动回链，不需要人工介入。
 			s.log.Infof("[router] %s 上游 HTTP %d（暂时不可用），冷却 %v 后自动回链", hopKeyForLog(hop), status, d)
-			s.markCoolingFor(hop, d)
+			s.coolHop(r.Context(), hop, d, "软冷却")
 		}
 		return chainAccept(status, head)
 	}
-	s.doForwardWith(w, r, rewritten, hop.Base, path, search, hop.Channel, headers, accept, func(reason string) {
+	s.doForwardWith(w, r, rewritten, s.hopBase(hop), path, search, hop.Channel, headers, accept, func(reason string) {
 		s.log.Infof("[router] %s -> %s, fallback %s", hop.Upstream, reason, nextHopName(t.Chain, index))
 		if at != nil {
 			s.noteRaceHop(at.hopTag, 0, reason)
@@ -1528,7 +1653,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
 	}, func() {
 		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKeyForLog(hop), rateLimitCooldown)
-		s.markCoolingFor(hop, rateLimitCooldown)
+		s.coolHop(r.Context(), hop, rateLimitCooldown, coolWhyRateLimit)
 	}, at, &hop)
 }
 
@@ -2068,20 +2193,68 @@ func (s *Server) guardStat(model string) *guardModelStat {
 // 出现「只回加密思考」都不需要改配置或重新排障 —— 探针只多读一个首块，代价极小。
 // 反过来，某个模型连续 giveUpAfter 轮重抽都没拿到明文时会被记进跳过表：
 // 它本来就是「天生只给加密」，再重抽只是让用户白等，跳过更划算；到期自动复探。
-func (s *Server) guardApplies(model string, g config.ReasoningGuard, body []byte) bool {
-	return s.guardWanted(model, g, body) && !s.guardInSkip(model)
+func (s *Server) guardApplies(model, channel string, g config.ReasoningGuard, body []byte) bool {
+	return s.guardWanted(model, channel, g, body) && !s.guardInSkip(model)
 }
 
 // guardWanted 只回答「这一跳的形态是否命中守卫条件」，不看跳过表。
 // 跳过期照样要注入可读提示，所以调用方需要把这两件事分开问。
-func (s *Server) guardWanted(model string, g config.ReasoningGuard, body []byte) bool {
+//
+// 三档 mode（channel 是这一跳所属渠道）：
+//
+//	auto      不看名字，也不看渠道：只要客户端声明要思考、又是 SSE 流就探一遍。
+//	          新出现的匿名代号模型（Conatus 之类）不需要改配置也能被覆盖。
+//	channels  按**渠道能力位**判：只有 Upstream.GuardReasoning=true 的渠道才探。
+//	          这是在「auto 太宽」与「models 名单要人工维护」之间取的中间档 ——
+//	          上游把思考分到加密后端是**渠道级**事实，写在渠道上最不容易失配；
+//	          名单非空时再叠一层收窄（谁写了名单就是想只盯这些名字）。
+//	models    老口径：只看 Models 白名单。
+func (s *Server) guardWanted(model, channel string, g config.ReasoningGuard, body []byte) bool {
 	if !g.Enabled || !reasoningExpectsThinking(body) {
 		return false
 	}
-	if strings.EqualFold(g.Mode, "models") && !reasoningGuardMatches(g.Models, body) {
-		return false
+	switch {
+	case strings.EqualFold(g.Mode, "models"):
+		return reasoningGuardMatches(g.Models, body)
+	case strings.EqualFold(g.Mode, "channels"):
+		if !s.Config().Upstreams[channel].GuardReasoning {
+			return false
+		}
+		if len(g.Models) > 0 {
+			return reasoningGuardMatches(g.Models, body)
+		}
+		return true
+	default:
+		return true
 	}
-	return true
+}
+
+// guardView 是 /health 的守卫段：开着没有、哪一档、哪些渠道带能力位、哪些模型正被跳过。
+// 以前这一段在 /health 里是零字段 —— 守卫到底在不在工作只能靠翻日志。
+func (s *Server) guardView() map[string]any {
+	g := s.Config().ReasoningGuard
+	channels := make([]string, 0, len(s.Config().Upstreams))
+	for name, u := range s.Config().Upstreams {
+		if u.GuardReasoning {
+			channels = append(channels, name)
+		}
+	}
+	sort.Strings(channels)
+	s.guardMu.Lock()
+	skipping := make([]string, 0, len(s.guardMem))
+	for name, st := range s.guardMem {
+		if !st.skipUntil.IsZero() && time.Now().Before(st.skipUntil) {
+			skipping = append(skipping, name)
+		}
+	}
+	s.guardMu.Unlock()
+	sort.Strings(skipping)
+	return map[string]any{
+		"enabled":  g.Enabled,
+		"mode":     g.Mode,
+		"channels": channels,
+		"skipping": skipping,
+	}
 }
 
 // guardInSkip 报告该模型是否正处在「只回加密思考」的跳过期。到期当场清空计数，

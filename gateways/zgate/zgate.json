@@ -11,7 +11,35 @@
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
   "upstreamHeaderTimeoutSec": 45,
+  "chainBudgetSec": 90,
   "channelPolicy": {
+    "WB": {
+      "softCooldownSeconds": 0,
+      "silenceCooldownSeconds": 0,
+      "rateLimitBackoffMs": 0,
+      "firstBlockMs": 0,
+      "hedgeAfterMs": 18000,
+      "maxParallel": 2,
+      "headerTimeoutSec": 0
+    },
+    "OC": {
+      "softCooldownSeconds": 60,
+      "silenceCooldownSeconds": 20,
+      "rateLimitBackoffMs": -1,
+      "firstBlockMs": 0,
+      "hedgeAfterMs": 0,
+      "maxParallel": 2,
+      "headerTimeoutSec": 0
+    },
+    "QD": {
+      "softCooldownSeconds": 0,
+      "silenceCooldownSeconds": 20,
+      "rateLimitBackoffMs": -1,
+      "firstBlockMs": 0,
+      "hedgeAfterMs": 0,
+      "maxParallel": 2,
+      "headerTimeoutSec": 0
+    },
     "GM": {
       "softCooldownSeconds": 60,
       "silenceCooldownSeconds": 0,
@@ -41,7 +69,7 @@
   },
   "log": { "dir": "%LOCALAPPDATA%/ZCodeGateway", "file": "zgate.log", "maxMB": 5 },
   "upstreams": {
-    "OC": { "base": "https://opencode.ai/zen/go/v1" },
+    "OC": { "base": "https://opencode.ai/zen/go/v1", "guardReasoning": true },
     "WB": { "base": "http://127.0.0.1:7863/v1", "child": "workbuddy" },
     "QD": { "base": "http://127.0.0.1:8790/v1", "child": "qoder" },
     "QW": { "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1", "keyEnv": "QWEN_API_KEY" },

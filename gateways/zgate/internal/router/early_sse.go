@@ -6,7 +6,10 @@ import (
 	"net/http"
 	"strconv"
 	"sync"
+	"sync/atomic"
 	"time"
+
+	"zgate/internal/logx"
 )
 
 // 这段代码补的是「等上游响应头」那段空窗。
@@ -36,6 +39,45 @@ const (
 	sseEarlyMaxTrapped = 4096
 )
 
+// earlyStats 是提前交卷的观测计数。为什么要它：提前交卷是当天唯一「全量生效、零观测」
+// 的功能 —— 它一旦出错就是「客户端拿到 200 却什么都没有」，而日志里连它有没有开过
+// 都查不出来。/health 的 early 段与下面几行日志就是这条链的读数。
+//
+// 五个计数的语义（互不重叠）：
+//
+//	wrapped       被包的流式 chat 请求数（分母）
+//	passed        窗口内上游就回头，按普通响应透出（说明窗口选得够大）
+//	committed     真正提前交卷的次数（上游在窗口内一个头都没给）
+//	keepalives    交卷后补的心跳行总数
+//	failed_after  交卷后上游失败、被迫改写成流内 error 的次数（交卷的代价）
+type earlyStats struct {
+	wrapped     atomic.Int64
+	passed      atomic.Int64
+	committed   atomic.Int64
+	keepalives  atomic.Int64
+	failedAfter atomic.Int64
+}
+
+func newEarlyStats() *earlyStats { return &earlyStats{} }
+
+// view 给 /health 用。window 传「当前实际生效」的窗口（0 = 已关闭），
+// 让读数自己说明配置状态，不必再去翻 zgate.json 对照。
+func (st *earlyStats) view(window time.Duration, keepalive time.Duration) map[string]any {
+	if st == nil {
+		return map[string]any{"enabled": false}
+	}
+	return map[string]any{
+		"enabled":           window > 0,
+		"window_ms":         window.Milliseconds(),
+		"keepalive_s":       int(keepalive.Seconds()),
+		"wrapped":           st.wrapped.Load(),
+		"passed_in_window":  st.passed.Load(),
+		"committed":         st.committed.Load(),
+		"keepalives":        st.keepalives.Load(),
+		"failed_after_wait": st.failedAfter.Load(),
+	}
+}
+
 // earlySSEWriter 是个会「提前交卷」的 ResponseWriter 中间层。
 // 约定：只有在 handler 正阻塞等上游响应头时才会从后台读 hdr，所以 hdr 不再单独加锁。
 type earlySSEWriter struct {
@@ -53,11 +95,30 @@ type earlySSEWriter struct {
 
 	stop chan struct{}
 	once sync.Once
+
+	// 观测：stats 为 nil 时（旧测试直接 newEarlySSEWriter）什么都不记。
+	stats *earlyStats
+	log   *logx.Logger
+	model string
+	// window / windowKeepalive 只用于日志文案：交卷那一刻打「等了多久、之后几秒一跳」。
+	window          time.Duration
+	windowKeepalive time.Duration
 }
 
 func newEarlySSEWriter(dst http.ResponseWriter) *earlySSEWriter {
 	f, _ := dst.(http.Flusher)
 	return &earlySSEWriter{dst: dst, flusher: f, hdr: http.Header{}, stop: make(chan struct{})}
+}
+
+// attach 接上观测与日志。刻意不做进构造函数：早先的测试按两参数构 writer，
+// 加参数会把它们一起改掉，而这些测试验的是「流语义」不是「观测」。
+func (e *earlySSEWriter) attach(stats *earlyStats, log *logx.Logger, model string) {
+	e.stats = stats
+	e.log = log
+	e.model = model
+	if stats != nil {
+		stats.wrapped.Add(1)
+	}
 }
 
 func (e *earlySSEWriter) Header() http.Header { return e.hdr }
@@ -123,6 +184,10 @@ func (e *earlySSEWriter) Flush() {
 }
 
 func (e *earlySSEWriter) commitLocked(code int, early bool) {
+	if !early && !e.committed && e.stats != nil {
+		// 走这里 = 窗口内上游就回头了，说明窗口没白等，也没交虚假的 200。
+		e.stats.passed.Add(1)
+	}
 	for k, vs := range e.hdr {
 		for _, v := range vs {
 			e.dst.Header().Add(k, v)
@@ -153,6 +218,8 @@ func (e *earlySSEWriter) start(commitAfter, keepalive time.Duration) {
 	if keepalive <= 0 {
 		keepalive = 10 * time.Second
 	}
+	e.window = commitAfter
+	e.windowKeepalive = keepalive
 	go func() {
 		timer := time.NewTimer(commitAfter)
 		defer timer.Stop()
@@ -189,6 +256,15 @@ func (e *earlySSEWriter) commitEarly() bool {
 	if e.flusher != nil {
 		e.flusher.Flush()
 	}
+	if e.stats != nil {
+		e.stats.committed.Add(1)
+	}
+	if e.log != nil {
+		// 这一行是「提前交卷真的发生了」的唯一现场证据：后面若客户端报
+		// 「200 但没内容」，按这条的时间戳去查上游那一跳的结局即可。
+		e.log.Infof("[early] 上游 %v 内没给响应头，先对客户端交卷 200（model=%s，心跳 %v）",
+			e.window, e.model, e.windowKeepalive)
+	}
 	return true
 }
 
@@ -202,7 +278,13 @@ func (e *earlySSEWriter) ping() bool {
 		return true
 	}
 	if _, err := io.WriteString(e.dst, sseKeepaliveLine); err != nil {
+		if e.log != nil {
+			e.log.Warnf("[early] 交卷后写心跳失败，客户端大概已经走了（model=%s）：%v", e.model, err)
+		}
 		return false
+	}
+	if e.stats != nil {
+		e.stats.keepalives.Add(1)
 	}
 	if e.flusher != nil {
 		e.flusher.Flush()
@@ -218,6 +300,14 @@ func (e *earlySSEWriter) finish() {
 	defer e.mu.Unlock()
 	if e.failed || !e.committed || !e.early || !e.swallow {
 		return
+	}
+	if e.stats != nil {
+		e.stats.failedAfter.Add(1)
+	}
+	if e.log != nil {
+		// 这是提前交卷的代价：客户端早已收到 200，只剩流内 error 能说话。
+		e.log.Warnf("[early] 交卷后上游才失败，收尾改写成流内 error（model=%s status=%d）：%s",
+			e.model, e.status, e.errorMessageLocked())
 	}
 	e.writeErrorLocked(e.errorMessageLocked(), e.status)
 }

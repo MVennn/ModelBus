@@ -148,6 +148,47 @@ type CatalogEntry struct {
 	ChainHops   int    `json:"chain_hops"`
 }
 
+// ChainView 是一条模型链的只读快照，供启动自检与 /health 用：名字 + 渠道序列。
+// Direct 表示这个模型没有链（老式单上游目标），Channels 只有一项。
+type ChainView struct {
+	Name     string
+	Channels []string
+	Direct   bool
+}
+
+// Chains 返回所有模型的渠道序列（按名字排序，确定性顺序便于日志与自检对读）。
+// 只读快照，不暴露内部 map；调用方拿不到 Hop 的其它字段，避免自检代码顺手改路由。
+func (m *Map) Chains() []ChainView {
+	m.Reload()
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.data == nil {
+		return nil
+	}
+	names := make([]string, 0, len(m.data.Models))
+	for name := range m.data.Models {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	out := make([]ChainView, 0, len(names))
+	for _, name := range names {
+		t := m.data.Models[name]
+		view := ChainView{Name: name}
+		if len(t.Chain) == 0 {
+			view.Direct = true
+			if t.Channel != "" {
+				view.Channels = []string{t.Channel}
+			}
+		} else {
+			for _, hop := range t.Chain {
+				view.Channels = append(view.Channels, hop.Channel)
+			}
+		}
+		out = append(out, view)
+	}
+	return out
+}
+
 // Catalog returns the unified namespace as a deterministic, deduplicated list:
 // display names first (sorted), then legacy ids that are not themselves display
 // names (sorted). Deterministic order keeps GET /v1/models and GET /models

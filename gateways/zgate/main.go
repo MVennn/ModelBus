@@ -148,6 +148,21 @@ func serve() error {
 	defer log.Close()
 
 	am := alias.New(cfg.AliasMap)
+	// 启动即校验「多跳专用」的渠道策略：配在只服务单跳模型的渠道上，等于配了一个
+	// 永远不会被读到的对冲 —— 2026-11-10 的现场就是一群人对着四个阈值数字改了一
+	// 整天，其中一部分根本不满足竞速条件。宁可开机就报出来，也不留一行启动日志等人翻。
+	var fatal []string
+	for _, note := range router.ValidatePolicies(cfg, am) {
+		if note.Fatal {
+			fatal = append(fatal, note.String())
+			continue
+		}
+		log.Warnf("[policy] %s", note.String())
+	}
+	if len(fatal) > 0 {
+		return fmt.Errorf("channelPolicy 配置有误，拒绝启动（改 %s 后重启）:\n  %s",
+			cfg.Path, strings.Join(fatal, "\n  "))
+	}
 	sup := supervisor.New(cfg.Children, log.Dir(), log)
 	client := &http.Client{
 		// 模板 Transport 按直连；哪一跳要走代理由 alias map 的 hop.proxy 决定，

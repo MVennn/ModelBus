@@ -300,64 +300,117 @@ func (s *Server) channelPolicy(channel string) config.ChannelPolicy {
 	return cfg.ChannelPolicy[channel]
 }
 
-// racePolicyFor 判断这条链要不要走对冲。要求：全链同属配置了 channelPolicy 的
-// 渠道、全是原生 chat 协议（桥接跳有自己的写端，不参与竞争）、客户端要流式、
-// 至少两跳、且策略里开了对冲或首块看门狗。
-func (s *Server) racePolicyFor(t alias.Target, body []byte) (config.ChannelPolicy, bool) {
+// racePlan 是一条链的**链层**竞速参数。
+//
+// 为什么只留这两个字段：对冲间隔回答「什么时候再发一跳」，并发上限回答「最多几路
+// 在路上」，这两件事只有链层才知道。其余参数（首块看门狗、静默/软冷却、429 就地
+// 退避）全部属于「这一跳自己」的脾气，改成逐跳取值（attemptCtl.policy 每跳各取
+// 自己渠道的策略）。
+//
+// 这修的是 2026-11-10 的静默失效：策略从链首取，于是 GM(18s 对冲)+HJ 的混链里
+// HJ 也吃 GM 的 18 秒；而链上只要有一跳没配 channelPolicy，整条链退回串行 ——
+// 对冲「配了但没生效」全靠一条 10 分钟去重的告警提示。
+type racePlan struct {
+	hedge       time.Duration
+	maxParallel int
+}
+
+// hopProtocol 解析一跳的实际协议（跳上没有就继承 target，再缺省 chat）。
+func hopProtocol(t alias.Target, hop alias.Hop) string {
+	if hop.Protocol != "" {
+		return hop.Protocol
+	}
+	if t.Protocol != "" {
+		return t.Protocol
+	}
+	return "chat"
+}
+
+// racePlanFor 判断这条链要不要走对冲，并算出链层参数。
+//
+// 条件：至少两跳、客户端要流式、每跳都是原生 chat（桥接跳有自己的写端，不参与
+// 竞争）、且链上**至少有一跳**开了对冲或首块看门狗。
+//
+// 不再要求「每跳都配了 channelPolicy」：那是策略挂在链首时的无奈之举。逐跳取值后，
+// 没配策略的跳只是没有看门狗（老行为），不该拖累别的跳竞速。
+func (s *Server) racePlanFor(t alias.Target, body []byte) (racePlan, bool) {
 	if len(t.Chain) < 2 || !wantsStream(body) {
-		return config.ChannelPolicy{}, false
+		return racePlan{}, false
 	}
 	cfg := s.Config()
 	if cfg == nil || len(cfg.ChannelPolicy) == 0 {
-		return config.ChannelPolicy{}, false
+		return racePlan{}, false
 	}
 	for _, hop := range t.Chain {
-		proto := hop.Protocol
-		if proto == "" {
-			proto = t.Protocol
-		}
-		if proto == "" {
-			proto = "chat"
-		}
-		if proto != "chat" {
-			return config.ChannelPolicy{}, false
-		}
-		if _, ok := cfg.ChannelPolicy[hop.Channel]; !ok {
-			return config.ChannelPolicy{}, false
+		if hopProtocol(t, hop) != "chat" {
+			return racePlan{}, false
 		}
 	}
-	pol := cfg.ChannelPolicy[t.Chain[0].Channel]
-	if pol.HedgeAfterMs <= 0 && pol.FirstBlockMs <= 0 {
-		return config.ChannelPolicy{}, false
+	plan := racePlan{}
+	firstBlock := time.Duration(0)
+	for _, hop := range t.Chain {
+		pol := s.channelPolicy(hop.Channel)
+		if pol.MaxParallel > plan.maxParallel {
+			plan.maxParallel = pol.MaxParallel
+		}
+		// 对冲间隔取各跳正值的**最小值**：谁最先愿意让位就按谁 —— 链路首字时间的
+		// 上界由最急的那一跳决定，取最大值等于把最急的跳也拖成最慢的。
+		if h := time.Duration(pol.HedgeAfterMs) * time.Millisecond; pol.HedgeAfterMs > 0 && (plan.hedge == 0 || h < plan.hedge) {
+			plan.hedge = h
+		}
+		if fb := time.Duration(pol.FirstBlockMs) * time.Millisecond; pol.FirstBlockMs > 0 && (firstBlock == 0 || fb < firstBlock) {
+			firstBlock = fb
+		}
 	}
-	return pol, true
+	if plan.hedge <= 0 {
+		// 只开了首块看门狗、没配对冲间隔：拿最短的首块窗口当发车间隔 ——
+		// 那一跳到点必被判死，早点把下一跳放上路比干等更划算。
+		plan.hedge = firstBlock
+	}
+	if plan.hedge <= 0 && firstBlock <= 0 {
+		return racePlan{}, false
+	}
+	if plan.hedge <= 0 {
+		plan.hedge = 1200 * time.Millisecond
+	}
+	if plan.maxParallel <= 0 {
+		plan.maxParallel = 2
+	}
+	return plan, true
 }
 
-// noteSerialFallback 在「链首渠道明明配了对冲，整条链却退回串行」时留一条现场线索。
-// 触发它只有两种可能：链上有渠道没写进 channelPolicy，或者客户端要的是非流式。
-// 为什么要记：racePolicyFor 是静默返回 false 的，2026-11-10 的故障就是——zgate.json
-// 已加了 HJ，但运行中的进程还是旧配置，链上 HJ 不在内存里的 channelPolicy 中，
-// 于是 Gemini-AIS 从「4 秒没首块就让位」悄悄退化成串行链，上游沉默时直接挂死，
-// 日志里只剩一行派发，看不出是「对冲没开」还是「上游没回」。
-// 同一链条签名 10 分钟只提醒一次，避免把日志刷满。
-func (s *Server) noteSerialFallback(t alias.Target, body []byte) {
-	if !wantsStream(body) {
+// noteSerialChain 在「多跳 + 流式 + 全链没有任何一跳要求对冲/首块看门狗」时留一行线索。
+//
+// 为什么还要这一行：串行本身是合法配置，但如果**明明配了对冲却没被读到**（改了
+// zgate.json 没重新加载、渠道名拼错、hot reload 失败），串行就是故障现场，而它
+// 在日志里长得和「本来就没配」一模一样。同一链条签名 10 分钟一条，够定位又不刷屏。
+//
+// 与老版本的区别：不再看「链首策略」，也不再因为「链上有跳没配策略」就警告 ——
+// 逐跳取值之后，缺配置只影响那一跳自己（没有看门狗，老行为）。
+func (s *Server) noteSerialChain(t alias.Target, body []byte) {
+	if len(t.Chain) < 2 || !wantsStream(body) {
 		return
 	}
-	pol := s.channelPolicy(t.Chain[0].Channel)
-	if pol.HedgeAfterMs <= 0 && pol.FirstBlockMs <= 0 {
+	cfg := s.Config()
+	if cfg == nil {
 		return
 	}
 	var missing []string
 	for _, hop := range t.Chain {
-		if _, ok := s.Config().ChannelPolicy[hop.Channel]; !ok {
+		pol, ok := cfg.ChannelPolicy[hop.Channel]
+		if !ok {
 			missing = append(missing, hop.Channel)
+			continue
+		}
+		if pol.HedgeAfterMs > 0 || pol.FirstBlockMs > 0 {
+			return // 这一跳要求竞速，走不到串行分支
 		}
 	}
-	if len(missing) == 0 {
-		return
+	tail := "全链都没有要求对冲的跳"
+	if len(missing) > 0 {
+		tail = "未配 channelPolicy 的跳：" + strings.Join(uniqueStrings(missing), ",")
 	}
-	key := t.Chain[0].Channel + "|" + strings.Join(uniqueStrings(missing), ",")
+	key := "serial|" + chainNames(t.Chain) + "|" + strings.Join(uniqueStrings(missing), ",")
 	s.serialMu.Lock()
 	if at, seen := s.serialAt[key]; seen && time.Since(at) < 10*time.Minute {
 		s.serialMu.Unlock()
@@ -365,9 +418,7 @@ func (s *Server) noteSerialFallback(t alias.Target, body []byte) {
 	}
 	s.serialAt[key] = time.Now()
 	s.serialMu.Unlock()
-	s.log.Warnf("[race] 链上有渠道不在 channelPolicy 里（%s），整条链退回串行、取消首块对冲：%s；"+
-		"改 zgate.json 后记得让进程重新加载配置",
-		strings.Join(uniqueStrings(missing), ","), chainNames(t.Chain))
+	s.log.Infof("[race] 这条链走串行：%s（%s）", chainNames(t.Chain), tail)
 }
 
 // uniqueStrings 保序去重，只用于上面的告警文案。
@@ -393,10 +444,12 @@ func uniqueStrings(in []string) []string {
 // 分类（同级保持声明顺序）：
 //
 //	A. 最近一轮真出过首块（verdict=ok）—— 按首块毫秒升序，谁快谁先；
-//	B. 没有任何观测 —— 信任声明顺序（3.8 优先的口径就体现在这里）；
+//	B. 没有任何观测，或观测已过保鲜期（见 hopStatSnap.stale）—— 信任声明顺序
+//	    （3.8 优先的口径就体现在这里）；过期是为了让恢复的上游能被重新试到；
 //	C. 最近一轮是失败（503 / 首块超时 / 其他退回原因）—— 排最后，只在对冲余量里试。
 func (s *Server) rankedChain(chain []alias.Hop) []int {
 	stats := s.raceSnapshot()
+	now := time.Now()
 	type entry struct {
 		idx   int
 		class int
@@ -406,7 +459,8 @@ func (s *Server) rankedChain(chain []alias.Hop) []int {
 	for i, hop := range chain {
 		snap, ok := stats[hopKeyForLog(hop)]
 		switch {
-		case !ok:
+		case !ok || snap.stale(now):
+			// 没测过，或者上次的结论已经过期：按声明顺序重新给一次机会。
 			entries = append(entries, entry{idx: i, class: 1})
 		case snap.Verdict == "ok" && snap.FirstBlockMs > 0:
 			entries = append(entries, entry{idx: i, class: 0, ms: snap.FirstBlockMs})
@@ -457,8 +511,8 @@ func (s *Server) firstLiveHop(chain []alias.Hop) int {
 
 // raceChain 是竞争模式的编排器：先发第一跳，此后「一出失败就补下一跳」，
 // 同时按 HedgerAfterMs 对冲；任何时候最多 MaxParallel 路在路上。
-func (s *Server) raceChain(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, path, search string, pol config.ChannelPolicy) {
-	maxParallel := pol.MaxParallel
+func (s *Server) raceChain(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, path, search string, plan racePlan) {
+	maxParallel := plan.maxParallel
 	if maxParallel <= 0 {
 		maxParallel = 2
 	}
@@ -499,6 +553,9 @@ func (s *Server) raceChain(w http.ResponseWriter, r *http.Request, body []byte, 
 		ctx, cancel := context.WithCancel(baseCtx)
 		gate.register(idx, cancel)
 		rw := newRaceWriter(w, gate, idx)
+		// 策略逐跳取：首块看门狗、静默/软冷却、429 就地退避都是「这一跳自己」的脾气。
+		// 取链首策略是 2026-11-10 的静默失效源（GM 的 18s 会被 HJ 一起继承）。
+		pol := s.channelPolicy(t.Chain[idx].Channel)
 		at := &attemptCtl{gate: gate, id: idx, policy: pol, hopTag: hopKeyForLog(t.Chain[idx]), hop: t.Chain[idx]}
 		rr := r.WithContext(WithProxy(ctx, t.Chain[idx].Proxy))
 		s.log.Infof("[race] 发出 %d/%d %s", idx+1, len(t.Chain), hopKeyForLog(t.Chain[idx]))
@@ -508,10 +565,7 @@ func (s *Server) raceChain(w http.ResponseWriter, r *http.Request, body []byte, 
 		}()
 	}
 
-	hedge := time.Duration(pol.HedgeAfterMs) * time.Millisecond
-	if hedge <= 0 {
-		hedge = time.Duration(pol.FirstBlockMs) * time.Millisecond
-	}
+	hedge := plan.hedge
 	if hedge <= 0 {
 		hedge = 1200 * time.Millisecond
 	}

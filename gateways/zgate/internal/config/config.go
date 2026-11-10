@@ -23,6 +23,12 @@ type Upstream struct {
 	Base   string `json:"base"`
 	Child  string `json:"child"`
 	KeyEnv string `json:"keyEnv"`
+	// GuardReasoning 是「这个渠道的后端可能只回加密思考」的能力位，也就是
+	// 思考守卫的能力表：守卫按渠道能力圈定，不再按模型名白名单圈。
+	// 为什么换：白名单要为一个渠道下的每个新模型各加一行（Iceman 加了两次），
+	// 而真正的成因在渠道后端（同一别名随机分流到加密后端）；能力位一次标定，
+	// 之后同渠道新增的模型（Beam / MiMo / 以后换代号的）自动被覆盖。
+	GuardReasoning bool `json:"guardReasoning"`
 }
 
 // Child is a local upstream process zgate supervises.
@@ -48,13 +54,16 @@ type Child struct {
 // client; when they look like an encrypted-only response it discards the
 // buffer and retries the same hop until a plaintext-thinking stream arrives.
 // Zero value = disabled, so existing configs are byte-for-byte unchanged.
-// Mode 决定守卫圈哪些模型：
-//   - "models"：只守 Models 白名单（老行为，配置里显式列模型名才生效）；
-//   - "auto"  ：凡是客户端声明要思考（reasoning_effort / thinking=enabled）的流式
+// Mode 决定守卫圈哪些请求：
+//   - "channels"：按**渠道能力位**圈（upstreams[<渠道>].guardReasoning），同渠道下
+//     所有模型一起覆盖，另外仍并上 Models 白名单（老条目继续生效）。这是默认推荐档：
+//     守卫的成因在渠道后端，能力表才跟着成因走。
+//   - "models"  ：只守 Models 白名单（老行为，配置里显式列模型名才生效）；
+//   - "auto"    ：凡是客户端声明要思考（reasoning_effort / thinking=enabled）的流式
 //     请求一律探针。新增同类模型不需要改配置——这正是「以后再有模型只回加密
 //     思考」时不用二次排障的关键。
 //
-// 缺省且 Models 非空时按 "models" 走，保持老配置逐字节等效。
+// 缺省：Models 非空按 "models"，否则 "auto"，保持老配置逐字节等效。
 type ReasoningGuard struct {
 	Enabled       bool     `json:"enabled"`
 	Mode          string   `json:"mode"`
@@ -157,11 +166,20 @@ type Config struct {
 	// 为什么要可配：2026-11-10 实测同一跳 catiecli ais-gemini-3.8-flash 要 60.2 秒才回
 	// 503，而哈基米福利跳 3 秒就能出字；一档 45 秒时 8 跳链轮转要 3-4 分钟，
 	// 降到 12 秒后 4 轮 ≈ 48 秒见分晓，且不用重新编译就能再调。
-	UpstreamHeaderTimeoutSec int                      `json:"upstreamHeaderTimeoutSec"`
-	ChannelPolicy            map[string]ChannelPolicy `json:"channelPolicy"`
-	Log                      Log                      `json:"log"`
-	Upstreams                map[string]Upstream      `json:"upstreams"`
-	Children                 map[string]Child         `json:"children"`
+	UpstreamHeaderTimeoutSec int `json:"upstreamHeaderTimeoutSec"`
+	// ChainBudgetSec：整条链的「首字节预算」——从收到请求到第一次把字节交给
+	// 客户端（响应头或流内第一块）为止的总上限，单位秒。0/缺省 = 90；负数 = 不限。
+	//
+	// 为什么需要它：判死权交回上游之后（channelPolicy[..].headerTimeoutSec = -1），
+	// 单跳可以无限期挂住；而 DeepSeek-4.1-Flash 那种四跳链串起来就是四段无上限等待，
+	// 用户在 DSH 里看到的是「转圈几分钟然后断开重试」，同一个问题在上游被算两遍。
+	// 预算压在链这一层而不是跳这一层：跳层能给的只有「每跳等多久」，加起来仍然
+	// 没有上界；只有链层才知道用户愿意等多久。
+	ChainBudgetSec int                      `json:"chainBudgetSec"`
+	ChannelPolicy  map[string]ChannelPolicy `json:"channelPolicy"`
+	Log            Log                      `json:"log"`
+	Upstreams      map[string]Upstream      `json:"upstreams"`
+	Children       map[string]Child         `json:"children"`
 
 	Path string `json:"-"`
 	Dir  string `json:"-"`
@@ -274,8 +292,15 @@ func (c *Config) applyDefaults() {
 	if c.StreamIdleHeartbeatSeconds == 0 {
 		c.StreamIdleHeartbeatSeconds = 15
 	}
+	// EarlyCommitMs 只在「没写」时取缺省；负数保留原值 = 显式关闭（写 0 会被
+	// 归一成 8000，所以「关掉」只能用负数表达，这条语义在 config_test 里钉住）。
 	if c.EarlyCommitMs == 0 {
 		c.EarlyCommitMs = 8000
+	}
+	if c.ChainBudgetSec == 0 {
+		// 90 秒 = 「已经等了一分半还没见到第一个字节」的经验分界。比它更长的等待
+		// 用户早就走了，DSH 也会自己判死不重试，本地再撑下去只是让上游重跑一遍。
+		c.ChainBudgetSec = 90
 	}
 	if c.EarlyKeepaliveSec == 0 {
 		c.EarlyKeepaliveSec = 10
