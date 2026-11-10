@@ -2938,4 +2938,80 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 
 - 线上 7871 仍是旧二进制，换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`（会话内不重启长驻网关）。
 
+---
+
+# 2026-11-10 第十七轮：Gemini-AIS 七跳降级链 + 首块对冲（首字提速）
+
+## 任务目标
+
+用户要的是一件事：**Gemini 3.8 flash 改名「Gemini AIS」，并且首字要最快**。
+catiecli 中转的特性决定了它不能按普通渠道接：链首两个型号常态 503（且 4-14 s 才吐错），
+3.6/3.5 常态「200 但十几秒不说正文」，唯一稳定出字的是 3.5-flash-lite 与 3-flash-preview。
+串行降级等于把用户的首字压到十几秒，所以既要**七跳降级**，又要在网关侧做**首块对冲**。
+
+## 改动
+
+- `tools/model_alias.py`：`ABBR` 七个 `ais-gemini-*` 统一映射显示名 `Gemini-AIS`
+  （`GM_PRICES` 各 0.11、`HOP_PRIORITY` 固定 3.8→3.7→3.6→3.5→3.5-lite→3.1-lite→3-preview、
+  `MAIN_ORDER`、`NAME_RENAMES` 把旧名 `Gemini-3.8-Flash` 记成 legacy）。
+  不加 `HOP_PRIORITY` 会按 upstream 字符串排序，3.5 反而排最前；不加 `NAME_RENAMES`
+  老会话里选中的 `Gemini-3.8-Flash` 会解析不到（legacy 自指条目被当死链丢弃）。
+- `gateways/zgate/internal/config/config.go`：新增 `ChannelPolicy`
+  （`softCooldownSeconds` / `silenceCooldownSeconds` / `rateLimitBackoffMs` /
+  `firstBlockMs` / `hedgeAfterMs` / `maxParallel` / `authFailCooldownHours`），
+  全部零值 = 关 = 老行为；只有显式配置的渠道受影响。
+- `gateways/zgate/internal/router/race.go`（新）：`raceGate` 抢写端 + 取消输家、
+  `raceWriter` 私有 header/吞掉输家写入、`hasContentDelta`（只认真内容 delta，
+  role 帧/空 delta/`[DONE]` 都不算）、`peekFirstContent`（带超时的首块探测，
+  消费的字节用 `MultiReader` 拼回）、`raceChain` 编排器（首跳 + 失败补跳 + 定时对冲 +
+  `maxParallel` 上限 + 渠道级故障立即取消）。
+- `gateways/zgate/internal/router/router.go`：`attemptCtl` 贯穿整条调用链
+  （`attemptChain`/`doForwardWith` 各加一个尾参，非竞速路径传 nil 行为不变）；
+  首块闸门（2xx SSE 在 `firstBlockMs` 内没有真内容就判这一跳失败并让位）；
+  两张冷却表（`cool` 真冷却 / `silence` 静默 20 s，只有后者可被全链兜底清掉）；
+  403 分两种（key 失效停 24 h、池空停 90 s 且回上游原话）；`/health` 新增 `race`
+  段（每跳首块毫秒 + verdict + 被禁用渠道）。
+- `gateways/zgate/zgate.json`：`channelPolicy.GM` = soft 90 / silence 20 /
+  rateLimitBackoffMs -1 / firstBlock 4000 / hedge 500 / maxParallel 2 / authFail 24。
+- `race.go` 追加两条提速/止血规则：
+  - **渠道级故障立即收工**：任意一跳判定「整渠道停了」→ `cancelAll` 取消在飞跳并回真
+    状态码；禁用窗口内请求直接 503 `channel_paused`（池空时上游自己就要 30 s 才回 403，
+    不取消就白等一整轮 —— 实测 31.47 s → 1.31 s → 二次 0.0015 s）。
+  - **发车顺序按证据排**（`rankedChain`）：出过首块的跳按毫秒升序先发，无观测的按声明
+    顺序（3.8 优先只在这里成立），有失败记录的排最后。
+- `gateways/zgate/internal/router/race_test.go`（新）：首块判定 7 例、抢闸门取消输家、
+  只有赢家能写、错误码不抢写端、静默流首块超时、静默冷却可清而真冷却不可清。
+
+## 验收
+
+- `gofmt -l` 空、`go vet` exit 0、`go test ./internal/router ./internal/config` 全绿。
+- `python tools/model_alias.py`：七跳链落盘正确（`models["Gemini-AIS"].chain` 七条，
+  `legacy["Gemini-3.8-Flash"]="Gemini-AIS"`），`--apply` 后 provider_config 与
+  model-alias-map 同步，DSH 侧「3 个 provider / 19 个模型」。
+- 换版多次均走 `tools/zgate-lifecycle/deploy-zgate.ps1`（含备份 → 构建候选 → 停旧实例 →
+  替换 → 计划任务拉起 → `/health` 200 → 恢复看门狗），`/health` 已带 `race` 段。
+- 池空场景实测：上游 403「没有可用的 Gemini API Key」被识别为渠道级故障，
+  渠道暂停 90 s，客户端拿到 **403 + 上游原话**；停用窗口内直接 503 `channel_paused`。
+- 首字实测（2026-11-10 15:0x，hedge 1500 / par 3 / firstBlock 8000）：12 轮
+  min 3.93 s / p50 4.44 s / p90 24.08 s / max 37.76 s，赢家恒为 3.5-flash-lite
+  （首块 2910 ms）。离群值是多个「200 空流」跳各等满看门狗后串起来 —— 已把
+  firstBlock 收紧到 4 s、静默跳进 silence 表跳过。
+
+### 待办
+
+- 上游 catiecli 的 Gemini key 池 2026-11-10 15:40 起为空（`/v1/models` 返 `data: []`，
+  任何模型 403），恢复后用 `.work/gemini-ais-accept.py` 复测当前参数（hedge 500 / par 2）
+  的首字分布，并把数字回填 docs/MODEL-PROVIDERS.md §4.11.4。
+- **额度纪律（本轮踩坑）**：这条上游**按调用次数计费，不是按 token** —— 一次请求
+  （哪怕 `max_tokens=16`、哪怕秒回 403）就是一个额度。本轮为验收连打了几十次真实调用
+  （早期 TTFB 探测 20+ 次、12 轮首字验收、池空排查若干次），可能直接把上游额度打光。
+  以后固定：① 链路行为（降级/对冲/冷却/首块闸门）**一律用夹具 7999 验**，不碰真上游；
+  ② 真实调用只用于「现在到底能不能用」，一次一个；③ `.work/gemini-ais-accept.mjs`
+  默认轮数降到 3、硬上限 10；④ 池子是否恢复先问人，不自己反复 POST 探。
+- `race_test.go` 新增的两个发车顺序用例（`TestRankedChainPrefersProvenFastHop` /
+  `TestRankedChainOrdersProvenHopsByLatency`）待跑；夹具验收（7999 假上游 + 7899 隔离实例）
+  待跑 —— 两者都卡在 2026-11-10 15:5x 起的 bash 执行器故障
+  （`EXECUTOR_UNAVAILABLE: Niubash preparation failed: UNKNOWN: unknown error, link …awk.exe`），
+  与代码无关，执行器恢复后补。
+
 [[TASK_ALL_DONE]]

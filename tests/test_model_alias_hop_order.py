@@ -27,13 +27,14 @@ spec.loader.exec_module(ma)
 ALIAS_MAP = Path(os.path.expanduser("~/.zcode/v2/model-alias-map.json"))
 
 
-def _hop(channel: str, upstream: str, price: float, protocol: str = "chat", proxy: str | None = None) -> dict:
+def _hop(channel: str, upstream: str, price: float, protocol: str = "chat",
+         proxy: str | None = None, base_model: str = "deepseek-v4.1-flash") -> dict:
     h = {
         "raw": upstream,
         "original": upstream,
         "channel": channel,
         "upstream": upstream,
-        "base_model": "deepseek-v4.1-flash",
+        "base_model": base_model,
         "protocol": protocol,
         "price": price,
         "fallbacks": [],
@@ -101,6 +102,66 @@ class HopOrderTest(unittest.TestCase):
             if wb and wb[0] != 0:
                 offenders.append(f"{name}: WB 在第 {wb[0]} 位（链 {[h.get('channel') for h in chain]}）")
         self.assertEqual(offenders, [], "磁盘 alias map 里 WB 跳不在链首：" + "; ".join(offenders))
+
+
+# GM（catiecli 中转）7 个 Gemini Flash 档：同渠道、同价（GM_PRICES 全是 0.11），
+# 跳序只能由 HOP_PRIORITY 决定。顺序 = 新一代优先，尾跳是 3-preview。
+GEMINI_HOPS = [
+    "ais-gemini-3.8-flash",
+    "ais-gemini-3.7-flash",
+    "ais-gemini-3.6-flash",
+    "ais-gemini-3.5-flash",
+    "ais-gemini-3.5-flash-lite",
+    "ais-gemini-3.1-flash-lite",
+    "ais-gemini-3-flash-preview",
+]
+
+
+def _gemini_chain() -> list[dict]:
+    """乱序喂 7 个同价 GM 跳，链序必须由 HOP_PRIORITY 纠正回 3.8 → 3-preview。"""
+    items = [
+        _hop("GM", upstream, ma.GM_PRICES[upstream], base_model=upstream)
+        for upstream in reversed(GEMINI_HOPS)
+    ]
+    entries = ma.family_entries(items, {}, {}, "auto")
+    gem = [e for e in entries if e["abbr"] == "Gemini-AIS"]
+    if len(gem) != 1:
+        raise AssertionError(f"7 个 GM 跳应并成一条 Gemini-AIS，实际 {len(gem)} 条")
+    return gem[0]["chain"]
+
+
+class GeminiHopOrderTest(unittest.TestCase):
+    def test_gemini_chain_is_seven_hops_in_version_order(self) -> None:
+        chain = _gemini_chain()
+        self.assertEqual(len(chain), 7, "Gemini-AIS 必须是 7 跳")
+        self.assertEqual(
+            [h["upstream"] for h in chain],
+            GEMINI_HOPS,
+            "链序必须严格是 3.8 → 3.7 → 3.6 → 3.5 → 3.5-lite → 3.1-lite → 3-preview",
+        )
+        self.assertEqual({h["channel"] for h in chain}, {"GM"})
+        self.assertEqual({h["price"] for h in chain}, {0.11})
+
+    def test_hop_priority_covers_every_gemini_hop(self) -> None:
+        # 漏一个就回落到默认 99，会被 3.5 之类的字符串序顶到前面。
+        self.assertEqual(
+            {upstream for upstream in ma.HOP_PRIORITY if upstream.startswith("ais-gemini")},
+            set(GEMINI_HOPS),
+        )
+        self.assertEqual(
+            sorted(ma.HOP_PRIORITY, key=lambda u: ma.HOP_PRIORITY[u]),
+            GEMINI_HOPS,
+        )
+        self.assertGreater(
+            ma.HOP_PRIORITY_DEFAULT,
+            max(ma.HOP_PRIORITY.values()),
+            "默认值必须大于所有显式优先级，其它渠道的顺序才不会被改",
+        )
+
+    def test_non_gemini_hops_keep_default_priority(self) -> None:
+        chain = _chain(0.11)
+        order = [ma.HOP_PRIORITY.get(h["upstream"], ma.HOP_PRIORITY_DEFAULT) for h in chain]
+        self.assertEqual(set(order), {ma.HOP_PRIORITY_DEFAULT}, "非 GM 跳一律取默认优先级")
 
 
 if __name__ == "__main__":

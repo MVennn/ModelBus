@@ -87,6 +87,38 @@ type ReasoningGuard struct {
 	ProbeSeconds int `json:"probeSeconds"`
 }
 
+// ChannelPolicy 是「按渠道」的路由策略，只对显式配置过的渠道生效。
+// 零值 = 全关 = 老行为逐字节不变：没有配置 channelPolicy 的渠道完全走原来的
+// 串行链 + 30min/45s 冷却逻辑。存在的理由见 docs/MODEL-PROVIDERS.md §4.11：
+// catiecli 中转的 Gemini 链首两跳常态化 503、且要 4-14 秒才回话，
+// 串行等到死才回落会把「首字速度」压到十几秒。
+type ChannelPolicy struct {
+	// SoftCooldownSeconds：这一渠道的一跳被判「暂时没用」（HTTP 5xx / 首块超时）
+	// 后跳过多久。0 = 老行为（只有 504 冷却 5 分钟）。上游 503 high demand 是
+	// 分钟级窗口，90 秒足够跨过去，又不会让恢复的跳被长期埋掉。
+	SoftCooldownSeconds int `json:"softCooldownSeconds"`
+	// SilenceCooldownSeconds：2xx 但首块超时（上游 200 却十几秒不说话）之后
+	// 把这跳跳过多久。**故意比 SoftCooldownSeconds 短**：静默不等于死，3.6/3.5
+	// 常态 9-14 秒才出正文，判它「死了」会把自己的链饿空。0 = 首块超时不冷却。
+	SilenceCooldownSeconds int `json:"silenceCooldownSeconds"`
+	// RateLimitBackoffMs：收到 429 后就地退避再重试同一跳的时长。
+	// 0/缺省 = 老行为 700ms；负数 = 不就地重试，直接换下一跳（省一次白等）。
+	RateLimitBackoffMs int `json:"rateLimitBackoffMs"`
+	// FirstBlockMs：2xx 之后等「第一个真内容块」的上限，超时判定该跳失败并换跳。
+	// 只对 SSE 生效；0 = 关（老行为：来什么转什么，空流也会一直挂着）。
+	// 「真内容块」= SSE data 行里带非空 delta.content 或 delta.reasoning_content，
+	// 只有 role 的空帧不算 —— 上游常见「先回 200 + 一帧 role 然后十几秒不说话」。
+	FirstBlockMs int `json:"firstBlockMs"`
+	// HedgeAfterMs：发出首跳后多久还没见到真首块就并行发出下一跳（对冲）。
+	// 两路谁先拿到首块谁赢，另一路立刻取消。0 = 不对冲（老行为）。
+	HedgeAfterMs int `json:"hedgeAfterMs"`
+	// MaxParallel：同时最多几路在路上。0/缺省 = 2（最多只叠一层，避免计费翻倍）。
+	MaxParallel int `json:"maxParallel"`
+	// AuthFailCooldownHours：403 若是「key 无效 / 被封 / 无权限」类错误，整渠道禁用多久。
+	// 0 = 老行为（403 原样回给客户端）。这是「403 自动禁用」的落点。
+	AuthFailCooldownHours int `json:"authFailCooldownHours"`
+}
+
 // Config is the whole file.
 type Config struct {
 	Listen          string         `json:"listen"`
@@ -102,10 +134,11 @@ type Config struct {
 	// StreamIdleHeartbeatSeconds：SSE 转发空闲多久补一条注释心跳（": zgate keepalive"）。
 	// 上游思考阶段常静默 30-60 秒（实测 iceman 断 51.9 秒），中间层与客户端都会判空闲。
 	// 0/缺省 = 15 秒；负数 = 关闭。
-	StreamIdleHeartbeatSeconds int                 `json:"streamIdleHeartbeatSec"`
-	Log                        Log                 `json:"log"`
-	Upstreams                  map[string]Upstream `json:"upstreams"`
-	Children                   map[string]Child    `json:"children"`
+	StreamIdleHeartbeatSeconds int                      `json:"streamIdleHeartbeatSec"`
+	ChannelPolicy              map[string]ChannelPolicy `json:"channelPolicy"`
+	Log                        Log                      `json:"log"`
+	Upstreams                  map[string]Upstream      `json:"upstreams"`
+	Children                   map[string]Child         `json:"children"`
 
 	Path string `json:"-"`
 	Dir  string `json:"-"`

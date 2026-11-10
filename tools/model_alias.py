@@ -93,7 +93,15 @@ QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
 # 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
 GM_BASE = "https://catiecli.sukaka.top/v1"
 GM_PRICES = {
+    # 上游没有公开价目表，7 个跳一律沿用同一个估算值（0.11 = DeepSeek 标准档）。
+    # 同价是刻意的：跳序不靠价格区分，靠 HOP_PRIORITY 显式压制（见该常量注释）。
     "ais-gemini-3.8-flash": 0.11,
+    "ais-gemini-3.7-flash": 0.11,
+    "ais-gemini-3.6-flash": 0.11,
+    "ais-gemini-3.5-flash": 0.11,
+    "ais-gemini-3.5-flash-lite": 0.11,
+    "ais-gemini-3.1-flash-lite": 0.11,
+    "ais-gemini-3-flash-preview": 0.11,
 }
 # 千问渠道是**预付额度**：先用掉「每模型 1M tokens」的试用池（2026-12-15 到期），
 # 之后走 ¥300 学生额度（一年有效，到期作废，用不完也不退）。
@@ -123,9 +131,20 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 谷歌 Gemini 3.8 Flash（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
-    # 单跳直连（无本地进程、无孪生跳），排在三跳 DeepSeek 之后。
+    # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
+    # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链 7 跳**。
+    # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
+    # （_pick_rank 命中链上第一跳就返回，链首恒为 3.8，见 HOP_PRIORITY）。
+    # 另外 6 个必须一并列出：MAIN_ORDER 是「组内顺序 + 点名候选」的唯一权威，
+    # whitelist_items 会给名单里点名、但配置里还没出现的 id 补候选条目；
+    # 只写 3.8 的话，上游新返的 3.7/3.6/3.5/… 就只能等 provider_config 里先出现。
     "chat:gem:ais-gemini-3.8-flash",
+    "chat:gem:ais-gemini-3.7-flash",
+    "chat:gem:ais-gemini-3.6-flash",
+    "chat:gem:ais-gemini-3.5-flash",
+    "chat:gem:ais-gemini-3.5-flash-lite",
+    "chat:gem:ais-gemini-3.1-flash-lite",
+    "chat:gem:ais-gemini-3-flash-preview",
 ]
 MAIN_IDS = set(MAIN_ORDER)
 
@@ -203,6 +222,25 @@ WB_FIRST_CHANNELS = {"WB"}
 #   · GM=1：谷歌中转（catiecli）直连付费档，与 OC/QD 同档，同型号多跳时按价格排
 CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1}
 CHANNEL_RANK_DEFAULT = 4
+
+# 跳级优先级 —— 链内跳排序的**第二维**（紧跟 CHANNEL_RANK，在价格之前）。
+# 为什么需要：GM（catiecli 中转）7 个 Gemini Flash 档**同价**（GM_PRICES 全是 0.11），
+# 光靠 (价格, upstream 字符串) 排会把 "ais-gemini-3.5-flash" 排到
+# "ais-gemini-3.8-flash" 前面 —— 字符串里 "3.5" < "3.8"，用户拿到的新一代
+# 反而成了尾跳。版本新者必须先试，所以把「新一代优先」写成显式数字表。
+# 只对表里的 upstream 生效；其它渠道的跳不在表里 → 取 HOP_PRIORITY_DEFAULT(99)
+# → 同价时的相对顺序与加这张表之前完全一致（行为不变）。
+HOP_PRIORITY = {
+    "ais-gemini-3.8-flash": 0,
+    "ais-gemini-3.7-flash": 1,
+    "ais-gemini-3.6-flash": 2,
+    "ais-gemini-3.5-flash": 3,
+    "ais-gemini-3.5-flash-lite": 4,
+    "ais-gemini-3.1-flash-lite": 5,
+    "ais-gemini-3-flash-preview": 6,
+}
+HOP_PRIORITY_DEFAULT = 99
+
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
 # 试用池到期后边际成本从 0 变真钱，所以它比额度本身更早需要预警 —— 见 write_quota_windows。
@@ -315,7 +353,19 @@ ABBR = {
     "qiniu/conatus-free": "Conatus",
     # catiecli 中转的谷歌 id 形如 ais-gemini-3.8-flash：ais- 是中转站自己的前缀，
     # 不是谷歌型号的一部分，显示名里去掉。
-    "ais-gemini-3.8-flash": "Gemini-3.8-Flash",
+    # 上游 /v1/models 实返 7 个 Gemini Flash 档（3.8 / 3.7 / 3.6 / 3.5 / 3.5-lite /
+    # 3.1-lite / 3-preview），七个 id 是同一家的同一系列，全部收进同一个显示名
+    # **Gemini-AIS**：组里只留一条「Gemini-AIS」，7 个上游变成这条链的 7 跳
+    # （跳序由 HOP_PRIORITY 决定，见 family_entries 的排序键）。
+    # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
+    # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。
+    "ais-gemini-3.8-flash": "Gemini-AIS",
+    "ais-gemini-3.7-flash": "Gemini-AIS",
+    "ais-gemini-3.6-flash": "Gemini-AIS",
+    "ais-gemini-3.5-flash": "Gemini-AIS",
+    "ais-gemini-3.5-flash-lite": "Gemini-AIS",
+    "ais-gemini-3.1-flash-lite": "Gemini-AIS",
+    "ais-gemini-3-flash-preview": "Gemini-AIS",
     "moonshotai/kimi-k3-free": "Kimi-K3",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
@@ -379,6 +429,14 @@ ABBR = {
     "gpt-5.6-luna": "GPT-5.6-Luna",
     "muse-spark-1.3-contributor": "Muse-Spark1.3",
     "muse-spark-1.2-contributor": "Muse-Spark1.2",
+}
+
+# 显示名改名表：旧名 → 新名。--apply 落盘时 legacy 里会留着旧名（历史条目是
+# 自指形式 "Gemini-3.8-Flash" -> "Gemini-3.8-Flash"），改名后旧 target 不再是
+# 任何模型的新 id，resolved_legacy 会把整条记录当成死链丢掉 —— 老会话里选中的
+# 模型就解析不到了。main() 在 resolved_legacy 过滤前逐条补映射（缺失或自指才改写）。
+NAME_RENAMES = {
+    "Gemini-3.8-Flash": "Gemini-AIS",
 }
 
 # 「无公司/匿名代号」模型（用户口径：一律沉到每组最下面）。名单顺序无关，
@@ -1241,8 +1299,13 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             # QW 预付额度垫后、QN 限免兜底。原「WB 布尔特判 + TAIL_HOPS 布尔特判」
             # 两段并列逻辑已并入这张表，行为等价性见 CHANNEL_RANK 的注释。
             # 其后按价格、GB/CN 前缀、渠道、名称稳定排序。
+            # 第二键：跳级优先级（HOP_PRIORITY）。同渠道同价时要靠它压住顺序 ——
+            # GM 的 7 个 Gemini Flash 跳同价，纯按 (price, upstream) 排会把 3.5
+            # 排到 3.8 前面（字符串比较）。不在表里的 upstream 取默认 99，
+            # 因为 99 大于所有显式值，所以其它渠道同价时的相对顺序不变。
             group = sorted(group, key=lambda h: (
                 CHANNEL_RANK.get(h["channel"], CHANNEL_RANK_DEFAULT),
+                HOP_PRIORITY.get(h["upstream"], HOP_PRIORITY_DEFAULT),
                 h["price"],
                 0 if h["upstream"].startswith("global:") else 1 if h["upstream"].startswith("cn:") else 2,
                 # 同 rank 内的渠道先后保持历史顺序（QD 先于 OC）：CHANNEL_RANK 只
@@ -2095,6 +2158,23 @@ def main() -> int:
                 legacy[legacy_id] = row["new_id"]
 
     valid_ids = set(alias_models)
+    # 显示名改名兼容（NAME_RENAMES）：旧名的自指条目（"Gemini-3.8-Flash" ->
+    # "Gemini-3.8-Flash"）在改名后 target 已不是任何 live id，下面那条
+    # resolved_legacy 过滤会把整条丢掉，老会话选中的模型就解析不到。
+    # 先补一条旧名 → 新名的映射，让过滤能顺着链走到 live id。
+    # 用 setdefault：万一哪天旧名又变成某个 live 模型，真实条目优先。
+    # setdefault 在这里不够用：legacy 里旧名的存量形态是自指
+    # （"Gemini-3.8-Flash" -> "Gemini-3.8-Flash"），key 已存在时 setdefault
+    # 什么都不做，自指条目照样在下面的过滤里被当死链丢掉 —— 两轮 --apply
+    # 的对照实测过：只 setdefault 时旧名整条消失，老会话解析不到模型。
+    # 所以只覆盖两种「没有可用出口」的情况，已经指向 live id 的映射一律不动：
+    #   · 缺失（None）：改名后第一次落盘，直接补一条；
+    #   · 自指（old -> old）：改名残留，改写成新名让链能走到 live id。
+    for old_name, new_name in NAME_RENAMES.items():
+        current = legacy.get(old_name)
+        if current is None or current == old_name:
+            legacy[old_name] = new_name
+
     # Follow rename chains (W/0.00/X -> W/0.03/X -> ...) so an id that has been
     # renamed twice still resolves to a live model instead of being dropped.
     resolved_legacy: dict[str, str] = {}

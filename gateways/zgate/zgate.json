@@ -9,9 +9,20 @@
   "geminiEnvFile": "../../providers/gemini/.env.local",
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
+  "channelPolicy": {
+    "GM": {
+      "softCooldownSeconds": 90,
+      "silenceCooldownSeconds": 20,
+      "rateLimitBackoffMs": -1,
+      "firstBlockMs": 4000,
+      "hedgeAfterMs": 500,
+      "maxParallel": 2,
+      "authFailCooldownHours": 24
+    }
+  },
   "reasoningGuard": {
     "enabled": true,
-    "mode": "auto",
+    "mode": "models",
     "models": ["Iceman", "iceman-contributor-free"],
     "maxRetries": 1,
     "maxProbeBytes": 32768,

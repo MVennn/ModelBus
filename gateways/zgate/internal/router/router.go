@@ -42,6 +42,18 @@ type Server struct {
 	// 集合体的链路有几十跳，不记住这些死跳，每个请求都要先把它们撞一遍。
 	coolMu sync.Mutex
 	cool   map[string]time.Time
+	// silence 是「200 但迟迟不吐正文」的软冷却，和 cool 分开存：它只是「这次先
+	// 让别人说」，链上全在静默时可以被整体清掉重试；而 cool 里的 429/5xx/死跳
+	// 真冷却绝不能被清，否则会变成「清冷却 → 再撞 429 → 再清」的死循环。
+	silence map[string]time.Time
+	// offMu/off 是「整渠道禁用」表：403 若是 key 无效/被封类错误（authFatal），
+	// 这一渠道的所有跳一起停摆一段时间，不必等每个跳各自撞一遍 403。
+	offMu sync.Mutex
+	off   map[string]time.Time
+	// raceMu/raceStat 记住每个竞速跳最近一次的首块耗时，供 /health 展示。
+	// 只是观测，不参与决策；进程重启清空。
+	raceMu   sync.Mutex
+	raceStat map[string]hopStatSnap
 	// guardMu/guardMem 是 reasoningGuard 的按模型学习表：记住哪些模型能拿到明文
 	// 思考、哪些模型重抽多少次都只回加密。前者让守卫一直有效，后者在连续几轮
 	// 全程加密后自动停手一段时间（省掉每轮白等几十秒），到期再重新探路。
@@ -85,10 +97,166 @@ const regionCooldown = 30 * time.Minute
 // 等到额度续上或有人改配置再复活（进程重启会清空冷却表，等于手动复活开关）。
 const quotaCooldown = 24 * time.Hour
 
+// softCooldownFor 是「这跳暂时没用」的短冷却：政策没配就返回 0（老行为，
+// 只有 504 会按 timeoutCooldown 冷却）。配了才给 5xx 也上冷却。
+// 理由：catiecli 的 3.8/3.7 常态 503 high demand，但 503 不在 chainAccept 的
+// 冷却名单里，于是每个请求都要先撞一遍、白等 4-14 秒。冷却 90 秒既跨过了
+// 上游的需求窗口，又不会把真恢复的跳长期埋掉。
+func (s *Server) softCooldownFor(channel string) time.Duration {
+	secs := s.channelPolicy(channel).SoftCooldownSeconds
+	if secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// silenceCooldownFor 是「首块静默」的短冷却，0 = 不冷却。
+func (s *Server) silenceCooldownFor(channel string) time.Duration {
+	secs := s.channelPolicy(channel).SilenceCooldownSeconds
+	if secs <= 0 {
+		return 0
+	}
+	return time.Duration(secs) * time.Second
+}
+
+// markSilence 记一条「这次静默」的软冷却，只写 silence 表。
+func (s *Server) markSilence(hop alias.Hop, d time.Duration) {
+	s.coolMu.Lock()
+	s.silence[hopKey(hop)] = time.Now().Add(d)
+	s.coolMu.Unlock()
+}
+
+// clearSilence 抹掉一跳的静默冷却。只在「整条链都在静默」时用作最后兜底：
+// 软冷却只是省时间的优化，不能升级成一定失败。真冷却（429/5xx/死跳/额度）不动。
+func (s *Server) clearSilence(hop alias.Hop) bool {
+	s.coolMu.Lock()
+	defer s.coolMu.Unlock()
+	key := hopKey(hop)
+	if _, ok := s.silence[key]; !ok {
+		return false
+	}
+	delete(s.silence, key)
+	return true
+}
+
+// poolCooldown 是「中转侧 Gemini key 池空了」的暂停时长。catiecli 池空时对
+// 任何模型都回 403「没有可用的 Gemini API Key」，直到有人在它页面上传新 key。
+// 这是分钟级的人工修复窗口，按 90 秒暂停足够：既不把渠道埋掉，也不让每个请求
+// 都把整条链挨个撞一遍（每跳 1-3 秒）。
+const poolCooldown = 90 * time.Second
+
+// markChannelOffFor 按指定时长暂停整渠道；只对配了 channelPolicy 的渠道生效，
+// 未配置的渠道行为逐字节不变（返回 0）。
+func (s *Server) markChannelOffFor(channel string, d time.Duration) time.Duration {
+	if _, ok := s.Config().ChannelPolicy[channel]; !ok {
+		return 0
+	}
+	s.offMu.Lock()
+	s.off[channel] = time.Now().Add(d)
+	s.offMu.Unlock()
+	return d
+}
+
+// poolDown 判断上游是不是「中转的 key 池空了」：catiecli 池空时所有模型都回
+// 403「没有可用的 Gemini API Key，请先在「Gemini 密钥」页面上传」。这是渠道级
+// 故障，换跳换模型都没用，必须按渠道暂停，不能当普通 403 逐跳重试。
+func poolDown(status int, head []byte) bool {
+	if status != 401 && status != 403 && status != 429 && status != 503 {
+		return false
+	}
+	text := strings.ToLower(string(head))
+	for _, marker := range []string{
+		"没有可用的 gemini api key", "没有可用的 api key",
+		"no available gemini api key", "no available api key",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// channelOff 判断整渠道是否处在「403 自动禁用」窗口里。
+func (s *Server) channelOff(channel string) bool {
+	s.offMu.Lock()
+	defer s.offMu.Unlock()
+	until, ok := s.off[channel]
+	if !ok {
+		return false
+	}
+	if time.Now().After(until) {
+		delete(s.off, channel)
+		return false
+	}
+	return true
+}
+
+// markChannelOff 按策略禁用整渠道；返回实际禁用时长（0 = 策略没开，不禁用）。
+func (s *Server) markChannelOff(channel string) time.Duration {
+	hours := s.channelPolicy(channel).AuthFailCooldownHours
+	if hours <= 0 {
+		return 0
+	}
+	d := time.Duration(hours) * time.Hour
+	s.offMu.Lock()
+	s.off[channel] = time.Now().Add(d)
+	s.offMu.Unlock()
+	return d
+}
+
+// hopStatSnap 是一个竞速跳的最近观测值，只给 /health 看。
+type hopStatSnap struct {
+	FirstBlockMs int64  `json:"firstBlockMs"`
+	Verdict      string `json:"verdict"`
+	At           string `json:"at"`
+}
+
+// noteRaceHop 记一次竞速跳的首块观测。
+func (s *Server) noteRaceHop(tag string, d time.Duration, verdict string) {
+	s.raceMu.Lock()
+	if s.raceStat == nil {
+		s.raceStat = map[string]hopStatSnap{}
+	}
+	s.raceStat[tag] = hopStatSnap{
+		FirstBlockMs: d.Milliseconds(),
+		Verdict:      verdict,
+		At:           time.Now().Format("15:04:05"),
+	}
+	s.raceMu.Unlock()
+}
+
+// disabledChannels 返回「因 403/401 认证类错误被整渠道禁用」的渠道与到期时间，
+// 给 /health 的 race 段用。
+func (s *Server) disabledChannels() map[string]string {
+	s.offMu.Lock()
+	defer s.offMu.Unlock()
+	out := make(map[string]string, len(s.off))
+	now := time.Now()
+	for channel, until := range s.off {
+		if now.After(until) {
+			delete(s.off, channel)
+			continue
+		}
+		out[channel] = until.Format(time.RFC3339)
+	}
+	return out
+}
+
+func (s *Server) raceSnapshot() map[string]hopStatSnap {
+	s.raceMu.Lock()
+	defer s.raceMu.Unlock()
+	out := make(map[string]hopStatSnap, len(s.raceStat))
+	for k, v := range s.raceStat {
+		out[k] = v
+	}
+	return out
+}
+
 // New wires the server. client is shared with the bridge.
 func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervisor, client *http.Client, log *logx.Logger) *Server {
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
-		started: time.Now(), cool: map[string]time.Time{}}
+		started: time.Now(), cool: map[string]time.Time{}, silence: map[string]time.Time{},
+		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{}}
 }
 
 // hopKey 是冷却表的主键。出口也算进去：同一条链里「直连」和「经机场」是同一个
@@ -125,17 +293,28 @@ func hopKeyForLog(hop alias.Hop) string {
 }
 
 func (s *Server) cooling(hop alias.Hop) bool {
+	if s.channelOff(hop.Channel) {
+		// 整渠道被 403 禁用时，这一点对所有跳都成立；早返回省掉一次锁。
+		return true
+	}
 	s.coolMu.Lock()
 	defer s.coolMu.Unlock()
-	until, ok := s.cool[hopKey(hop)]
-	if !ok {
-		return false
+	now := time.Now()
+	if until, ok := s.cool[hopKey(hop)]; ok {
+		if now.After(until) {
+			delete(s.cool, hopKey(hop))
+		} else {
+			return true
+		}
 	}
-	if time.Now().After(until) {
-		delete(s.cool, hopKey(hop))
-		return false
+	if until, ok := s.silence[hopKey(hop)]; ok {
+		if now.After(until) {
+			delete(s.silence, hopKey(hop))
+		} else {
+			return true
+		}
 	}
-	return true
+	return false
 }
 
 // coolDurationFor 决定这一跳该冷却多久：额度烧光用 quotaCooldown（一天），
@@ -500,7 +679,7 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 }
 
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header) {
-	s.doForwardWith(w, r, body, base, path, search, headers, nil, nil, nil)
+	s.doForwardWith(w, r, body, base, path, search, headers, nil, nil, nil, nil)
 }
 
 func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header, chain []string, index int) {
@@ -521,11 +700,11 @@ func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		writeJSON(w, 502, errorBody("unified-router upstream error: "+reason, "proxy_error"))
 	}
-	s.doForwardWith(w, r, rewritten, base, path, search, headers, chainAccept, retry, nil)
+	s.doForwardWith(w, r, rewritten, base, path, search, headers, chainAccept, retry, nil, nil)
 }
 
 func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header,
-	accept func(status int, head []byte) bool, retry func(reason string), onThrottled func()) {
+	accept func(status int, head []byte) bool, retry func(reason string), onThrottled func(), at *attemptCtl) {
 
 	target := strings.TrimRight(base, "/") + path + search
 	// 客户端没声明思考档位时由网关补一档（config.ReasoningGuard.ForceEffort）。
@@ -546,6 +725,17 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	// guardTimeoutRounds：其中有多少次是「探针到点都没有可判定信号」（上游思考阶段整段静默）。
 	// 放行时要按原因给不同提示：加密分流说「只回加密」，静默超时说「探测超时」，别混为一谈。
 	guardTimeoutRounds := 0
+	// 竞速模式下渠道可以关掉「429 就地退避」：白等 700ms 只把首字往后推，
+	// 直接换下一跳更快。非竞速路径 inPlace429 恒为 true，行为与老版本一致。
+	inPlace429 := !(at != nil && at.policy.RateLimitBackoffMs < 0)
+	// 首块看门狗：配了 firstBlockMs 之后，2xx 的 SSE 若在该时长内没出现真实内容
+	// delta，就判这一跳失败并把机会让给下一跳。它专治「200 + 空流」——
+	// 实测 3.6 有一次 14.24 s 里只有心跳没有正文，串行链会把这种跳当成功干等。
+	firstBlock := time.Duration(0)
+	if at != nil && at.policy.FirstBlockMs > 0 {
+		firstBlock = time.Duration(at.policy.FirstBlockMs) * time.Millisecond
+	}
+	startedAt := time.Now()
 	for {
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
@@ -609,7 +799,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				_, _ = io.Copy(io.Discard, resp.Body)
 				resp.Body.Close()
 				if resp.StatusCode == 429 {
-					if retry429 == 0 {
+					if retry429 == 0 && inPlace429 {
 						retry429++
 						s.log.Infof("[router] 429 退避 %v 后重试同一跳", rateLimitBackoff)
 						select {
@@ -713,6 +903,34 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				streamSrc = io.MultiReader(bytes.NewReader(buffered), resp.Body)
 			}
 		}
+		if firstBlock > 0 && resp.StatusCode < 300 && isEventStreamGuard(resp) {
+			if at.gate != nil && at.gate.isClaimed() {
+				// 已经有别的跳出字并抢到写端了，这一路没必要再等首块：
+				// 早点收工，把上游额度让出来。
+				resp.Body.Close()
+				retry("另一路已出字")
+				return
+			}
+			buffered, ok := peekFirstContent(streamSrc, firstBlock, r.Context())
+			if !ok {
+				resp.Body.Close()
+				s.noteRaceHop(at.hopTag, 0, "no-first-block")
+				s.log.Infof("[router] %s 模型 %q %v 内没有真实内容首块，判这一跳失败并让位",
+					target, model, firstBlock)
+				// 200 但迟迟没有真实内容：给它一小段「静默冷却」，下次先说别人。
+				// 时长必须短（GM 配 20s）——3.6/3.5 常态 9-14s 才出正文，按 5xx 那种
+				// 90 秒去埋，会把整条链饿成「全在冷却 → 直接 502」。
+				if d := s.silenceCooldownFor(at.hop.Channel); d > 0 {
+					s.markSilence(at.hop, d)
+					s.log.Infof("[router] %s 首块超时，静默冷却 %v 后再试", at.hopTag, d)
+				}
+				retry("首块超时（没有内容 delta）")
+				return
+			}
+			// 读出来的字节必须拼回队首，否则首块被吃掉，客户端少一段正文。
+			streamSrc = io.MultiReader(bytes.NewReader(buffered), streamSrc)
+			s.noteRaceHop(at.hopTag, time.Since(startedAt), "ok")
+		}
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
 		if isEventStreamGuard(resp) {
@@ -724,6 +942,11 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			w.Header().Del("Content-Length")
 		}
 		w.WriteHeader(resp.StatusCode)
+		if at != nil && firstBlock <= 0 {
+			// 没开首块看门狗（例如非 SSE 响应）时，WriteHeader 就是「这一跳赢了」，
+			// 直接把首字节耗时记进 /health。
+			s.noteRaceHop(at.hopTag, time.Since(startedAt), "ok")
+		}
 		if len(head) > 0 {
 			if _, err := w.Write(head); err != nil {
 				return
@@ -893,6 +1116,11 @@ func (s *Server) health(w http.ResponseWriter) {
 	for _, channel := range keys.Channels {
 		payload[healthSegmentName(channel)] = upstreamView(channel)
 	}
+	// race 段：竞速跳最近一次的首块耗时与判定，以及整渠道禁用表。
+	// 只看不改 —— 排查「为什么这次又是 3.5 出的字」时，一眼能看出 3.8 最近是不是
+	// 全在 no-first-block。空表也要输出 {}，别让消费方拿 null 崩掉。
+	race := map[string]any{"hops": s.raceSnapshot(), "disabled": s.disabledChannels()}
+	payload["race"] = race
 	writeJSON(w, 200, payload)
 }
 
@@ -920,10 +1148,21 @@ func (s *Server) routeChain(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	// 每跳按自己的协议派发（chat 直转 / messages·responses 过桥），
 	// 所以一条链里可以既有原生 chat 跳也有桥接跳。
-	s.attemptChain(w, r, body, model, t, path, search, 0)
+	// 配了 channelPolicy 的渠道（当前只有 GM）走「首块对冲」：前几跳同时在路上，
+	// 谁先给出真实内容首块谁赢。没配的渠道一行都不改，仍然是原来的串行链。
+	if pol, ok := s.racePolicyFor(t, body); ok {
+		s.raceChain(w, r, body, model, t, path, search, pol)
+		return
+	}
+	s.attemptChain(w, r, body, model, t, path, search, 0, nil)
 }
 
-func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, path, search string, index int) {
+func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, path, search string, index int, at *attemptCtl) {
+	if at != nil && index >= len(t.Chain) {
+		// 竞争模式下「链走完了」由编排器统一回 502，这里直接收工，
+		// 否则每一路都会往闸门里塞一份 error body。
+		return
+	}
 	if index >= len(t.Chain) {
 		writeJSON(w, 502, errorBody("all upstreams failed: "+chainNames(t.Chain), "proxy_error"))
 		return
@@ -932,20 +1171,30 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	// 这一跳的出口交给 context（EgressRouter 按它挑 Transport），
 	// 往下传的 r 也带着它，回落到下一跳时会被下一跳覆盖。
 	r = r.WithContext(WithProxy(r.Context(), hop.Proxy))
+	// fail 是「这一路不行了」的统一出口：串行模式下它就是回落到下一跳；
+	// 竞争模式下 at != nil，此时绝不能自己往上冲 —— 该由 raceChain 决定补哪一跳，
+	// 否则每一路都会各自续一条链，同一个响应被写好几份。
+	fail := func(reason string) {
+		if at != nil {
+			s.log.Infof("[race] %s 本路放弃：%s", hopKeyForLog(hop), reason)
+			return
+		}
+		s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
+	}
 	if s.cooling(hop) {
 		s.log.Infof("[router] %s 冷却中，跳过", hopKeyForLog(hop))
-		s.attemptChain(w, r, body, model, t, path, search, index+1)
+		fail("冷却中")
 		return
 	}
 	key := s.keyset().For(hop.Channel)
 	if key == "" {
 		s.log.Warnf("通道 %s 缺少 key，跳过 %s", hop.Channel, hop.Upstream)
-		s.attemptChain(w, r, body, model, t, path, search, index+1)
+		fail("缺少 key")
 		return
 	}
 	if err := s.prepare(hop.Channel); err != nil {
 		s.log.Warnf("通道 %s 的子进程未就绪: %v", hop.Channel, err)
-		s.attemptChain(w, r, body, model, t, path, search, index+1)
+		fail("子进程未就绪")
 		return
 	}
 	proto := hop.Protocol
@@ -996,7 +1245,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			s.markCoolingFor(hop, d)
 			s.logQuotaCooling(m, hop, result.Status, d)
 			if index+1 < len(t.Chain) {
-				s.attemptChain(w, r, body, model, t, path, search, index+1)
+				s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
 				return
 			}
 		}
@@ -1018,7 +1267,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		if !cw.written && (result.Status >= 500 || result.Status == 429 || regionBlocked(result.Status, result.Body)) && index+1 < len(t.Chain) {
 			s.log.Infof("[router] %s -> HTTP %d, fallback %s", hop.Upstream, result.Status, nextHopName(t.Chain, index))
-			s.attemptChain(w, r, body, model, t, path, search, index+1)
+			s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
 			return
 		}
 		finishBridge(w, cw, result)
@@ -1032,6 +1281,18 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	headers := s.forwardHeaders(r, body, hop.Channel, key)
 	s.log.Infof("%s %s%s model=%s -> %s:%s (%d/%d)", r.Method, path, search, model, hop.Channel, hop.Upstream, index+1, len(t.Chain))
 	accept := func(status int, head []byte) bool {
+		if poolDown(status, head) {
+			// 池空是渠道级故障：暂停渠道，并把上游这句原文直接回给客户端
+			// （不然客户端只能看到 7 跳撞完后的 502，不知道到底为什么）。
+			if d := s.markChannelOffFor(hop.Channel, poolCooldown); d > 0 {
+				s.log.Warnf("[router] %s 上游 key 池为空（HTTP %d），渠道 %s 暂停 %v",
+					hopKeyForLog(hop), status, hop.Channel, d)
+			}
+			return true
+		}
+		if s.disableOnAuthFailure(hop, status, head) {
+			return false
+		}
 		if hopFatal(status, head) {
 			m, d := s.coolDurationFor(hop, status, head)
 			s.markCoolingFor(hop, d)
@@ -1051,15 +1312,66 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
 			s.markCoolingFor(hop, timeoutCooldown)
 		}
+		if d := s.softCooldownFor(hop.Channel); d > 0 && status >= 500 {
+			// 5xx 不在 chainAccept 的冷却名单里：老行为是「每个请求都先撞一遍」。
+			// 对 503 high demand 这种分钟级窗口，冷却 d 让后续请求直接跳过它，
+			// 到期自动回链，不需要人工介入。
+			s.log.Infof("[router] %s 上游 HTTP %d（暂时不可用），冷却 %v 后自动回链", hopKeyForLog(hop), status, d)
+			s.markCoolingFor(hop, d)
+		}
 		return chainAccept(status, head)
 	}
 	s.doForwardWith(w, r, rewritten, hop.Base, path, search, headers, accept, func(reason string) {
 		s.log.Infof("[router] %s -> %s, fallback %s", hop.Upstream, reason, nextHopName(t.Chain, index))
-		s.attemptChain(w, r, body, model, t, path, search, index+1)
+		if at != nil {
+			s.noteRaceHop(at.hopTag, 0, reason)
+			fail(reason)
+			return
+		}
+		s.attemptChain(w, r, body, model, t, path, search, index+1, nil)
 	}, func() {
 		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKeyForLog(hop), rateLimitCooldown)
 		s.markCoolingFor(hop, rateLimitCooldown)
-	})
+	}, at)
+}
+
+// authFatal 判断 401/403 是不是「这个 key 本身不能用了」：key 无效 / 被撤销 /
+// 过期 / 账号被封 / 认证失败。这类错误换跳没用 —— 同一渠道用的是同一个 key，
+// 所以要把整渠道禁用（用户口径的「403 自动禁用」）。
+// 与之相对的是「地区受限」（换出口能解）和「模型不可用」（换模型能解），
+// 那两类只动单跳，绝不能升级成整渠道禁用。
+// 触发条件里还要求渠道配了 channelPolicy.authFailCooldownHours > 0，
+// 所以没有显式开启的渠道行为完全不变。
+func authFatal(status int, head []byte) bool {
+	if status != 401 && status != 403 {
+		return false
+	}
+	text := strings.ToLower(string(head))
+	for _, marker := range []string{
+		"invalid api key", "api key not valid", "api_key_invalid", "incorrect api key",
+		"api key expired", "api key revoked", "key disabled", "key has been disabled",
+		"account suspended", "account has been suspended", "unauthenticated",
+		"invalid authentication", "authentication failed", "invalid bearer",
+	} {
+		if strings.Contains(text, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// disableOnAuthFailure 在「认证类错误 + 渠道配了禁用时长」时禁用整渠道，返回是否已禁用。
+func (s *Server) disableOnAuthFailure(hop alias.Hop, status int, head []byte) bool {
+	if !authFatal(status, head) {
+		return false
+	}
+	d := s.markChannelOff(hop.Channel)
+	if d == 0 {
+		return false
+	}
+	s.log.Warnf("[router] %s 认证类错误（HTTP %d），禁用渠道 %s %v；换 key 或重启进程后复活",
+		hopKeyForLog(hop), status, hop.Channel, d)
+	return true
 }
 
 // hopFatal 标记「这一跳现在就是不能用」的响应：模型 id 不存在、免费额度耗尽、欠费。

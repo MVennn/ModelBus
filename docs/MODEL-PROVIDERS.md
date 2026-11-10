@@ -500,10 +500,14 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 ## 4.11 谷歌 Gemini（catiecli 中转，本次实例五）
 
+> **一句话**：`Gemini-AIS` 显示名背后是 `ais-gemini-3.8-flash` 领头的一条 **7 跳降级链**
+> （3.8 → 3.7 → 3.6 → 3.5 → 3.5-lite → 3.1-lite → 3-flash-preview），
+> 靠 zgate 的「首块对冲」在几秒内出首字，失败逐级降档，不会卡在某一跳上死循环。
+
 网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
 2026-11-10 实测返回 7 个 id：`ais-gemini-3.5-flash-lite` / `ais-gemini-3.1-flash-lite` /
 `ais-gemini-3-flash-preview` / `ais-gemini-3.5-flash` / `ais-gemini-3.6-flash` /
-`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`。只收了 `ais-gemini-3.8-flash` 一条。
+`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`，**七个全部收录进同一条链**。
 
 | 项 | 值（2026-11-10） |
 |---|---|
@@ -512,12 +516,83 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`router.go` 的 `applyHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
 | 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
 | 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
-| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash`，单跳，排在 DeepSeek 三跳之后） |
-| 思考参数 | **未定论**。三次探测（含经 zgate 生产链路）全部上游 503，没有拿到任何 delta，`optionSpecs.reasoningLevel` 暂不配 |
+| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七跳同族合并成一条链） |
+| 思考参数 | **未定论**。3.8/3.7 常态 503，拿不到稳定样本；3.6 上 `{"thinking":{"type":"disabled"}}` 单次首字 2.27s（对照 `reasoning_effort:minimal` 12.67s），样本不足，暂不配 `optionSpecs.reasoningLevel` |
+| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定顺序，价格同为 0.11 |
 
 **与前面四例的关键差异**：① 价格无公开源，必须在代码里登记，缺价即整条消失；
 ② 上游对高需求模型直接 503，探测窗口要挑时段；③ 它是唯一走 `gem:` 显式前缀的渠道
-（`GM` 不在 `cn:` / `qoder:` 这些天然前缀里），命名规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md)。
+（`GM` 不在 `cn:` / `qoder:` 这些天然前缀里），命名规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md)；
+④ 它是**唯一开了 `channelPolicy` 的渠道** —— 竞速、静默冷却、403 暂停都只对它生效。
+
+### 4.11.1 上游实况（2026-11-10 直连实测）
+
+| 模型 | 实测形态 | 结论 |
+|---|---|---|
+| `ais-gemini-3.8-flash` | 503 `high demand`，5.0s / 5.0s / 13.8s 才回错 | 名义首选，实际常态不可用 |
+| `ais-gemini-3.7-flash` | 同上 503，4.95s / 13.8s | 备用，同样不可用 |
+| `ais-gemini-3.6-flash` | 200 但首字 9.63s / 24.38s，另有 14.24s 全程无 delta | 能用，但慢且会空流 |
+| `ais-gemini-3.5-flash` | 200 首字 10.04s，另有 31s 读超时 | 能用，最慢 |
+| `ais-gemini-3.5-flash-lite` | 200 首字 6.71s / 3.74s，经网关首块 2.9s | **真正的赢家** |
+| `ais-gemini-3.1-flash-lite` | 503，5.2s / 5.4s | 死跳 |
+| `ais-gemini-3-flash-preview` | 200 首字 1.50s / 1.50s | 最快，但排在链尾 |
+
+**这张表决定了整套参数**：链首两跳常态 503、3.6/3.5 常态「200 但十几秒不说正文」，
+唯一稳定出字的是 lite 和 preview。所以不能串行等 —— 串行等到死会把首字压到十几秒。
+
+### 4.11.2 降级链怎么来的
+
+- `tools/model_alias.py` 的 `ABBR` 把 7 个 `ais-gemini-*` 全部映射成显示名 **`Gemini-AIS`**，
+  `family_entries()` 因此把它们合并成**一条 7 跳链**，价格统一 `GM_PRICES=0.11`。
+- 链内顺序由 `HOP_PRIORITY` 固定（3.8=0、3.7=1、3.6=2、3.5=3、3.5-lite=4、
+  3.1-lite=5、3-preview=6），不加这张表就会退化成按 upstream 字符串排序（3.5 反而排最前）。
+- 改名同时要留 legacy：`NAME_RENAMES` 把 `Gemini-3.8-Flash` 记成 `Gemini-AIS` 的旧名，
+  否则老会话里选中的模型会解析不到（`legacy` 里自指条目会被当死链丢掉）。
+
+### 4.11.3 zgate 侧机制（`channelPolicy.GM`）
+
+| 参数 | 值 | 作用 |
+|---|---|---|
+| `firstBlockMs` | 4000 | 2xx 之后等「第一个真内容块」的上限，超时判这一跳失败换下一跳 |
+| `hedgeAfterMs` | 900 | 发出首跳后 900ms 还没真首块，就并行发下一跳（对冲） |
+| `maxParallel` | 2 | 同时在路上的上限 —— **不是拍脑袋，是上游限流的上限**，见下节 |
+| `silenceCooldownSeconds` | 20 | 「200 但不出正文」的软冷却，链上全静默时可被整体清掉 |
+| `softCooldownSeconds` | 90 | 5xx（503 high demand）的冷却，跨过上游的需求窗口 |
+| `rateLimitBackoffMs` | -1 | 关掉 429 就地 700ms 白等，直接换下一跳 |
+| `authFailCooldownHours` | 24 | key 无效/被封类 403 → 整渠道禁用一天 |
+
+四件事必须一起看：
+
+1. **首块闸门**：`role` 空帧、`[DONE]`、空 delta 都不算首块 —— 只认
+   `choices[].delta.content` / `delta.reasoning_content` 或 Gemini 原生
+   `candidates[].content.parts[].text`。不这么做，「先回 200 再十几秒不说话」的跳会被判成功。
+2. **对冲 + 抢写端**：每一路有自己的 `raceWriter`，谁先拿到真首块谁抢闸门，
+   其余各路的上游请求立刻取消（不留失败日志，省额度）。输家写入全部被吞掉。
+3. **两张冷却表**：`cool` 存真冷却（429 45s / 5xx 90s / 死跳 30min / 超时 5min / 额度 24h），
+   `silence` 只存静默 20s。**只有 silence 能被「全链静默」兜底清掉** ——
+   混成一张表会变成「清冷却 → 再撞 429 → 再清」的死循环。
+4. **403 分两种**：key 失效类（`invalid api key` 等英文标记）整渠道停 24h；
+   中转 key 池空（`没有可用的 Gemini API Key`）只停 90s，并把上游原文回给客户端。
+   链全灭时若上游回过 4xx，就照原状态回，不再一律糊成 502。
+5. **渠道级故障快速失败**：任意一跳确认「整渠道停了（池空/认证失败）」，
+   立即取消还在路上的其余跳并回状态码，不再等它们各自超时
+   （2026-11-10 实测：池空时两个在飞的跳各挂 31s，不取消就要白等一整轮）；
+   处在禁用窗口内的请求连上游都不发，直接 503 `channel_paused`。
+6. **发车顺序按实测证据排**（`rankedChain`，不是降级链的声明顺序）：上一轮真出过
+   首块的跳按毫秒升序先发，没有观测的按声明顺序（**3.8 优先的口径只在无证据时成立**），
+   有失败记录的排最后只吃对冲余量。理由：声明前四跳在这条上游上几乎必然失败，
+   按声明顺序发车等于每次先等它们；按证据发车，第二次请求就能直接从 lite/preview 起步。
+
+### 4.11.4 调参教训（用实测换来的）
+
+| 现象 | 根因 | 处置 |
+|---|---|---|
+| 12 轮 p50 4.44s、p90 24s、max 37.8s | 能出字的 lite 排在第 5 跳，hedge 1.5s + 8s 首块看门狗太松；离群值是多个「200 空流」跳各等满 8s 串起来 | 降 firstBlock 到 4s、hedge 到 900ms、静默跳进 silence 表跳过 |
+| 并发 6 + hedge 200ms → **20 轮全部 502** | 上游每 key 并发上限很低，6 路扇出直接把自己打成 429，全链一起 429/冷却 | `maxParallel` 降回 2（3 路实测尚可，6 路必炸） |
+| 静默按 90s 冷却 → 连片 502 | 整条链都进冷却，下次请求没有活跳 | 拆出独立 silence 表（20s），并允许全链静默时整体清掉兜底 |
+
+> **一句话**：这条链的首字速度不是靠「多发几路」堆出来的，而是靠
+> 「少撞死跳（冷却） + 首块判真假（闸门） + 只叠一层对冲（maxParallel≤2）」。
 
 ---
 
