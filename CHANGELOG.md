@@ -75,9 +75,9 @@
 - **反代下线**：`zgate.json` 删 `CP` upstream 与 `cliproxyapi` child（8317），现役为 5 个 upstream（OC / WB / QD / QW / QN）+ 2 个按需 child（workbuddy :7863 / qoder :8790）；`third-party/cliproxyapi/`（含 exe 与真值配置）整体移到 `.work/cliproxyapi-removed-20261110/` 可逆保留，未删真值、未重启长驻网关。
 - **主力收敛**：`tools/model_alias.py` 的 `MAIN_ORDER` 去掉 4 条 `chat:cp:gemini-*`，`MAIN_UPSTREAM_HINTS = ("deepseek",)`；`CHANNEL_RANK` / `CHANNEL_BASE` / `CHANNEL_PREFIX` 去 CP，`MODEL_META` 清空，`price_of` 删 CP 零价分支，`entry_group` 删 CP 白名单闸。
 - **运行时配置**：`~/.zcode/v2/provider_config.json` / `model-alias-map.json` / `~/.dsh/profiles/desktop/cordis.patch.yml` 删 4 个 Gemini 型号与 `cp:` legacy 键，各留 `.bak-20261110-gemini-removal` 备份；`arena-leaderboard.json` 属外部榜单快照，保留。
-- **Go 侧**：`main.go` / `config.go` / `keys.go` / `router.go` / `router_test.go` 去 CP 凭据、`/health` 第六段与测试段名，`go build` / `go test` / `go vet` / `gofmt` 全绿（分片 [evidence/agent-gemini-go-cleanup.md](evidence/agent-gemini-go-cleanup.md)）。
+- **Go 侧**：`main.go` / `config.go` / `keys.go` / `router.go` / `router_test.go` 去 CP 凭据、`/health` 第六段与测试段名，`go build` / `go test` / `go vet` / `gofmt` 全绿（本机分片 evidence/agent-gemini-go-cleanup.md，按仓库策略不入库）。
 - **门面与文档**：README / AGENTS / docs 11 篇统一改 5 upstream / 2 child，删 `docs/MODEL-PROVIDERS.md` §4.11 Gemini 反代整节与 `docs/ARCHITECTURE.md` 的 CP 架构图行；`tools/check-project.py` 加 5 条防回退 STALE 正则、把 `8317` 反向断言翻成残留检测。历史条目（CHANGELOG / PROGRESS / archive / BENCHMARKS）、tests 夹具与 `tools/check-secrets.py` 的 Gemini key 闸门按「历史与示例」口径保留。
-- **记忆**：5 篇 CP/Gemini 专述 Document 归档、2 篇现行句改写，`index.json` 44 条逐条 hash / sizeBytes 复核，`check-memory-hygiene.mjs` exit 0（分片 [evidence/agent-gemini-memory-cleanup.md](evidence/agent-gemini-memory-cleanup.md)）。
+- **记忆**：5 篇 CP/Gemini 专述 Document 归档、2 篇现行句改写，`index.json` 44 条逐条 hash / sizeBytes 复核，`check-memory-hygiene.mjs` exit 0（本机分片 evidence/agent-gemini-memory-cleanup.md，按仓库策略不入库）。
 - **验收**：`py_compile` / `check-project.py` / `check-docs.py` / `check-secrets.py` / Go 四件套 / 记忆门禁全 exit 0；未 `git add` / `commit` / `push`（用户未要求）。回退：三份 `.bak-20261110-gemini-removal` 与 `.work/cliproxyapi-removed-20261110/` 原位可逆。
 
 

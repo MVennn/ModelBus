@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import os
 import re
+import subprocess
 import sys
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -69,6 +70,22 @@ def collect(dirs):
     return sorted(set(mds))
 
 
+def tracked_paths():
+    """版本库里实际存在的文件集合；拿不到 git 时返回 None（本检查跳过）。
+
+    本地工作树常有未跟踪草稿，或被 .git/info/exclude 挡住的中间产物：链接到
+    它们本地能过、CI 检出后必红。CHANGELOG 链到 docs/MODEL-STREAM.md（未跟踪）
+    与 evidence/agent-gemini-*.md（被 .git/info/exclude 挡住）就是这么红的。
+    """
+    try:
+        out = subprocess.run(["git", "ls-files", "-z"], cwd=ROOT,
+                             stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, check=True)
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    names = out.stdout.decode("utf-8", "replace").split("\0")
+    return {os.path.normpath(os.path.join(ROOT, n)) for n in names if n}
+
+
 def rel_to_root(p: str) -> str:
     # 跨盘符（Windows，如仓在 F: 被检目录在 C:）时 relpath 抛 ValueError，
     # 整个脚本会带 traceback 崩掉 —— 用绝对路径顶上，至少能干净报错。
@@ -97,6 +114,7 @@ def main() -> int:
         print("没有找到 .md 文件")
         return 1
     anchor_map = {m: anchors_of(m) for m in mds}
+    tracked = tracked_paths()
     problems: list[str] = []
     linked: set[str] = set()
 
@@ -120,6 +138,10 @@ def main() -> int:
             if not os.path.exists(target):
                 problems.append(f"{rel}: 链接目标不存在 → {link}")
                 continue
+            # 存在 ≠ 会进仓库：未跟踪或被 exclude 的目标在 CI 检出后不存在。
+            if (tracked is not None and not os.path.isdir(target)
+                    and os.path.normpath(os.path.abspath(target)) not in tracked):
+                problems.append(f"{rel}: 链接目标不会进仓库（未跟踪或被 .git/info/exclude 挡住）→ {link}")
             linked.add(os.path.abspath(target))
             # 链接指向**目录**时，目录下的文档也算被引用（索引里常见 `archive/` 这种写法）
             if os.path.isdir(target):
