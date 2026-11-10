@@ -605,6 +605,214 @@ def provider_rules(cfg: dict) -> list[dict]:
     return rules.setdefault("providerRules", [])
 
 
+# ---- 推理档位继承（客户端可用档位，不是上游声明） ------------------------
+#
+# 档位（optionSpecs.reasoningLevel.values）是模型选择器下拉的全部来源。它跟
+# 上游声明的 efforts 是两件事：上游不声明不代表网关不支持 —— 实测 mimo-v2.6-pro
+# / iceman / gemini 系的 supported_efforts 为空，但发非法值会被网关按真实枚举打回，
+# 档位全可用。所以继承链只认「配置里上次写下的值」，上游声明只给新增模型当初值，
+# 绝不能反过来清空已有档位。
+#
+# 各渠道能力不同，档位格式不能跨渠道搬：
+#   WB / QD 走统一路由（zgate），认 reasoning_effort；
+#   OC 直连 opencode.ai/zen/go，只认 reasoning_effort；
+#   QN 直连七牛；
+#   其余（hjm: 哈基米、gem: AIS）档位是装饰项，不回写。
+EFFORT_CHANNELS = ("WB", "QD", "OC", "QN")
+
+
+def _effort_values(rule_config) -> list:
+    """规则里的档位列表；没有就是空表。"""
+    if not isinstance(rule_config, dict):
+        return []
+    spec = ((rule_config.get("optionSpecs") or {}).get("reasoningLevel") or {})
+    values = spec.get("values")
+    return [str(v) for v in values] if isinstance(values, list) else []
+
+
+def _blank_effort_global(cfg: dict) -> bool:
+    """整份配置一条档位都没有 = 上一轮被上游冲空过（读取侧自愈）。
+
+    正常情况下档位清单只增不减；全空只可能出现在上游把 optionSpecs 冲掉、本地
+    又没有可继承源的极端情形（2026-11-10 之前 map:"{}" + deep_merge 就是这样把
+    20 条全冲成空的）。这种状态下允许新增模型重新采用上游声明的初值。
+    """
+    return not any(_effort_values(entry.get("config")) for entry in model_rules(cfg))
+
+
+# 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
+# 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
+EMPTY_ALLOWED: set = set()
+
+def drifted_efforts(cfg: dict) -> list:
+    """上一轮有档位、这一轮算出来却没有的模型 —— 每日同步的回归守门。
+
+    `--check` 与 `dsh_sync.py --check` 都调它：只在内存里重算一遍继承链，不写盘。
+    有漂移就说明某次同步会静默抹掉档位（用户看到的是「模型选择器里的推理等级
+    突然没了」），必须当失败处理，而不是等下一轮手补。
+    """
+    try:
+        alias_file = alias_path(None)
+        existing = json.loads(alias_file.read_text(encoding="utf-8")) if alias_file.exists() else {}
+        work = copy.deepcopy(cfg)
+        items = inventory(work, existing.get("models") or {},
+                          dict(existing.get("legacy") or {}))
+        # 槽位固定 auto：守门要和每日同步（sync-models.ps1 不带 --slot，默认 auto）
+        # 用同一个口径，否则守门算的是另一条价格链，报出来的漂移是假的。
+        entries = family_entries(items, wb_prices(), qd_prices(), "auto")
+        entries.extend(pool_entries(load_pools(POOLS_FILE), "auto"))
+        # 快照必须在 pick_rule_config 之前做，而且要和它手上的 work 分属不同内存：
+        # pick_rule_config 会把继承结果写回给自己的那份 config，若 old_rules 指向
+        # 同一份对象，比出来永远「没变」，守门就成了哑的（2026-11-10 实测事故
+        # 配置一条都不报）。
+        landed: dict = {}
+        for rule in model_rules(work):
+            landed.setdefault(str(rule.get("modelId")), _effort_values(rule.get("config")))
+        old_rules: dict = {}
+        for rule in model_rules(work):
+            old_rules.setdefault(str(rule.get("modelId")), copy.deepcopy(rule.get("config") or {}))
+        picked = pick_rule_config(entries, work, old_rules)
+        out: list = []
+        for key, before in landed.items():
+            after = _effort_values(picked.get(key))
+            if before and not after:
+                out.append("%s（%s → 无档位）" % (key, "/".join(before)))
+            elif not before and not after and key not in EMPTY_ALLOWED:
+                # 已经是空的：同步写盘后还是空的，等于这一轮同步「什么也没补回来」。
+                # 上游不声明 efforts 的型号（mimo-v2.6-pro / iceman / gemini 系）本来就
+                # 该由本脚本兜住，长期空着就是没人兜 —— 报出来，别等用户发现下拉没了。
+                out.append("%s（无档位，且本轮同步补不回来）" % key)
+        return out
+    except (OSError, ValueError, KeyError, TypeError) as exc:  # 守门自己不能崩
+        print("WARN: 档位漂移检查未执行：%s" % (exc if str(exc) else type(exc).__name__),
+              file=sys.stderr)
+        return []
+
+
+def pick_rule_config(entries: list, cfg: dict, old_rules: dict) -> dict:
+    """为每个条目算出写配置时用的 config（含档位继承），不落盘。
+
+    独立成函数是因为两处必须共用同一套逻辑：真正写盘的那一轮，和 --check 的
+    漂移守门。两边各写一份，守门迟早和实际行为对不上。
+    """
+    out: dict = {}
+    blank_global = _blank_effort_global(cfg)
+    by_name = {str(entry.get("name") or ""): entry for entry in entries}
+    for name, entry in by_name.items():
+        keys = [entry.get("raw"), entry.get("original"), entry.get("upstream"),
+                entry.get("channel"), entry.get("name")]
+        original_config = {}
+        for key in keys:
+            if key and str(key) in old_rules:
+                original_config = old_rules[str(key)]
+                break
+        config = copy.deepcopy(original_config) if original_config else {}
+        _inherit_efforts(config, entry, old_rules, entries, blank_global)
+        out[name] = config
+    return out
+
+
+def _inherit_efforts(config: dict, entry: dict, old_rules: dict, entries: list,
+                     blank_global: bool) -> None:
+    """给条目 config 补齐档位：先用自己的，再用同 base_model 的兄弟型号。
+
+    只补不清。上游这次没给档位时：能从兄弟型号（同名上游、不同版本）继承到
+    就继承；全局不是「被冲空」状态就保留上一轮的写法；只有落在档位装饰渠
+    道的条目才去掉，免得 GUI 给出根本发不出去的下拉。
+    """
+    specs = config.get("optionSpecs")
+    if not isinstance(specs, dict):
+        specs = config["optionSpecs"] = {}
+    current = specs.get("reasoningLevel")
+    own = _effort_values({"optionSpecs": {"reasoningLevel": current}})
+    if own and (_effort_is_live(entry, current) or blank_global):
+        return  # 自己已有能生效的档位：一个字都不动
+    source = None
+    if not own:
+        source = _sibling_effort(entry, old_rules, entries)
+    if not source and own and not blank_global and not _effort_is_live(entry, current):
+        # 档位落在发不出这个字段的渠道上（哈基米福利档 / AIS）：留着只会让 GUI
+        # 给出无效下拉，但这种「清空」只允许在全局仍有档位时做 —— 否则一次配置
+        # 全员为空的事故就会被这段代码焊死成真正的空。
+        specs.pop("reasoningLevel", None)
+        source = _sibling_effort(entry, old_rules, entries)
+    if source:
+        specs["reasoningLevel"] = copy.deepcopy(source)
+
+
+def _effort_is_live(entry: dict, reasoning) -> bool:
+    """这条档位是否真能发出去（不是 GUI 上的装饰）。
+
+    判据只看有没有可求值的 map 表达式：
+      · 渠道在自己的能力表里（WB/QD/OC/QN）→ 网关或上游自己吃档位；
+      · 或者 map 里写了字段（Gemini 的 thinking_budget、reasoning_effort 之类）
+        → 客户端按表达式拼 body，跟渠道无关，实测同样生效
+        （AIS 的 thinking_budget 0/1024/4096/16384 → reasoning_tokens 0/0/34/164）。
+    只有「既不在能力表、又没有 map 表达式」的组合才是空头下拉，该去掉。
+    """
+    if entry.get("channel") in EFFORT_CHANNELS:
+        return True
+    if not isinstance(reasoning, dict):
+        return False
+    expr = str(reasoning.get("map") or "").strip()
+    return bool(expr) and expr != "{}"
+
+
+def _enforce_non_chat_effort(config: dict, entry: dict) -> None:
+    """非 chat 协议（messages / responses）的档位处置。
+
+    原先是无条件把 map 写成 "{}" —— 理由是非 chat 上游不吃 reasoning_effort 字段。
+    但 2026-11-10 实测：opencode-go 的 messages 桥（claude-haiku-5-5 / gpt-6-luna /
+    muse-spark-1.3 / beam-free）自己认档位，网关会把它翻成各家的 thinking 字段，
+    照旧写 "{}" 等于每天同步一次就把 6 档清成「关/开」。现在按渠道分流：
+      · 档位渠道（WB/QD/OC/QN）：保留档位，只在上游确实没有 reasoning_effort 写法
+        时把 map 留原样；带 reasoning_effort 的一律不动；
+      · 装饰渠道（hjm: / gem: 之类）：去掉 values，map 归 "{}"，免得 GUI 给假下拉。
+    """
+    specs = config.setdefault("optionSpecs", {})
+    reasoning = specs.get("reasoningLevel")
+    if not isinstance(reasoning, dict) or not reasoning.get("values"):
+        specs.setdefault("reasoningLevel", {})["map"] = "{}"
+        return
+    if _effort_is_live(entry, reasoning):
+        return  # 有可求值表达式：非 chat 协议照样把档位翻成上游字段
+    reasoning.pop("values", None)
+    reasoning["map"] = "{}"
+
+
+def _same_family(base: str, other: str) -> bool:
+    """上游型号是否同族：全等，或去掉版本尾段后相同（pro / flash 这类同代兄弟）。"""
+    if not base or not other:
+        return False
+    if base == other:
+        return True
+    family = lambda name: name.rsplit("-", 1)[0] if "-" in name else name
+    return family(base) == family(other)
+
+
+def _sibling_effort(entry: dict, old_rules: dict, entries: list):
+    """同一 base_model 的兄弟条目里已经落盘的档位。"""
+    base = str(entry.get("base_model") or "")
+    if not base:
+        return None
+    for other in entries:
+        # 同族判定按上游型号前缀（mimo-v2.6-pro / mimo-v2.6-flash -> mimo-v2.6）：
+        # 网关对同代型号开放同一套枚举，档位可以互借；不同代不互借，免得把
+        # 高版本才有的档位套到老模型上发出非法值。
+        if other is entry or not _same_family(base, str(other.get("base_model") or "")):
+            continue
+        if other.get("is_pool"):
+            continue
+        for key in (other.get("raw"), other.get("original"), other.get("upstream"),
+                    other.get("name")):
+            if not key:
+                continue
+            rule = old_rules.get(str(key))
+            if _effort_values(rule):
+                return (rule.get("optionSpecs") or {}).get("reasoningLevel")
+    return None
+
+
 def model_rules(cfg: dict) -> list[dict]:
     return cfg["config"].setdefault("modelConfigRules", {}).setdefault("providerModelRules", [])
 
@@ -2114,7 +2322,16 @@ def main() -> int:
     if args.check:
         drift = drift_report(grouped, existing_models)
         print_drift(drift)
-        return 1 if any(drift.values()) else 0
+        # 档位守门：这一轮算出来的继承链会抹掉已落盘档位就判失败。模型表本身
+        # 漂移时上面的 drift 已经报 1；这里独立判定，两种漂移原因分开说清。
+        lost_efforts = drifted_efforts(cfg)
+        if lost_efforts:
+            print("\n推理档位漂移（本轮同步会把已落盘的档位清空）：", file=sys.stderr)
+            for line in lost_efforts:
+                print("  - " + line, file=sys.stderr)
+            print("  修复：tools/model_alias.py --apply 前先看 _inherit_efforts 的"
+                  "继承链；不要靠手改 provider_config.json。", file=sys.stderr)
+        return 1 if (any(drift.values()) or lost_efforts) else 0
 
     if not args.apply:
         print("\ndry run；加 --apply 写入 provider_config.json 与 alias map")
@@ -2160,9 +2377,12 @@ def main() -> int:
         return out
 
     new_providers = []
-    new_providers = []
     new_model_rules = []
     alias_models = {}
+    # 档位继承走 pick_rule_config：写盘与 --check 的漂移守门必须共用同一套逻辑，
+    # 各写一份的话守门迟早和实际行为对不上（守门绿着、配置照样被清空）。
+    all_rows = [row for group in ("main", "free", "low") for row in grouped[group]]
+    inherited_configs = pick_rule_config(all_rows, cfg, old_rules)
     for group, provider_id in (("main", PROVIDER_MAIN), ("free", PROVIDER_FREE),
                                ("low", PROVIDER_LOW)):
         rows = grouped[group]
@@ -2179,13 +2399,9 @@ def main() -> int:
             },
         })
         for row in rows:
-            original_config = (
-                old_rules.get(str(row.get("raw")))
-                or old_rules.get(row["original"])
-                or old_rules.get(row["upstream"])
-                or {}
-            )
-            config = copy.deepcopy(original_config) if original_config else {}
+            # 继承源顺序与 family_entries 生成的名字对齐（raw 是显示名），再用显式
+            # 上游名兜底；档位补齐在 pick_rule_config / _inherit_efforts 里做。
+            config = copy.deepcopy(inherited_configs.get(str(row["new_id"])) or {})
             config["enabled"] = True
             meta = MODEL_META.get(str(row.get("upstream") or "").lower())
             if meta:
@@ -2195,9 +2411,7 @@ def main() -> int:
                 for key, value in copy.deepcopy(meta["optionSpecs"]).items():
                     specs.setdefault(key, value)
             if row["protocol"] != "chat":
-                option_specs = config.setdefault("optionSpecs", {})
-                reasoning = option_specs.setdefault("reasoningLevel", {})
-                reasoning["map"] = "{}"
+                _enforce_non_chat_effort(config, row)
             new_model_rules.append({
                 "modelId": row["new_id"],
                 "config": config,

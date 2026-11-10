@@ -69,6 +69,8 @@ DSH_PROFILE = os.environ.get("DSH_PROFILE", "desktop")
 API_KEY_ENV = "ZCODE_GATEWAY_KEY"
 DEFAULT_BASE = "http://127.0.0.1:7871/v1"
 DSH_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+# 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
+_USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 KNOWN_PROVIDER_IDS = {
     "opencode-go-chat": "zcode-main",
     "opencode-go-chat-free": "zcode-free",
@@ -191,6 +193,42 @@ def _effective_metadata(model_ids: list[str]) -> dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def _efforts_outside(values: list[Any]) -> list[str]:
+    """档位里 DSH 表达不了的部分。
+
+    DSH 的 reasoningEfforts 是 dict（键 = 发给客户端的档位名），重复键会在落盘时
+    互相覆盖，所以源头出现重复档位（disabled 与 off 都是「关」）时只保留一个。
+    """
+    clean = [str(v) for v in values if isinstance(v, str)]
+    return [v for v in dict.fromkeys(clean) if v not in DSH_LEVELS and v != "disabled"]
+
+
+def _efforts_lost(rules: dict[tuple[str, str], dict[str, Any]], routes: dict[str, Any]) -> list[str]:
+    """源头有档位、投影后却没有的模型 —— 每日同步的回归守门。
+
+    ZCode 配置是档位的唯一正本；DSH 侧只是投影。投影把一条非空档位写成空，用户
+    看到的是「模型选择器里的推理等级突然消失」，而且没有任何报错。所以这里把两边
+    对一遍，漂移就返回明细，由 --check 判失败、由 --apply 打 WARN。
+
+    只报「源头非空、投影为空」：反过来（源头退化但 DSH 还留着）由
+    ``_keep_efforts`` 兜着，属于正常保留，不算漂移。
+    """
+    projected: dict[str, list[Any]] = {}
+    for route in routes.values():
+        for model in route.get("models") or []:
+            if isinstance(model, dict):
+                projected[str(model.get("id"))] = model.get("reasoningEfforts") or []
+    lost: list[str] = []
+    for (provider_id, model_id), rule in rules.items():
+        source = ((rule.get("optionSpecs") or {}).get("reasoningLevel") or {})
+        values = [str(v) for v in (source.get("values") or []) if isinstance(v, str)]
+        if not values:
+            continue
+        if not projected.get(str(model_id)):
+            lost.append(f"{provider_id}/{model_id}（源头 {len(values)} 档 → 投影无档位）")
+    return lost
+
+
 def _model_rules(cfg: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
     try:
         rules = cfg["config"]["modelConfigRules"]["providerModelRules"]
@@ -252,9 +290,20 @@ def _reasoning(values: list[Any], map_expr: Any) -> dict[str, Any]:
             efforts[level] = level
         if not any(key != "off" for key in efforts):
             efforts["high"] = "high"
-        return {"reasoningEfforts": efforts, "compat": {"thinkingFormat": "deepseek"}}
+        out: dict[str, Any] = {"reasoningEfforts": efforts}
+        # thinkingFormat 只在源头真的用 reasoning_effort 协议时才声明。
+        # Gemini 系（thinking_budget / reasoningLevel）和「只有开关」的模型套上
+        # deepseek 格式会发出上游不认的字段，档位看着有、实际不生效。
+        if _USES_EFFORT_FIELD.search(str(map_expr or "")):
+            out["compat"] = {"thinkingFormat": "deepseek"}
+        return out
     efforts = {level: level for level in levels}
-    return {"reasoningEfforts": efforts} if efforts else {}
+    if not efforts:
+        return {}
+    out: dict[str, Any] = {"reasoningEfforts": efforts}
+    if _USES_EFFORT_FIELD.search(str(map_expr or "")):
+        out["compat"] = {"thinkingFormat": "deepseek"}
+    return out
 
 
 def _positive_int(value: Any) -> int | None:
@@ -341,11 +390,45 @@ class _PatchDoc:
         return (before + "\n\n" if before else "") + block + ("\n" + after if after else "")
 
 
+def _keep_efforts(routes: dict[str, Any], old_providers: dict[str, Any]) -> dict[str, Any]:
+    """把现有 patch 里手写/人工调过的 reasoningEfforts 保留到新生成的路由上。
+
+    ZCode 源头的 optionSpecs 缺失或退化（map="{}"、只留开关）时，生成器只能写出
+    空档位；这些档位一旦被 --apply 抹掉，模型选择器里的推理等级就消失。规则：
+      - 新路由没算出 reasoningEfforts → 沿用旧的；
+      - 新路由算出了 → 以新路由为准（源头改档位时能被正确更新）。
+    """
+    kept: dict[str, Any] = {}
+    for provider_key, new_route in routes.items():
+        old_route = old_providers.get(provider_key) or {}
+        if not isinstance(new_route, dict) or not isinstance(old_route, dict):
+            continue
+        old_models = {
+            m.get("id"): m
+            for m in (old_route.get("models") or [])
+            if isinstance(m, dict) and m.get("id")
+        }
+        for model in new_route.get("models") or []:
+            if not isinstance(model, dict) or model.get("reasoningEfforts"):
+                continue
+            old_model = old_models.get(model.get("id"))
+            if not old_model or not old_model.get("reasoningEfforts"):
+                continue
+            model["reasoningEfforts"] = old_model["reasoningEfforts"]
+            if old_model.get("compat"):
+                model["compat"] = old_model["compat"]
+            kept[model.get("id")] = model["reasoningEfforts"]
+    if kept:
+        print("保留已有推理档位：" + ", ".join(sorted(str(k) for k in kept)))
+    return routes
+
+
 def _merge_patch(text: str, routes: dict[str, Any]) -> tuple[str, bool, dict[str, Any]]:
     doc = _PatchDoc(text)
     old_item = doc.item()
     old_config = old_item.get("config") or {}
     old_providers = old_config.get("providers") or {}
+    routes = _keep_efforts(routes, old_providers)
     preserved = {
         key: value
         for key, value in old_providers.items()
@@ -478,8 +561,14 @@ def _main(argv: list[str] | None = None) -> int:
     print(f"patch      : {patch_path}")
     print(f"模型表     : {'有变化' if changed else '无变化'}；凭据引用：{'有变化' if key_changed else '无变化'}")
 
+    lost = _efforts_lost(rules, routes)
+    if lost:
+        print(f"推理档位 : {len(lost)} 个模型投影后为空", file=sys.stderr)
+        for line in lost:
+            print(f"  - {line}", file=sys.stderr)
+
     if args.check:
-        return 1 if changed or key_changed else 0
+        return 1 if (changed or key_changed or lost) else 0
     if not args.apply:
         # 把投影后的 providers 打出来，定时任务的日志里能直接看到 429 策略。
         print("retryPolicy（模块级常量）: " + json.dumps(RETRY_POLICY, ensure_ascii=False))
@@ -505,6 +594,8 @@ def _main(argv: list[str] | None = None) -> int:
         print(f"已更新凭据引用（备份：{cred_backup.name}）")
     if not changed and not key_changed:
         print("DeepSeekHarness 同步：无变化")
+    elif lost:
+        print("WARN: 上面列出的模型在源头有档位、投影后为空，检查 _reasoning 与 map 表达式")
     else:
         print(f"DeepSeekHarness 同步：{len(routes)} 个 provider / {sum(len(r['models']) for r in routes.values())} 个模型")
     return 0
