@@ -56,7 +56,7 @@
   },
   "reasoningGuard": {
     "enabled": true,
-    "mode": "models",
+    "mode": "channels",
     "models": ["Iceman", "iceman-contributor-free"],
     "maxRetries": 1,
     "maxProbeBytes": 32768,
