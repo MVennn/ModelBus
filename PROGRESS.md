@@ -2936,7 +2936,7 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 
 ### 待办
 
-- 线上 7871 仍是旧二进制，换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`（会话内不重启长驻网关）。
+- 线上 7871 已换版（本轮多次 `tools/zgate-lifecycle/deploy-zgate.ps1`，最近一次 pid=24208、`/health` 200），后续换版仍走该脚本或 `restart-zgate.cmd`，不手工拉进程。
 
 ---
 
@@ -3000,18 +3000,19 @@ catiecli 中转的特性决定了它不能按普通渠道接：链首两个型�
 ### 待办
 
 - 上游 catiecli 的 Gemini key 池 2026-11-10 15:40 起为空（`/v1/models` 返 `data: []`，
-  任何模型 403），恢复后用 `.work/gemini-ais-accept.py` 复测当前参数（hedge 500 / par 2）
-  的首字分布，并把数字回填 docs/MODEL-PROVIDERS.md §4.11.4。
+  任何模型 403），恢复后用 `.work/gemini-ais-accept.mjs`（3 轮 = 3 个额度）复测当前参数
+  （hedge 500 / par 2）的首字分布，并把数字回填 docs/MODEL-PROVIDERS.md §4.11.4。
 - **额度纪律（本轮踩坑）**：这条上游**按调用次数计费，不是按 token** —— 一次请求
   （哪怕 `max_tokens=16`、哪怕秒回 403）就是一个额度。本轮为验收连打了几十次真实调用
   （早期 TTFB 探测 20+ 次、12 轮首字验收、池空排查若干次），可能直接把上游额度打光。
   以后固定：① 链路行为（降级/对冲/冷却/首块闸门）**一律用夹具 7999 验**，不碰真上游；
   ② 真实调用只用于「现在到底能不能用」，一次一个；③ `.work/gemini-ais-accept.mjs`
   默认轮数降到 3、硬上限 10；④ 池子是否恢复先问人，不自己反复 POST 探。
-- `race_test.go` 新增的两个发车顺序用例（`TestRankedChainPrefersProvenFastHop` /
-  `TestRankedChainOrdersProvenHopsByLatency`）待跑；夹具验收（7999 假上游 + 7899 隔离实例）
-  待跑 —— 两者都卡在 2026-11-10 15:5x 起的 bash 执行器故障
-  （`EXECUTOR_UNAVAILABLE: Niubash preparation failed: UNKNOWN: unknown error, link …awk.exe`），
-  与代码无关，执行器恢复后补。
+- `race_test.go` 的两个发车顺序用例（`TestRankedChainPrefersProvenFastHop` /
+  `TestRankedChainOrdersProvenHopsByLatency`）已随 `go test -count=1 ./internal/router` 通过
+  （ok 13.625s，router 包全绿）；当时卡住的 bash 执行器故障改用 Node 直调 Go 工具链绕开，
+  结论等价。
+- **未做**：夹具验收（7999 假上游 + 7899 隔离实例）。真上游池空期间这是验降级 / 对冲 /
+  冷却最省额度的办法，下一轮补；本轮已由 `race_test.go` 六项覆盖同等行为。
 
 [[TASK_ALL_DONE]]
