@@ -92,6 +92,20 @@ QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
 # 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
 # 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
 GM_BASE = "https://catiecli.sukaka.top/v1"
+# 哈基米（gemai.cc）福利通道：网页售卖站的 `[福利]gemini-3.8-flash` 是独立中转站上
+# 与 ais 3.8 同代的模型。它和 GM 是两家独立中转、两把独立 key
+# （HJM_API_KEY，providers/hajimi/.env.local），所以模型 id 一字不改地带上
+# `[福利]` 前缀 —— 上游只认这个字符串。
+# 2026-11-10 用户口径：catiecli 的 ais 全档排队/不可用时直接用它，所以它不再是
+# Gemini-AIS 链里的一跳，而是独立模型 Gemini-3.8-Flash（见 ABBR 与 MAIN_ORDER）。
+HJ_BASE = "https://api.gemai.cc/v1"
+HJ_PRICES = {
+    # 「福利」档没有公开价目表，按比 catiecli 3.8（0.11）更便宜的估算值记账。
+    # 不能写 0.0 冒充免费：family_entries 见同一族里同时存在 <=0 与 >0 的跳时，
+    # 会把这条链拆成「付费 + -Free」两条（见 MERGE_FREE_GB 注释）。它现在是单跳族，
+    # 但仍按付费档记账 —— 0.0 会被省钱组的免费档位逻辑收走。
+    "[福利]gemini-3.8-flash": 0.05,
+}
 GM_PRICES = {
     # 上游没有公开价目表，7 个跳一律沿用同一个估算值（0.11 = DeepSeek 标准档）。
     # 同价是刻意的：跳序不靠价格区分，靠 HOP_PRIORITY 显式压制（见该常量注释）。
@@ -131,6 +145,10 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
+    # 哈基米福利档（HJ 渠道）2026-11-10 拆成独立模型 Gemini-3.8-Flash，单跳、不并链。
+    # 位置压在 Gemini-AIS 之前：ais 全档排队不可用时用户直接点它，主力组列表里
+    # 先给「能用的 3.8」再给「会降级的 3.8」，点名候选也按这个先后。
+    "chat:hjm:[福利]gemini-3.8-flash",
     # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
     # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链 7 跳**。
     # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
@@ -220,7 +238,7 @@ WB_FIRST_CHANNELS = {"WB"}
 # 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
 # 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
 #   · GM=1：谷歌中转（catiecli）直连付费档，与 OC/QD 同档，同型号多跳时按价格排
-CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1}
+CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1, "HJ": 1}
 CHANNEL_RANK_DEFAULT = 4
 
 # 跳级优先级 —— 链内跳排序的**第二维**（紧跟 CHANNEL_RANK，在价格之前）。
@@ -230,6 +248,8 @@ CHANNEL_RANK_DEFAULT = 4
 # 反而成了尾跳。版本新者必须先试，所以把「新一代优先」写成显式数字表。
 # 只对表里的 upstream 生效；其它渠道的跳不在表里 → 取 HOP_PRIORITY_DEFAULT(99)
 # → 同价时的相对顺序与加这张表之前完全一致（行为不变）。
+# 2026-11-10 哈基米福利档拆成独立模型后已从表里移除：单跳族没有链内顺序，
+# 留在表里反而会让这张表的语义（「链内跳序」）和实际链对不上。
 HOP_PRIORITY = {
     "ais-gemini-3.8-flash": 0,
     "ais-gemini-3.7-flash": 1,
@@ -360,6 +380,10 @@ ABBR = {
     # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
     # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。
     "ais-gemini-3.8-flash": "Gemini-AIS",
+    # 哈基米福利档 2026-11-10 拆成独立族：显示名 Gemini-3.8-Flash（单跳 HJ 渠道）。
+    # 以前它和 ais 同名、混在一条链里当兜底；用户口径改成「ais 不可用时直接用它」，
+    # 于是从 Gemini-AIS 链里摘出来，不再参与那条链的降级。
+    "[福利]gemini-3.8-flash": "Gemini-3.8-Flash",
     "ais-gemini-3.7-flash": "Gemini-AIS",
     "ais-gemini-3.6-flash": "Gemini-AIS",
     "ais-gemini-3.5-flash": "Gemini-AIS",
@@ -435,9 +459,12 @@ ABBR = {
 # 自指形式 "Gemini-3.8-Flash" -> "Gemini-3.8-Flash"），改名后旧 target 不再是
 # 任何模型的新 id，resolved_legacy 会把整条记录当成死链丢掉 —— 老会话里选中的
 # 模型就解析不到了。main() 在 resolved_legacy 过滤前逐条补映射（缺失或自指才改写）。
-NAME_RENAMES = {
-    "Gemini-3.8-Flash": "Gemini-AIS",
-}
+# 2026-11-10：原来这里有一条 "Gemini-3.8-Flash" -> "Gemini-AIS"。哈基米福利档拆出来
+# 独立成模型时正好复用了这个 id，它现在是 live 模型名 —— 改名映射必须撤掉。
+# zgate 的 Resolve 先查 models 再查 legacy，路由本来就是新模型；但 legacy 里留一条
+# 指向 AIS 的同名脏映射会误导排查，main() 另有一处「同名 legacy 一律丢弃」兜底。
+NAME_RENAMES = {}
+
 
 # 「无公司/匿名代号」模型（用户口径：一律沉到每组最下面）。名单顺序无关，
 # 判据只看厂商码是否落在这四个里：Beam / Space-Bunny / Conatus / 未识别(OTHER)。
@@ -825,6 +852,9 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
     if channel == "GM":
         # 中转站没有公开价目表：只认 GM_PRICES 的显式价，未收录即 None（该跳被丢）。
         return GM_PRICES.get(upstream)
+    if channel == "HJ":
+        # 哈基米同为转售站，口径同 GM：只认 HJ_PRICES 的显式价，未收录即 None。
+        return HJ_PRICES.get(upstream)
     if channel == "QW":
         return 0.0 if qw_credit_active() else None
     if channel == "QN":
@@ -932,7 +962,7 @@ def protocol_hints() -> dict:
     return _PROTOCOL_HINTS
 
 
-PREFIXES = ("qwen:", "qoder:", "cn:", "global:", "gem:")
+PREFIXES = ("qwen:", "qoder:", "cn:", "global:", "gem:", "hjm:")
 
 
 def _bare(model_id: str) -> str:
@@ -1077,6 +1107,22 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "fallbacks": [],
             "legacy_ids": [model],
         }
+    if model.startswith("hjm:"):
+        # 显式 HJ 渠道（哈基米 gemai.cc）：白名单写
+        # chat:hjm:[福利]gemini-3.8-flash 走到这里。不写前缀会落到末尾 OC 兜底，
+        # 那条会把 [福利] 前缀当成型号名发给 opencode.
+        upstream = model[len("hjm:"):]
+        return {
+            "raw": model,
+            "original": model,
+            "channel": "HJ",
+            "region": "GB",
+            "upstream": upstream,
+            "base_model": upstream,
+            "protocol": protocol,
+            "fallbacks": [],
+            "legacy_ids": [model],
+        }
     if model.startswith(("WB:", "OC:", "QD:")):
         # A renamed id that is not in the alias map: refuse to guess.
         return None
@@ -1121,7 +1167,7 @@ def whitelist_items(order: list[str]) -> list[dict]:
         # 只有显式的才按 (渠道, 裸名) 去重，否则 classify 猜出来的渠道会把
         # 「同一个 upstream 名在另一个渠道的跳」误判成重复（见 main 里的补建过滤）。
         item["explicit_channel"] = str(model).lower().startswith(
-            ("qoder:", "qwen:", "cn:", "global:", "wb:", "oc:", "qd:", "gem:")
+            ("qoder:", "qwen:", "cn:", "global:", "wb:", "oc:", "qd:", "gem:", "hjm:")
         )
         out.append(item)
     return out
@@ -1236,7 +1282,7 @@ def raw_models(cfg: dict, alias_models: dict, legacy: dict) -> list[dict]:
 
 QN_BASE = "https://api.qnaigc.com/v1"
 CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE,
-                "QN": QN_BASE, "GM": GM_BASE}
+                "QN": QN_BASE, "GM": GM_BASE, "HJ": HJ_BASE}
 
 
 def base_of(channel: str) -> str:
@@ -1416,7 +1462,7 @@ def pool_entries(pools: list[dict], slot: str) -> list[dict]:
 
 
 CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:",
-                  "QW": "qwen:", "QN": "qn:", "GM": "gem:"}
+                  "QW": "qwen:", "QN": "qn:", "GM": "gem:", "HJ": "hjm:"}
 
 
 def hop_specs(protocol: str, hop: dict) -> list[str]:
@@ -2091,6 +2137,29 @@ def main() -> int:
         raise SystemExit(f"缺少模板 provider：{PROVIDER_MAIN}")
     access = copy.deepcopy((template.get("config") or {}).get("access") or {})
     group_name = (template.get("config") or {}).get("group") or "standard-personal"
+    def _consistent_legacy_ids(row: dict) -> list[str]:
+        """只留「这条记录真对得上」的 legacy id。
+
+        带渠道前缀的 id（gem:ais-… / hjm:[福利]…）必须能对上该模型某一跳的
+        upstream，对不上就是改名 / 拆族留下的陈旧映射：2026-11-10 把哈基米从
+        Gemini-AIS 链里拆成独立模型时，AIS 的 legacy_ids 里还留着 hjm:[福利]…
+        （上一轮它确实是 AIS 的一跳），不过滤会把这条 id 又指回 AIS，新模型同时
+        继承了 7 个 gem:ais-… 的脏映射。不带前缀的 id（上游原名、旧显示名）不动：
+        历史条目本来就允许跨名字解析。
+        """
+        chain = row.get("chain") or [{"upstream": row.get("upstream")}]
+        upstreams = {_bare(h.get("upstream") or "") for h in chain}
+        upstreams |= {_bare(row.get("upstream") or ""), _bare(row.get("original") or "")}
+        out: list[str] = []
+        for lid in row.get("legacy_ids") or [row["original"], row["upstream"]]:
+            key = str(lid)
+            if ":" in key and _bare(key) not in upstreams:
+                continue
+            if key not in out:
+                out.append(key)
+        return out
+
+    new_providers = []
     new_providers = []
     new_model_rules = []
     alias_models = {}
@@ -2147,17 +2216,34 @@ def main() -> int:
                 "group": PROVIDER_NAMES[provider_id],
                 "fallbacks": list(row.get("fallbacks") or []),
                 "chain": list(row.get("chain") or []),
-                "legacy_ids": list(row.get("legacy_ids") or [row["original"], row["upstream"]]),
+                "legacy_ids": _consistent_legacy_ids(row),
             }
             if row.get("is_pool"):
                 alias_models[row["new_id"]]["kind"] = "pool"
                 alias_models[row["new_id"]]["label"] = row.get("label") or ""
             if row.get("main_reason"):
                 alias_models[row["new_id"]]["main_reason"] = row["main_reason"]
-            for legacy_id in row.get("legacy_ids") or [row["original"], row["upstream"]]:
+            for legacy_id in _consistent_legacy_ids(row):
                 legacy[legacy_id] = row["new_id"]
 
+    # 存量脏映射清理：磁盘上可能留着「带渠道前缀、却对不上目标任何一跳」的 legacy
+    # 条目（拆族前的 hjm:[福利]… -> Gemini-AIS 就是），逐条对照 live 模型的跳表删掉。
+    # 只处理带前缀的 key：裸名（上游原名、旧显示名）允许跨名字解析，不动。
+    for _key, _target in list(legacy.items()):
+        if ":" not in _key:
+            continue
+        _model = alias_models.get(_target)
+        if not _model:
+            continue
+        _hops = {_bare(h.get("upstream") or "") for h in (_model.get("chain") or [_model])}
+        if _bare(_key) not in _hops:
+            legacy.pop(_key, None)
     valid_ids = set(alias_models)
+    # 命名卫生：legacy 里可能残留「与 live 模型同名」的映射（改名后又把这个名字
+    # 给了一个新模型，例如 2026-11-10 拆出来的 Gemini-3.8-Flash）。Resolve 先查
+    # models，路由不受影响；但 legacy 留一条指向别人的同名记录会误导排查，一律丢掉。
+    for _shadowed in [k for k in legacy if k in valid_ids]:
+        legacy.pop(_shadowed, None)
     # 显示名改名兼容（NAME_RENAMES）：旧名的自指条目（"Gemini-3.8-Flash" ->
     # "Gemini-3.8-Flash"）在改名后 target 已不是任何 live id，下面那条
     # resolved_legacy 过滤会把整条丢掉，老会话选中的模型就解析不到。

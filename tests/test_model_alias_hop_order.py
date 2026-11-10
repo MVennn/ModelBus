@@ -116,41 +116,61 @@ GEMINI_HOPS = [
     "ais-gemini-3-flash-preview",
 ]
 
+# 哈基米（HJ，gemai.cc）的同代福利档。2026-11-10 用户口径改成「ais 全档排队不可用时
+# 直接用它」，于是它从 Gemini-AIS 链里摘出来，独立成单跳模型 Gemini-3.8-Flash
+# （主力组里排在 Gemini-AIS 之前）。
+HJ_HOP = "[福利]gemini-3.8-flash"
+HJ_MODEL = "Gemini-3.8-Flash"
 
-def _gemini_chain() -> list[dict]:
-    """乱序喂 7 个同价 GM 跳，链序必须由 HOP_PRIORITY 纠正回 3.8 → 3-preview。"""
+
+def _gemini_entries() -> list[dict]:
+    """乱序喂 7 个 GM 跳 + 1 个 HJ 跳：必须产出两条独立条目，HJ 不再并进 AIS 链。"""
     items = [
         _hop("GM", upstream, ma.GM_PRICES[upstream], base_model=upstream)
         for upstream in reversed(GEMINI_HOPS)
     ]
-    entries = ma.family_entries(items, {}, {}, "auto")
-    gem = [e for e in entries if e["abbr"] == "Gemini-AIS"]
-    if len(gem) != 1:
-        raise AssertionError(f"7 个 GM 跳应并成一条 Gemini-AIS，实际 {len(gem)} 条")
-    return gem[0]["chain"]
+    items.append(_hop("HJ", HJ_HOP, ma.HJ_PRICES[HJ_HOP], base_model=HJ_HOP))
+    return ma.family_entries(items, {}, {}, "auto")
+
+
+def _entry_by_abbr(abbr: str) -> dict:
+    entries = _gemini_entries()
+    hits = [e for e in entries if e["abbr"] == abbr]
+    if len(hits) != 1:
+        raise AssertionError(f"{abbr} 应正好一条条目，实际 {len(hits)} 条")
+    return hits[0]
 
 
 class GeminiHopOrderTest(unittest.TestCase):
-    def test_gemini_chain_is_seven_hops_in_version_order(self) -> None:
-        chain = _gemini_chain()
-        self.assertEqual(len(chain), 7, "Gemini-AIS 必须是 7 跳")
+    def test_ais_chain_is_seven_gm_hops_in_version_order(self) -> None:
+        chain = _entry_by_abbr("Gemini-AIS")["chain"]
+        self.assertEqual(len(chain), 7, "Gemini-AIS 必须是 7 跳纯 GM（哈基米已拆出去）")
         self.assertEqual(
             [h["upstream"] for h in chain],
             GEMINI_HOPS,
             "链序必须严格是 3.8 → 3.7 → 3.6 → 3.5 → 3.5-lite → 3.1-lite → 3-preview",
         )
-        self.assertEqual({h["channel"] for h in chain}, {"GM"})
-        self.assertEqual({h["price"] for h in chain}, {0.11})
+        self.assertEqual({h["channel"] for h in chain}, {"GM"}, "AIS 链里不该再出现别的渠道")
 
-    def test_hop_priority_covers_every_gemini_hop(self) -> None:
+    def test_hajimi_is_standalone_single_hop_model(self) -> None:
+        entry = _entry_by_abbr(HJ_MODEL)
+        self.assertEqual(entry["name"], HJ_MODEL)
+        self.assertEqual(len(entry["chain"]), 1, "哈基米福利档是单跳模型，不再参与降级链")
+        hop = entry["chain"][0]
+        self.assertEqual((hop["channel"], hop["upstream"]), ("HJ", HJ_HOP))
+        self.assertEqual(hop["price"], 0.05)
+
+    def test_hop_priority_covers_every_ais_hop(self) -> None:
         # 漏一个就回落到默认 99，会被 3.5 之类的字符串序顶到前面。
         self.assertEqual(
             {upstream for upstream in ma.HOP_PRIORITY if upstream.startswith("ais-gemini")},
             set(GEMINI_HOPS),
         )
+        self.assertNotIn(HJ_HOP, ma.HOP_PRIORITY, "单跳模型不进「链内跳序」表")
         self.assertEqual(
             sorted(ma.HOP_PRIORITY, key=lambda u: ma.HOP_PRIORITY[u]),
             GEMINI_HOPS,
+            "HOP_PRIORITY 从小到大必须正好是 AIS 这条链",
         )
         self.assertGreater(
             ma.HOP_PRIORITY_DEFAULT,
@@ -158,10 +178,37 @@ class GeminiHopOrderTest(unittest.TestCase):
             "默认值必须大于所有显式优先级，其它渠道的顺序才不会被改",
         )
 
+    def test_main_order_puts_hajimi_before_ais(self) -> None:
+        order = list(ma.MAIN_ORDER)
+        self.assertIn("chat:hjm:" + HJ_HOP, order, "主力名单必须点名哈基米福利档")
+        self.assertLess(
+            order.index("chat:hjm:" + HJ_HOP),
+            order.index("chat:gem:ais-gemini-3.8-flash"),
+            "主力组顺序：Gemini-3.8-Flash 必须排在 Gemini-AIS 之前",
+        )
+
     def test_non_gemini_hops_keep_default_priority(self) -> None:
         chain = _chain(0.11)
         order = [ma.HOP_PRIORITY.get(h["upstream"], ma.HOP_PRIORITY_DEFAULT) for h in chain]
         self.assertEqual(set(order), {ma.HOP_PRIORITY_DEFAULT}, "非 GM 跳一律取默认优先级")
+
+    @unittest.skipUnless(ALIAS_MAP.exists(), "本机没有 alias map，跳过磁盘守卫")
+    def test_on_disk_alias_map_has_split_gemini_models(self) -> None:
+        data = json.loads(ALIAS_MAP.read_text(encoding="utf-8"))
+        models = data.get("models") or {}
+        ais = models.get("Gemini-AIS") or {}
+        hj = models.get(HJ_MODEL) or {}
+        self.assertEqual(
+            [h.get("channel") for h in ais.get("chain") or []],
+            ["GM"] * 7,
+            "磁盘上 Gemini-AIS 必须是 7 跳纯 GM",
+        )
+        self.assertEqual(
+            [h.get("channel") for h in hj.get("chain") or []],
+            ["HJ"],
+            "磁盘上 Gemini-3.8-Flash 必须是单跳 HJ",
+        )
+        self.assertEqual(hj.get("group"), ais.get("group"), "两个模型要同属主力组")
 
 
 if __name__ == "__main__":
