@@ -172,7 +172,7 @@ Claude-Haiku-5.5（403，`http!=403` 复通）。上游修好后无需人工改�
 |---|---|---|
 | L1 契约（`cordis.patch.yml` 模型表） | 同步脚本 | 要（这是模型进表的唯一入口） |
 | L2 探针（`model_stream_check.py`） | 读 L1 自动纳入 | **不要**，进表即被测 |
-| L3 网关守卫（`reasoningGuard`） | `mode: "auto"` + 学习表 | **不要**，声明要思考的流式请求自动探针 |
+| L3 网关守卫（`reasoningGuard`） | `mode: "channels"` 能力位 + 白名单 + 学习表 | 不用改代码；渠道带 `guardReasoning` 即纳入（白名单非空时再收窄） |
 
 **判定与动作**（`gateways/zgate/internal/router/router.go`）：客户端声明思考（`reasoning_effort` 非空非 `off`，或 `thinking.type=enabled`）→ 首个 SSE delta 若先给正文、零明文 thinking → 判「加密分流」→ 关流、换连接、换会话头重抽同一跳（`maxRetries`，缺省 5）→ 拿到明文就原字节续上；始终拿不到就注入一条可读提示（`injectNotice`）后放行，并按模型记进学习表。
 
@@ -183,7 +183,7 @@ Claude-Haiku-5.5（403，`http!=403` 复通）。上游修好后无需人工改�
 ```json
 "reasoningGuard": {
   "enabled": true,
-  "mode": "auto",            // auto 不看 models 白名单；写 "models" 才只守白名单
+  "mode": "channels",        // channels=看 upstreams.<渠道>.guardReasoning（现网档）；models=只守白名单；auto=不看任何表
   "maxRetries": 5,            // 重抽次数（每次换连接 + 换会话）
   "maxProbeBytes": 32768,
   "injectNotice": true,       // 达上限时插 ⓘ 提示，避免空思考块

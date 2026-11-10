@@ -114,7 +114,16 @@
 | legacy | 旧 id（当前 73 条） | 历史兼容，`canonical_id` 指回统一名 |
 | all | 两边都要 | 排障 / 对账 |
 
-返回体带 `scope` 与 `total`；未知 scope 回 400 `invalid_request_error`。
+返回体带 `scope`、`total`、`catalog_total` 三个字段，语义分清楚：
+
+| 字段 | 含义 | 例（canonical） |
+|---|---|---|
+| `total` | **本次返回**的条数，客户端直接拿来数「我有几个模型」 | 20 |
+| `catalog_total` | 全部两拨加起来的条数，对账用 | 93 |
+| `data` | 本条 scope 的条目 | 20 条 |
+
+两个数混成一个会让 20 条的响应写着 93，看起来像分页没给完 —— 2026-11-10 首版就是这样，当晚拆开。
+未知 scope 回 400 `invalid_request_error`，不静默退回默认（拼错才不会被藏住）。
 改默认值是一个**对外行为变更**：老客户端如果依赖「一口气拿到 93 条」，需要显式写 `?scope=all`。
 
 ---
@@ -129,6 +138,18 @@
 | race | hops / disabled | 每跳的首块观测（`rankedChain` 发车顺序的依据） |
 
 没有这些字段之前，「提前交卷有没有用」「守卫对谁生效」只能靠推理；现在一条 `curl` 就能回答。
+
+### 7.1 思考守卫的三档（`reasoningGuard.mode`）
+
+| mode | 判据 | 新增模型要不要改配置 |
+|---|---|---|
+| `models` | 只看 `models` 白名单 | 要（漏加就不守） |
+| `channels` | 先看渠道能力位 `upstreams.<渠道>.guardReasoning`；`models` 非空时再叠一层白名单（**交集**） | 渠道级的不用；白名单非空仍要 |
+| `auto`（缺省） | 不看任何表，凡是客户端声明要思考的流式请求都探 | 不用 |
+
+现网是 `channels` + 白名单 `["Iceman","iceman-contributor-free"]` + 仅 `OC` 带能力位：
+对 Iceman（链 `OC->OC`）与旧口径等价，往后 OC 上的模型只需把名字加白名单（或清空白名单全量接管）。
+`/health.guard` 的 `channels` 就是能力位为真的渠道名，改完 `POST /admin/reload` 立刻能看见。
 
 ---
 
@@ -157,8 +178,9 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 1. 代码层：`go build ./...`、`go vet ./...`、`go test ./...` 全 0；
    策略用例在 `internal/router/policy_test.go`（逐跳聚合、单跳不冷却、预算回 504、自检两档、守卫档位）。
 2. 配置层：改 `zgate.json` 后 `POST /admin/reload` 即可，不必重启进程。
-3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard 三段；
-   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 20 条、`?scope=legacy` 应 73 条。
+3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard 三段
+   （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
+   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=20 / catalog_total=93`、`?scope=legacy` 应 `total=73`、`?scope=bad` 应 400。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。
 5. 回退：配置问题改 `zgate.json` 加 reload；代码问题 `git revert` 后跑同一条换版脚本。
 

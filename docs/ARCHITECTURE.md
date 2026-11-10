@@ -157,7 +157,7 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
    `x-opencode-session`）→ zgate 的第二个监听器，`config.json` 里 `profiles.client-headers`。
    它现在根本没在跑，但迟早要跑，别再多一个 Node 进程。
 2. `/health` 已落地为统一视图：七段 upstream（OC / WB / QD / QW / QN / GM / HJ）各带 `base` / `key` / `child` / `state` / `last_error`，
-   加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias.models`、`cooling`、`uptime_s`；`GET /v1/models` 返回 alias 聚合 catalog。
+   加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias.models`、`cooling`、`uptime_s`，以及 2026-11-10 新增的 `early`（提前交卷计数）、`chain`（链预算）、`guard`（思考守卫档位）；`GET /v1/models` 返回 alias 聚合 catalog，`?scope=` 分 canonical / legacy / all（缺省 canonical）。
 3. 日志合并：`zgate.log`（按大小轮转）+ 子进程 stdout/stderr 各一份，
    目录统一到 `%LOCALAPPDATA%\ZCodeGateway\`。今天的四套日志名保留一版兼容。
 

@@ -575,7 +575,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 5. **客户端 200 但 0 字节 / 流被掐断**：看网关日志有没有 `wrote more than the declared Content-Length`，有就是上游 SSE 自带 CL 而守卫改了长度 —— 现代码对事件流一律摘 CL 走 chunked，仍复现说明二进制是旧的。
 6. **守卫一次都没触发**（日志里只有 `POST … model=Iceman`，没有重抽行）：先看宿主真实请求体有没有 `reasoning_effort` —— 会话 `session.v4.jsonl.zstd` 的 `request/header` 里 `"config"` 只有 provider/model/maxTokens 就是没有。守卫的触发条件是「客户端声明要思考」，DSH 的 "Default" 伪档位不声明，于是守卫连上场机会都没有。现网关注解：`zgate.json` 的 `reasoningGuard.forceEffort: "high"` + `forceEffortModels` 让网关替客户端补档（日志 `客户端未声明思考档位，按配置补 reasoning_effort="high"`）；补档后守卫才会接管加密分流。显式关思考（`off`）不受影响。
 7. **每个请求都要先空等十几秒才出字**：正常流被 `probeSeconds` 误判成静默了。看日志有没有 `内没有可判定的思考信号（上游静默）` —— 有就说明探针没等到首块。先量正常流的首字节耗时（`tools/model_stream_check.py` 的 TTFB），把 `reasoningGuard.probeSeconds` 调到明显大于它（现配置 15，明文实测最高 13.5 秒）；窗口期把 `maxRetries` 调大的做法无效，重抽几乎必然落回同一后端，只会让用户多等。想完全关掉这套探测就把 `probeSeconds` 设负数并把 `maxRetries` 设 0。
-8. **新模型也这样怎么办**：不用改 `models` 白名单，`mode: "auto"` 已覆盖「客户端声明要思考」的所有流式请求；真要停手只把 `giveUpAfter` / `giveUpForSeconds` 调小调大。适配规则见 [PITFALLS.md](PITFALLS.md) §41「同类模型免配置适配」与 [MODEL-STREAM.md](MODEL-STREAM.md) §10。
+8. **新模型也这样怎么办**：先看 `/health.guard` 的 `mode` 与 `channels` —— `auto` 覆盖「客户端声明要思考」的所有流式请求；`channels` 只覆盖带 `guardReasoning` 的渠道（现网只有 `OC`），模型名仍要进 `models` 白名单（现为 Iceman 两条）；真要停手只把 `giveUpAfter` / `giveUpForSeconds` 调小调大。适配规则见 [PITFALLS.md](PITFALLS.md) §41「同类模型免配置适配」与 [MODEL-STREAM.md](MODEL-STREAM.md) §10。
 
 **原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层只动 `reasoningDisplay`（刷新 GUI 即生效），`ui-chat` 折叠三键属于用户偏好，不动；
 

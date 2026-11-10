@@ -3350,6 +3350,21 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 
 ## 门禁
 
-结果见本批次末尾「验收」。
+| 门禁 | 结果 |
+|---|---|
+| `go build ./...` / `go vet ./...` | exit 0 |
+| `go test ./...` | exit 0（router 15.5s / supervisor 11.0s） |
+| `python -B -m unittest discover -s tests -q` | Ran 91 tests OK |
+| `python -B tools/check-project.py` | 8 项 OK |
+| `python -B tools/check-docs.py` | 42 篇 OK |
+
+## 验收
+
+- **换版**：`tools/zgate-lifecycle/restart-zgate.cmd` 前台跑 exit 0 / 9.1s；启动两行 `[policy]` WARN 证明 `ValidatePolicies` 在自检 ——
+  `channel=QD 字段=[maxParallel=2,silenceCooldownSeconds=20,rateLimitBackoffMs=-1] 影响模型=[Qwen-3.8-Max]`、`channel=WB 字段=[hedgeAfterMs=18000,maxParallel=2] 影响模型=[HY3-X,HY4,HY4-Free,Space-Bunny]`（非 Fatal：两渠道同时服务多跳模型）。
+- **`/health` 新段**：`early` = {enabled:true, window_ms:8000, keepalive_s:10, wrapped:9, passed_in_window:6, committed:0, keepalives:0, failed_after_wait:0}（观测接上了，首个 8s 窗口内 6 个流被放行、没人需要交卷）；`chain` = {budget_s:90}；`guard` = {enabled:true, mode:"channels", channels:["OC"], skipping:[]}。
+- **`/v1/models`**：`?scope=canonical` → total=20 / catalog_total=93；`?scope=legacy` → total=73；`?scope=all` → total=93；无 scope 默认 canonical；`?scope=nonsense` → 400 `unknown scope`。
+- **守卫切档**：`reasoningGuard.mode` 由 `models` 改 `channels` 并保留白名单（交集），对 Iceman（链 `OC->OC`）行为等价，往后 OC 上新增模型只需进白名单。
+- **仍未做（有意留着）**：cool / silence 两表合一、竞速与串行执行器合一、档位两层收敛、`dsh_sync.py` 的 `_efforts_outside` 死代码与 `_efforts_lost` 少打 WARN —— 都属于结构重排，没有当日线上问题驱动，硬做只会加大回滚面。
 
 [[TASK_ALL_DONE]]
