@@ -53,4 +53,13 @@ fi
 if printf '%s\n' "$STAGED" | grep -Eq '^(tools|tests)/.*\.py$'; then
   "$PY" -m unittest discover -s tests -q || exit 1
 fi
+# 5) 文档快照提醒（只提示不阻断）：CI 检出的是暂存快照，本地 check-docs 看的是
+# 工作树 —— 索引行留在工作树外，CI 就会报孤儿 / 链接缺失（2026-11-10 两次红）。
+if printf '%s\n' "$STAGED" | grep -q '\.md$'; then
+  UNSTAGED_DOCS=$(git diff --name-only -- '*.md')
+  if [ -n "$UNSTAGED_DOCS" ]; then
+    echo "[WARN] 本次提交含 .md，但下面这些文档改动没一起暂存；CI 只看暂存快照，索引/链接可能因此缺失：" >&2
+    echo "$UNSTAGED_DOCS" >&2
+  fi
+fi
 exit 0
