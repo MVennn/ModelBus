@@ -323,12 +323,12 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 为什么这么切：用户的实际选择只有「DeepSeek」和「免费」。按价格四档会让
 16 个永远不点的贵模型占着选择器，也让主力被榜单越塞越肿。
 
-> **2026-11-09 现行口径校准（上表与本节以下数条是 2026-10-28 快照）**：
-> 用户 2026-11-09 把主力收敛为「DeepSeek + Gemini」——`MAIN_ORDER`
-> （`tools/model_alias.py:106-128`）现为 `DeepSeek-4.1-Flash`（0.11）+ 4 条
-> CLIProxyAPI Gemini（0.00）；`HY4`（`cn:hy4std` 0.29）与 `Qwen-3.8-Max`
+> **2026-11-10 现行口径校准（上表与本节以下数条是 2026-10-28 快照）**：
+> 用户 2026-11-10 把主力收敛为「仅 DeepSeek」——`MAIN_ORDER`
+> （`tools/model_alias.py:106-128`）现为 `DeepSeek-4.1-Flash`（0.11）；原 4 条
+> CP 主力档随反代整体下架。`HY4`（`cn:hy4std` 0.29）与 `Qwen-3.8-Max`
 > （`qoder:Qwen3.8-Max` 0.43）已下沉省钱组（`LOW_ORDER:146-163`）。竞技榜候选由
-> `MAIN_UPSTREAM_HINTS = ("deepseek", "gemini")` 过滤，`MiMo-2.6-Flash` /
+> `MAIN_UPSTREAM_HINTS = ("deepseek",)` 过滤，`MiMo-2.6-Flash` /
 > `Space-Bunny` 不再回灌主力。省钱组现行 **12 条**，`MiMo-2.6-Pro` 随价格源为
 > **0.19**（`OC_PRICES:253`），不是上表的 0.13；上表「当前 8 条」同为旧快照。
 > 分组真值以 `python tools/model_alias.py --check --arena` 输出与
@@ -345,7 +345,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
   `deepseek-v4.1-flash` 与 `qwen3.8-flash`）把 chat 与 messages 跳并成一条链，
   每跳自带 `protocol`，路由逐跳派发。`TAIL_HOPS` 再把指定跳钉到链尾，实现「先把月度额度用完，再用
   一年期预付额度」。
-- **主力豁免价格上限**：白名单点名的条目不受 `LOW_MAX` 价格闸约束（现行主力 DeepSeek 0.11 + 4 条 CP Gemini 0.00；历史上 `Qwen-3.8-Max` 0.17 曾是贵备份，2026-11-09 已下沉省钱组、现价 0.43），名单外超限模型一律不收录，
+- **主力豁免价格上限**：白名单点名的条目不受 `LOW_MAX` 价格闸约束（现行主力仅 DeepSeek 0.11；历史上 `Qwen-3.8-Max` 0.17 曾是贵备份，2026-11-09 已下沉省钱组、现价 0.43），名单外超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。
 - **名单只管排序，不管建档**：条目只从 `provider_config` 的 `personalModelIds` 与池子
   文件生成，往 `MAIN_ORDER` 里加一个配置里没有的型号，不加 `whitelist_items()` 就什么

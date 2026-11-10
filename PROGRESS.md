@@ -2780,4 +2780,162 @@ usage.json 历史聚合：`hy4free` 1154 请求 / 0 credit；`hy4-preview-f` 242
 - 提交门禁真 bug：`#!/usr/bin/env sh` 在 git 2.56.0.windows.4.niugit 下执行 hook 报逐字 `env: failed to run command '.githooks/pre-commit': Permission denied`；mini 仓对照 `#!/bin/sh` exit=0、`#!/usr/bin/env sh` exit=1 定位根因是 shebang 转发，非执行位（100644 亦通过）。改 `#!/bin/sh` 后前台真实 commit exit=0 且八行门禁全绿，独立提交 `6f48225`；连带修正 tools/check-project.py 头部「pre-commit 只跑 check-secrets.py」旧描述。
 
 ## 状态: 已完成
+## 2026-11-09 · 去掉 Default 伪档位、修复 Iceman 思考/流式（用户 m00001）
+
+- 根因：`dsh-claude-style` 0.20.1 `lib/client.js` 的 `ki()` 在模型无 `defaultEffort` 时往档位列表最前插 `id=undefined / name="Default"` 占位；`c()` 选中它时完全不写 `reasoningEffort` → 请求不带推理参数，行为交上游缺省。Iceman 上游 `iceman-contributor-free` 不带 effort 时思考 chunk 缺失、文本大块聚合（21:0x 裸请求 11 块 / 0 字思考，21:44 同请求 79 块 / 298 字，缺省本身就不稳定）。
+- 改动：单点补丁 `profiles/desktop/node_modules/dsh-claude-style/lib/client.js`（1126988→1127936 B），六条规则——`ki()` 不再插 `undefined`；`M()` / `h()` / `c()` 在 effort 为空时取 `model.reasoning.efforts` 末位（宿主 `THINKING_LEVELS` 固定升级序，末位恒为该模型最高官方档，与 ZCode 文档「`values` 末位为默认档」一致），并一次性 `directory.select()` 写入具体 effort；`vn` 由 `"Default"` 改 `"—"`。配置正本 `cordis.patch.yml` 未动，官方档位 `off/low/medium/high/xhigh/max` 原样保留。
+- 幂等脚本 `~/.dsh/tools/patch-claude-style-effort.mjs`（`--check` / apply 双模式、同目录备份 `client.js.bak-effort-2026-11-09T13-40-06-026Z`），插件 0.20.1 内稳定：desktop postinstall 不重建 client.js，只有插件自身 build 会重建。
+- 验证：`node --check` exit=0；8 项静态断言 OK；函数级夹具 25/25 passed；`--check` 复跑 `ALREADY_PATCHED (no write)` exit=0；活体 `Iceman.high` 89 chunks / 346 字思考逐 token、`Conatus` 26 chunks 逐 token；宿主 `dsh-client-hmr` 每 500ms stat 轮询 + SSE 自动重读 client.js 换 rev，无需重启桌面端、无需改 asar、无需重打包。
+- 委派：§7 四条件全命中，3 路只读审计（运行时 / 配置 / 官方文档），分片落在 `.work/evidence/agent-{runtime,modelbus,docs}.md`，按磁盘字节与行数核对，self-report 未采信。
+- 验收边界：`ego-browser` 是独立未认证实例，裸 `http://127.0.0.1:11803/` 返回 401（`dsh web authentication required`），未做 GUI 内点击实测；生效证据以「HMR 源码机制 + 目标文件静态复验 + 函数级夹具 + 活体流式复测」闭环。本轮改动全在 `~/.dsh`（非 git 仓），按 §4 无 push。
+
+## 状态: 已完成
+
+## 2026-11-09 · 逐模型实况复核 + 新增模型免人工测试的永久机制（用户 m00337）
+
+- **逐模型实况**：22 模型全量矩阵 `--concurrency 2 --timeout 45` exit 0，
+  PASS 13 / WARN 3 / FAIL 0 / SKIP 4 / EXEMPT 2；Iceman 同档位 2048 补测后
+  414 块 / 1733 字思考 / 103 字正文 / 11 最大块间隔 / 4.92 CPS / 2000 FIRST，PASS。
+  SKIP 全是 429/5xx/超时（Conatus、Gemini-3.6-Flash、Qwen-3.8-Max/Flash），
+  WARN 是三个「上游能吐思考但 DSH 未声明档位」的 Gemini，EXEMPT 是
+  Claude-Haiku-5.5（403）与 Muse-Spark1.3（空 completion）两个上游真故障。
+- **优化了什么**：L1 单一契约 = `~/.dsh/profiles/desktop/cordis.patch.yml` 的
+  `llm-pi-ai` 模型表；L2 活体探针 `tools/model_stream_check.py` 挂到
+  `sync-models.ps1` 每日 12:00 链尾（`--changed --soft`，带 `-Soft` 不阻断）；
+  L3 离线守卫 `tools/check-project.py --stream-contract`（CI / pre-commit 同命令，
+  无 `.work` 报告时报告分支 SKIP、静态接线仍全程校验）。
+- **更新了什么**：`--changed` 从「只按 fingerprint 差集」改成「差集 + 上次
+  SKIP/FAIL/WARN/EXEMPT 待复查」，EXEMPT 借此自动复通、瞬态次日自动重测；
+  `--model` 单测结果合并回全量视图，`latest.json` 恒 22 条，手动单测不再破坏次日基线。
+- **修复了什么**：契约正本 `docs/MODEL-STREAM.md` 新建，五处索引 / 指针同步
+  （README / TOOLS / MAINTENANCE / MODEL-PROVIDERS / PITFALLS §40）；
+  带 BOM 的 `sync-models.ps1` 按 §39 保留 `EF BB BF` + LF。
+- **委派**：三路只读审计（接入链 / 门禁接线 / 官方档位语义）分片落在
+  `.work/evidence/agent-*.md`，self-report 未采信，按实际字节与行数验收。
+- **验收**：`py_compile` / PS1 `Parser::ParseFile` / `check-project.py`（全跑 +
+  `--stream-contract`）/ `check-docs.py` / `check-secrets.py` / `--changed --soft` 实跑 /
+  `git status`；未 git add / commit / push（用户未要求）。
+
+## 状态: 已完成
+
+- **增量闭环复核**：`--changed --soft --no-heal` 只打上次 9 个待复查模型，exit 0；Conatus（上次 502）与 Qwen-3.8-Max（上次超时）复通为 PASS，`latest.json` 仍保持 22 条全量视图，最终分布 PASS 17 / WARN 1 / FAIL 0 / SKIP 2 / EXEMPT 2 / RECOVERED 0。次日仍会自动重测 1 个 WARN、2 个 SKIP 与 2 个豁免模型。
+
+
+## 2026-11-10 · 去掉 Gemini 反代 + 主力内 Gemini 模型清零 + 记忆/文档清理（用户 m00001）
+
+- **去掉了**：`zgate.json` 的 CP upstream / cliproxyapi child、`third-party/cliproxyapi/`（可逆移入 `.work/cliproxyapi-removed-20261110/`）、Go 五文件 CP 凭据与 `/health` 第六段、运行时三份配置里的 4 个 Gemini 型号与 `cp:` legacy 键、`docs/MODEL-PROVIDERS.md` §4.11 整节、5 篇 CP/Gemini 专述 Document（归档保留原始）。
+- **更新了**：`tools/model_alias.py` 主力只留 DeepSeek、生成器去 CP 分支；`tools/check-project.py` 加 5 条防回退 STALE 并把 8317 断言翻成残留检测；门面 12 篇统一 5 upstream / 2 child；2 篇现行记忆句改写 + `index.json` 7 条元数据同步；CHANGELOG `[未发布]` 追加本批记录。
+- **修复了**：门面旧口径（6 upstream / 3 child / 8317）与真值 5 / 2 不一致；「主力=DeepSeek+Gemini」过期结论。
+- **委派**：三路写域（Go / 文档 / 记忆）并行；文档子代理零产出按 §7 由 lead 接管，Go 与记忆分片按实际文件与构建/门禁输出验收，不采信 self-report。
+- **验收**：`python -m py_compile tools/model_alias.py tools/check-project.py` exit 0；`python tools/check-project.py` / `check-docs.py` / `check-secrets.py` exit 0；Go `build/test/vet/gofmt` exit 0；`node ~/.dsh/tools/check-memory-hygiene.mjs` exit 0；`~/.zcode/v2/*.json` 与 cordis 主力组 Gemini 零命中；未重启网关、未 git add/commit/push。
+
+## 状态: 已完成
+
+
+## 2026-11-10 · Iceman 看不到思考：加密分流透明重抽 + 展示层展开（用户 m00912）
+
+- **优化了**：`cordis.patch.yml` 的 `ui-chat` 由 `standard / completion / final` 改成 `verbose / next-input / all`，`ui-skin-claude-style` 加 `reasoningDisplay: continuous`；刷新 GUI 即生效，`dsh_sync.py` 只重写 `llm-pi-ai` 段不会覆盖。
+- **更新了**：`config.go` 零值禁用 `ReasoningGuard` + `zgate.json` 只圈 Iceman；`router.go` 在 `doForwardWith` 写头前探测首包，B 格式直接关流透明重抽同一跳（上限 3 次、沿用原 headers）；`model_stream_check.py` 加 `ENC` 列与加密分流标注、顺带修 YAML 1.1 裸 `off` → bool 的 `TypeError`；`check-project.py` 六处接线扩到七处并复核报告标注；MODEL-STREAM / PITFALLS §41 / TROUBLESHOOTING §17 / TOOLS / README / CHANGELOG 同步。
+- **修复了**：上游同别名随机只给 `reasoning.encrypted` 时 GUI 思考块留空、正文两行步进一节一节出；探针不再把该分流含糊判成模型故障。
+- **委派**：三路只读审计（GUI 运行时 / 思考字段渲染 / 上游资料）全部落盘验收，C 路失败分片由 lead 接管；30 次交错采样定案 B 与参数、耗时均无关。
+- **验收**：`go vet` / `go test` 全绿，新增 `reasoning_guard_test.go` 7 项 PASS；`py_compile` / `check-project.py` / `--stream-contract` / `check-docs.py` / `check-secrets.py` 全 exit 0；探针实跑 Iceman 307 块 / 1404 思考 / ENC=1，离线 B 格式 `judge()` 正确标注。`build.py --candidate` 编出含守卫候选 exe，隔离端口 17871 + 假上游端到端 PASS（B 首包即时重抽 2 次调用 / 0.00s、A 原字节续上不丢块）。线上 7871 的 `zgate.exe` 仍是旧二进制（PID 17852 未动、不含守卫代码），会话内按 §6 未重启长驻网关；配置层刷新 GUI 即生效，网关层换版按 TROUBLESHOOTING §16.2 执行。
+
+## 状态: 已完成
+
+## 2026-11-10 · 守卫二次修复：换连接+换会话重抽、auto 适配、SSE 心跳与 Content-Length（用户 m00164）
+
+- **根因（前两版为什么白修）**：① 重抽沿用原 headers「保 `X-Opencode-Session`」+ keep-alive 连接，上游按会话/连接粘后端，3 次重抽全落回同一路加密后端；② 上游 SSE 自带 `Content-Length` 时，守卫丢首段/插提示/掺心跳改了长度，写端报 `http: wrote more than the declared Content-Length` 直接断流（客户端 200 却 0 字节）；③ 思考期静默 51.9 秒无心跳，中间层与宿主判空闲。
+- **优化了**：重抽每次 `req.Close = true` + 会话头追加 `#r<N>-<随机>`（默认上限 5）；`reasoningGuard.mode` 新增 `"auto"` 并已切到 auto，同类模型不再依赖 `models` 白名单；新增按模型学习表（`giveUpAfter` / `giveUpForSeconds`，连续全程加密就短暂停手、到期自动复探）与达上限提示注入（`injectNotice`，流首插一条 `reasoning_content`）；新增 `streamIdleHeartbeatSec`（缺省 15，负数关），空闲补 `: zgate keepalive`。
+- **修复了**：事件流一律 `w.Header().Del("Content-Length")` 交 `net/http` 按 chunked 重新分帧；心跳只对事件流生效（非流式一律不掺，否则毁 JSON 报文）；`zgate.json` 同步 mode auto / maxRetries 5 / injectNotice / giveUp* / streamIdleHeartbeatSec。
+- **委派**：本轮为单写域串行修复（同一函数内相互依赖的守卫逻辑），按 §7 白名单「依赖链必须串行」不派子代理；证据全部落盘在 `gateways/zgate/.work/` 与 `%TEMP%\zgate-iso2-*`（临时目录收尾即删）。
+- **验收**：`gofmt` / `go build ./...` / `go vet ./...` exit 0；`go test ./internal/router` 12 项 + `./internal/config` 2 项 PASS（`internal/supervisor` 两例失败是 Windows TempDir 清理占用，与本轮无关）；隔离实例 17881 + 带 `Content-Length` 的假上游实测两条路径：首跳加密 → 客户端拿到明文 `reasoning_content` 且加密首跳「春天是」未泄漏、`attempts.log` 显示二次调用会话 `#r1-*` 且 `Connection: close`；始终加密 → 200 + 597 字节（提示 + 正文，修前此处 0 字节断连）。`check-docs.py` 39 篇 / `check-project.py` 8 项 exit 0。
+- **换版**：`python gateways/zgate/build.py --candidate` 产出 `zgate.candidate.exe`（Subsystem=2 GUI）。线上 7871 仍是 PID 7568 / mtime 2026-11-10 11:28 的旧二进制，按 §6 与用户硬规则**会话内不重启长驻网关**，换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`（或 TROUBLESHOOTING §16.2 流程）。
+
+## 状态: 已完成
+
+### 换版后复验与日志补模型名（2026-11-10 13:0x）
+
+- **换版核实**：`gateways/zgate/zgate.exe` mtime 2026-11-10 12:59:27、sha256 前 12 位 `b14a25239f1a`，与 `zgate.candidate.exe` 完全一致；进程 PID 27360（12:59:31 起），二进制里 `换连接+换会话重抽` / `达上限放行最后一次` / `zgate keepalive` / `上游本次只下发加密思考` / `streamIdleHeartbeatSec` 五处字符串均在位 → 线上确是含守卫的新版。
+- **真机命中**：`zgate.log` 13:05:28 出现首次新版文案 `上游返回加密思考分流（零明文 thinking delta），换连接+换会话重抽 1/5`，随后无「达上限」WARN，说明换连接+换会话后第一跳就拿到了明文。
+- **活体流式复验**（直连 7871，三组）：Iceman `max_tokens 400` → 187 块 / 927 字思考逐 token 出、最大间隔 5.66s；`max_tokens 800` → 333 块 / 1558 字思考 + 77 字正文 / `finish=stop` / 最大间隔 4.86s；`DeepSeek-4.1-Flash` 带 `reasoning_effort` 与不带各一发均 `firstKind=reasoning`、无守卫重抽（无假阳性），心跳注释行按需出现。
+- **未知即盲区**：13:05:28 那条命中日志没写模型名，并发多模型时无法归因 —— 给两条守卫日志补 `模型 %q`（`router.go:635` / `:652`），`gofmt` / `go build ./...` / `go vet` exit 0，`internal/router` + `internal/config` 全 PASS；重新构建候选 `zgate.candidate.exe` sha `e2e3e6f73022`（10549248 B，Subsystem=2）。日志改动不影响行为，**下次重启自然生效**，线上当前二进制仅缺这一处日志字段。
+- **文档同步**：`docs/TROUBLESHOOTING.md` §17 第 3 步标明日志行带上游模型名；`CHANGELOG.md` 该节补「日志可定性」并把「线上仍是旧二进制」改成「已换版（12:59，sha 同候选，PID 27360；换版后已命中 1/5）」。
+
+## 状态: 已完成
+
+### 守卫第三次修复：网关替客户端补思考档位（2026-11-10 13:1x）
+
+- 真因：DSH 请求体不带 reasoning_effort（catalog 无 reasoning.defaultEffort → Default 伪档位），guardApplies 首行 !reasoningExpectsThinking(body) 直接 false，守卫从未触发；zgate.log 13:10 两条请求零守卫行。
+- internal/config/config.go：ReasoningGuard 增 forceEffort / forceEffortModels（含注释说明为何放网关而不打前端补丁）。
+- internal/router/router.go：新增 injectThinkingEffort()，doForwardWith 循环前替换 body；客户端自带 reasoning_effort（含 off）或 thinking 一律不动。
+- zgate.json：reasoningGuard.forceEffort = high，forceEffortModels = [Iceman, iceman-contributor-free]。
+- 测试：新增 internal/router/reasoning_force_test.go（TestInjectThinkingEffort 7 条边界 + TestReasoningGuardForcesEffortThenRedraws 全链路）；internal/config/config_test.go 接线断言补 forceEffort。
+- 验收：gofmt / go build ./... / go vet ./... exit 0；internal/router 14 项、internal/config 2 项 PASS；隔离实例 17871 直连真上游，与 DSH 同形请求（无 reasoning_effort）两发：补档日志 2 条、reasoning_content 226 / 202 块、801 / 714 字明文思考、最大间隔 2.9s。
+- 文档：CHANGELOG「守卫第三次修复」、TROUBLESHOOTING §17 第 6 步、PITFALLS §41 三次修复条目。
+- 待办：线上 7871 仍是旧二进制，换版由用户执行 tools/zgate-lifecycle/restart-zgate.cmd。
+
+[[TASK_ALL_DONE]]
+
+---
+
+## 批次：beam / Conatus / Claude-Haiku-5.5 误删与桥接 403 不回落（2026-11-10 13:10）
+
+### 根因（两条链，都已实锤）
+
+| 编号 | 现象 | 根因 | 证据 |
+| --- | --- | --- | --- |
+| A | 客户端拿 `RegionError 403`（beam-free 直连） | 12:02 那次 `model_alias.py --apply` 把 Beam / Conatus / Claude-Haiku-5.5 从 provider_config + alias map 删掉，zgate 查不到别名就走 `routeFallback` 单跳直连 opencode 基址，无机场跳 | zgate.log `model=beam-free -> opencode` 无 (n/m) 跳号 |
+| B | 为什么被删 | 12:00:31 换版重启把在途探活打断：beam-free / qiniu-conatus 记 `error`（WinError 10054），claude-haiku-5-5 的 403 被 `"unavailable" in text` 误判成下架；`--probe-file` 过滤只留 ok / 部分 transient，三条一起消失 | sync-20261110-120002.log「跳过：Beam (probe error)」 |
+| C | Claude-Haiku-5.5 恢复后仍 403 且不回落 | messages 桥接跳只回 `Upstream request failed: Endpoint is unavailable.`（bridge 包一层 `bridge upstream error: `），不含 RegionError / country，`regionBlocked` 四个 marker 全不匹配 → 不冷却、不回落 | zgate.log 12:55:23 只有 (1/2)，无「地区受限」无 fallback |
+
+### 修复
+
+- `tools/model_probe.py` `classify()`：删掉 `"unavailable" in text` 通配；403 及权限类文案一律 `blocked`，只有 404 / model not found 类才 `unavailable`。
+- `tools/model_alias.py`：`transient` 加 `blocked`；`error` 不看 `ever_ok` 一律保留；旧账本里 `status=unavailable & http=403` 按 `blocked` 处理（历史账本不能判型号死刑）。
+- `gateways/zgate/internal/router/router.go` `regionBlocked()`：追加大小写不敏感 marker `endpoint is unavailable`（仍受 403/400 门槛约束）。
+- `gateways/zgate/internal/router/router_test.go`：新增 `TestBridgeEndpointUnavailable403FallsBackToAirportTwin`、`TestBridgeClient400IsNotRegionBlocked`；前者在回退 marker 时会 FAIL（已实测抓到），后者守住真正的客户端 4xx 不被误判。
+- 配置恢复：以 `.work/fixtures/provider_config.pre-alias-120243.json` + `alias-seed.json`（当前表 + 旧表三条）先夹具复算、再真实路径 `--apply --arena`，18 个模型回归（免费 5 / 省钱 12）。
+
+### 验收
+
+- `go vet ./internal/router/` 干净；`go test ./... -count=1` 全包 ok（alias / bridge / config / router / supervisor）。
+- `python tools/check-project.py` 8 项全通过。
+- `model_alias.py --check --arena --probe-file <12:02 旧探活账本>` → 18 个模型全留、输出「无漂移」，且 provider_config / alias map 未被改写。
+- 线上（PID 27360，12:59:31 启动的二进制内含 `endpoint is unavailable` marker）：`Beam` 200（直连冷却 → 2/2 机场跳）、`Conatus` 200、`Claude-Haiku-5.5` 200（日志「地区受限（HTTP 403），冷却 30m0s」→ (2/2) 200）；裸名 `beam-free` / `claude-haiku-5-5` 同样 200，`/v1/models` 含三条显示名。
+- 已知上游限制（非本 bug）：`qn:qiniu/conatus-free` 免费型号会回 429「Too many requests for this free model」，冷却后重试即可。
+
+[[TASK_ALL_DONE]]
+
+---
+
+## 批次：守卫第四次修复 —— 探针设时限 + 窗口期直通（2026-11-10 14:00）
+
+### 现象与真因
+
+| 项 | 内容 |
+| --- | --- |
+| 现象 | 换到含第三次修复的二进制后，Iceman 仍看不到思考，且整轮 85 秒 0 字节，用户手动点停止 |
+| 真因 1 | `probeReasoningStream` 只在**第一个正文 delta** 时返回 `streamEncrypted`；加密那一路思考阶段整段静默（无明文 `reasoning_content`、无正文），判定延迟 = 那一次尝试的整段思考时长（日志两次判定隔 61 秒） |
+| 真因 2 | 重抽预算花完的最后一发仍用无上限探针，再叠一段空等 |
+| 真因 3 | `guardInSkip` 命中就续期，窗口期过去也探不回来；进跳过表的条件「从未见过明文」在真机永远不成立 |
+| 真因 4 | 提示文案把「探针超时」写成「上游只回加密思考」，重抽后其实拿到明文时界面/日志自相矛盾 |
+
+### 改动
+
+- `gateways/zgate/internal/config/config.go`：`ReasoningGuard` 新增 `ProbeSeconds`（缺省 12，负数=不设上限），注释说明「加密那一路只有第一个正文块才判得出来」。
+- `gateways/zgate/internal/router/router.go`：守卫块改三分支 switch（跳过期直通 / 预算花完直通 / 按 `probeSeconds` 探测）；新增 `probeReasoningStreamDeadline`、`guardWanted`、`guardInSkip`、`guardTimeoutNoticeSSE`；`guardInSkip` 到期清计数；`guardNoteEncryptedOnly` 进入条件改为「自上一条明文以来连续 N 轮失败」；提示与日志按成因分开写。
+- `gateways/zgate/zgate.json`：`maxRetries 1` / `probeSeconds 15` / `giveUpAfter 1`（`maxProbeBytes` / `giveUpForSeconds` / `forceEffort` 不变）。
+- `gateways/zgate/internal/router/reasoning_probe_timeout_test.go`（新）：探针超时、明文不超时、静默重抽拿到明文、跳过期直通、跳过期到期复探，共 5 项。
+
+### 验收
+
+- `gofmt -l` 空；`go vet` exit 0；`go test -count=1 ./...` 全包 ok（router 19 项 / config / alias / bridge / supervisor）。
+- `python build.py --candidate` → `zgate.candidate.exe`（PE Subsystem 2 / GUI，10,570,752 字节）。
+- 隔离实例 `%TEMP%\zgate-iso-probe`（真二进制 + 假上游：第 1 发静默 3 秒吐加密、第 ≥2 发立即吐明文）：首轮 1,263 ms 拿到明文思考（1 秒超时 → 重抽 1 次），第二轮 2 ms 直通 + 跳过提示；`attempts.log` 2 次调用；日志含 `内没有可判定的思考信号（上游静默）`、`连续 1 次探测超时`、`跳过期内，直接放行`。
+- 文档：CHANGELOG「守卫第四次修复」、PITFALLS §41 四次修复、TROUBLESHOOTING §17 第 3 / 7 步。
+
+### 待办
+
+- 线上 7871 仍是旧二进制，换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`（会话内不重启长驻网关）。
+
 [[TASK_ALL_DONE]]

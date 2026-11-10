@@ -346,6 +346,11 @@ if ($script:LastCode -ne 0) {
     Say "DSH patch 已是最新"
 }
 
+# ---- 流式准入探针（模型进表即自动纳入，无需人工逐个测试） ------------------
+# --changed 只测新增 / 档位变更 / 上次非 PASS 待复查；--soft 不阻断流水线。
+# 活体探针只在本机每日同步链尾跑，CI / pre-commit 走离线守卫 check-project.py。
+Invoke-Py "流式准入探针" @("tools/model_stream_check.py", "--changed", "--soft") -Soft
+
 # ---- 五、同步报告 --------------------------------------------------------
 Say "----- 五、同步报告 -----"
 if ($Push) {

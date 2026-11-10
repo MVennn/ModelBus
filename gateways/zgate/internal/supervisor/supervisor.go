@@ -347,6 +347,18 @@ func (s *Supervisor) stopChild(name, reason string) {
 	if k := s.kids[name]; k != nil && k.proc == proc {
 		k.proc = nil
 		k.ready = false
+		// 句柄在这里同步关掉：watch 要等 Done 才异步关，Stop 返回后调用方
+		// 可能立刻删日志目录（测试的 t.TempDir 就是），抢先一步会撞上
+		// 「file is being used by another process」。watch 抢到锁时会看到
+		// k.proc 已置空而直接返回，两条路径都不会二次关闭。
+		if k.outFile != nil {
+			_ = k.outFile.Close()
+			k.outFile = nil
+		}
+		if k.errFile != nil {
+			_ = k.errFile.Close()
+			k.errFile = nil
+		}
 	}
 	s.mu.Unlock()
 }

@@ -52,7 +52,6 @@
 | Qoder 网关 key | 环境变量 **`QD_API_KEY`**（也可用 git-ignored 的 `providers/qoder/.env.local`） |
 | 千问直连 | 环境变量 **`QWEN_API_KEY`** / **`QWEN_BASE`** |
 | 七牛云 AI 网关 | 环境变量 **`QINIU_API_KEY`** |
-| CLIProxyAPI（CP，`8317`） | 环境变量 **`CLIPROXY_API_KEY`** |
 
 > ✅ `providers/opencode-go/probe/` 下的 `probe_models.py`、`probe_protocols.py`、
 > `bench_models.py`、`bench_clean.py`、`thinking-off-probe.js` 已统一读 `OPENCODE_GO_KEY` 环境变量；

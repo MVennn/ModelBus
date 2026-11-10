@@ -242,7 +242,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 | 周期 | 动作 |
 |---|---|
-| **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_zcode_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply`；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
+| **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_zcode_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply` → `model_stream_check.py --changed --soft`（④ 尾，带 `-Soft` 不阻断流水线；只测新增 / 档位变更 / 待复查，见 [MODEL-STREAM.md](MODEL-STREAM.md)）；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
 | **每天（可选，全量体检）** | `python tools/model_probe.py` → `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；定时任务不跑全量 probe，各 sync 自带定向探测。规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6 |
 | **峰谷价切换** | 不额外注册 08:00 / 22:00 峰谷任务：`--slot auto` 在每天 12:00 运行时按当前时刻取价，下一次同步自然纠正（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1 与「现行自动切换」段） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
@@ -250,6 +250,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | **2026-11-30 前后** | 七牛 `qiniu/conatus-free` 的限时免费到期：`QN_FREE_UNTIL` 会让该跳自动消失，只需跑一次 `python tools/model_alias.py --slot auto --apply` 确认免费组只剩 4 条。想续用就换其它 `-free` 模型（[QINIU.md](QINIU.md) §3） | 详见 [QINIU.md](QINIU.md) |
 | **每月 / 千问额度到期前后** | 千问已被降级为「主力链尾跳」：集合体与单型号都已下线（2026-10-29，理由见 [QWEN.md](QWEN.md) §4.5）。只需确认主力链的 `QW` 尾跳还在（`model_alias.py --check` 无漂移即可）；¥300 预付额度到期（2027-10-28）后 `QW_CREDIT_UNTIL` 会让该跳自动消失 | 详见 [QWEN.md](QWEN.md) §3、§4.6.1 |
 | **每次接入新供应商** | 照 §1.1 的通用做法写一份取数脚本 + 在 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的表里补一行；凭据按 [SECRETS.md](SECRETS.md) §2、§3.5 加环境变量 |
+| **每次新增模型（自动，无需人工测试）** | 模型只要进 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 表，每日 12:00 同步链尾的 `model_stream_check.py --changed --soft` 就自动纳入并实测流式 / 思考 / 输出 / TPS；离线守卫 `check-project.py --stream-contract` 守住接线不被拆。规则见 [MODEL-STREAM.md](MODEL-STREAM.md) |
 | **每次改动脚本** | 同步 [TOOLS.md](TOOLS.md) 的工具表 |
 | **每次新增 / 删除文档** | 同步 [docs/README.md](README.md) 索引（孤儿文档零容忍） |
 | **每次踩新坑** | 写进 [PITFALLS.md](PITFALLS.md)；有对应排错条目的同步 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
@@ -275,18 +276,17 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 ## 8. 网关生命周期（zgate）
 
-2026-10-23 起，6 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
-它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 6 条上游（OC / WB / QD / QW / QN / CP），
-并按策略拉起 / 回收 3 个本地子进程（workbuddy 7863 / qoder 8790 / cliproxyapi 8317）：
+2026-10-23 起，5 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
+它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 5 条上游（OC / WB / QD / QW / QN），
+并按策略拉起 / 回收 2 个本地子进程（workbuddy 7863 / qoder 8790）：
 
 | 上游 | 端口 | 谁在跑 | 策略 |
 |---|---|---|---|
 | OpenCode-Go（OC）/ Qwen（QW）/ Qiniu（QN） | 远程 | — | 直连，无本地进程 |
 | WorkBuddy（`wb2api`） | 7863 | zgate 的子进程 | `ondemand`：首个 WB 请求时拉起，空闲 300 秒回收 |
 | Qoder（QD，`qoder_proxy.py`） | 8790 | zgate 的子进程 | `ondemand`：同上，随用随拉 |
-| CLIProxyAPI（CP，`cli-proxy-api.exe`） | 8317 | zgate 的子进程 | `ondemand`：`windows` 为空，纯按需，首个 CP 请求时拉起 |
 
-三个子进程都**不常驻**：没人用就一个都不起，zgate 自己只占约 19 MB。
+两个子进程都**不常驻**：没人用就一个都不起，zgate 自己只占约 19 MB。
 签到 / 保活这类定时任务靠 `children.*.windows` 兜底 —— 窗口内按 `always` 处理，
 窗口结束后若没有请求，再按 `idleSeconds` 回收：
 
@@ -297,7 +297,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 策略与窗口写在 `gateways/zgate/zgate.json`，改完用 `zgate.exe reload` 热加载
 （新增子进程、监听地址、alias map 路径仍要重启；上游 base / 凭据可在 reload 里热加载）。
-子进程装在 **Job Object** 里，zgate 崩溃或被结束时会一起收掉，不会留下占着 7863 / 8790 / 8317 的孤儿。
+子进程装在 **Job Object** 里，zgate 崩溃或被结束时会一起收掉，不会留下占着 7863 / 8790 的孤儿。
 
 ### 8.1 日常命令
 
@@ -383,7 +383,7 @@ zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登�
 
 ### 8.4 上游 clone 的更新
 
-WorkBuddy / Qoder 两个上游仍是**独立 clone**，整目录被主仓 `.gitignore` 排除（含账号凭据与运行时状态）；CLIProxyAPI 落在 `third-party/cliproxyapi/`，CP 凭据键名见 [SECRETS.md](SECRETS.md) §3.5。
+WorkBuddy / Qoder 两个上游仍是**独立 clone**，整目录被主仓 `.gitignore` 排除（含账号凭据与运行时状态）。
 
 | 场景 | 命令 |
 |---|---|

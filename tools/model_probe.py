@@ -12,8 +12,8 @@ Status vocabulary (same as the Qoder probe):
     ok / fallback / queued / rate_limited / blocked / unavailable / timeout / error
 
 `ever_ok` is preserved across runs. `tools/model_alias.py --probe-file` keeps a
-previously working model through a transient queue/timeout and removes a model
-that has never answered.
+previously working model through a transient queue/timeout/blocked/error and
+removes only a model the upstream explicitly says is gone (`unavailable`, 404).
 
 Each record also carries `resp_model` / `quota_model` / `credit` taken from the
 upstream reply: one display id can hide different real models (hy4-free vs hy4 vs
@@ -154,10 +154,18 @@ def classify(http: int | None, detail: str, error: str) -> str:
         return "rate_limited"
     if http == 429 or "rate limit" in text or "6004" in text:
         return "rate_limited"
-    if http == 404 or "not found" in text or "unavailable" in text:
-        return "unavailable"
+    # HTTP 状态码先于文本判定：opencode 把地区/权限拒绝包在
+    # "Endpoint is unavailable." 这类话术里（经 zgate 桥接后 body 只剩
+    # "bridge upstream error: Upstream request failed: Endpoint is unavailable."），
+    # 按文本匹配 "unavailable" 会把「这条出口进不去」误判成「型号下架」，
+    # 再被 model_alias --probe-file 摘掉。2026-11-10 12:02 Claude-Haiku-5.5
+    # 就是这样从配置里消失的。
     if http == 403 or "not allowed" in text or "permission" in text or "user type" in text:
         return "blocked"
+    # 只有「上游明确说没有这个型号」才算下架。404 是权威信号；文本只在
+    # 明确点名型号不存在时才算，避免把 endpoint / region 的话术算进来。
+    if http == 404 or "model not found" in text or "no such model" in text or "unknown model" in text:
+        return "unavailable"
     return "error"
 
 

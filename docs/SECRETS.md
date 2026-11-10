@@ -122,8 +122,6 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 | **`QWEN_API_KEY`** | `providers/qwen/qwen_zcode_sync.py`、`gateways/zgate`（缺省回退 `providers/qwen/.env.local`） | 无 | 脚本明确报错退出；路由的千问渠道 502 |
 | **`QWEN_BASE`** | `providers/qwen/qwen_zcode_sync.py` | `https://maas.qianwenaiapi.com/apps/anthropic/v1` | 用默认值（**必须带 `/v1`**：桥会直接拼 `/messages`） |
 | **`QINIU_API_KEY`** | `gateways/zgate`（`QN` 上游的 `keyEnv`，给七牛云 AI 网关鉴权） | 无 | 明确报错退出；路由对应上游 502 |
-| **`CLIPROXY_API_KEY`** | `gateways/zgate`（`CP` 上游 `127.0.0.1:8317/v1` 的 `keyEnv`，给 CLIProxyAPI 鉴权） | 无 | 明确报错退出；路由对应上游 502 |
-| `CLIPROXY_ACCESS_KEY` | `third-party/cliproxyapi/cliproxy.env` → `gateways/zgate`（`CP` 上游缺 `CLIPROXY_API_KEY` 时的回退文件，CLIProxyAPI 自身约定的键名） | 无 | 与 `zgate.json` 的 `keyEnv=CLIPROXY_API_KEY` 是**不同来源、非笔误**：环境变量主路径 + 第三方文件回退 |
 
 ### 3.6 Qoder（qoder2api-hub）
 

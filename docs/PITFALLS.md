@@ -765,3 +765,37 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   再用 `[System.Management.Automation.Language.Parser]::ParseFile` 复核语法。
   判据是 `head -c 3 | xxd` 必须显示 `efbbbf`。`.py` / `.sh` 不要 BOM，别顺手加。
 
+
+## 40. 去掉 Default 伪档位后，省略 reasoning_effort 会让 Iceman 丢思考、正文聚成整块 【实例 A】
+
+- **现象**：`dsh-claude-style` 0.20.1 的 `lib/client.js` 在模型没显式指定默认档位时，
+  往档位列表最前面塞一个 `id=undefined / name="Default"` 占位；用户不选档就选中它，
+  `c()` 组装请求时**完全不带 `reasoning_effort`**。Iceman（`iceman-contributor-free`）
+  在这个缺省下要么吐不出思考 chunk、要么把正文攒成一大段拖出来，21:0x 实测 11 块 /
+  0 字思考，21:44 同链路 79 块 / 298 字，缺省行为随上游漂移。
+- **根因**：请求缺 `reasoning_effort` 时把「用哪个档」交给上游决定；上游对推理型的
+  缺省不稳定，思考字段与流式分块都跟着变。关思考也不能靠 `off / wire=disabled`
+  —— 实测该组合直接回 `HTTP 422 Unprocessable Entity`。
+- **怎么避**：档位一律取**官方文档里给到的真实档位**，
+  `~/.dsh/tools/patch-claude-style-effort.mjs` 把 `ki()/M()/h()/c()` 改成
+  effort 为空时取 `model.reasoning.efforts` 末位（与宿主 `THINKING_LEVELS` 固定序一致），
+  删掉 `Default` 占位并让 `directory.select()` 显式写入官方 effort。
+  探针同档位大预算补测与自动准入规则以 [MODEL-STREAM.md](MODEL-STREAM.md) §3 为正本，
+  本节只记坑，不重复定义机制。
+- **验证**：补测后 Iceman 414 块 / 1733 字思考 / 103 字正文 / 11 最大块间隔，PASS；
+  `--check` 复查 `ALREADY_PATCHED (no write)`。改带 BOM 的 `sync-models.ps1` 挂探针钩子时
+  按 §39 补回 `EF BB BF`，否则计划任务里 PS5.1 按 GBK 读会乱码跑挂。
+
+## 41. 上游同一别名随机只给加密思考，Iceman 界面看不到思考 【实例 A】
+
+- **现象**：显式 `reasoning_effort: high` 也会随机只回正文 + `reasoning_details[type=reasoning.encrypted]`，`reasoning_content` 零增量；30 次交错采样里 B 与请求参数、耗时都无关（2.02s–86.36s 都有），GUI 思考块空白、正文一节一节出。
+- **根因**：`iceman-contributor-free` 上游双后端分流：A 吐明文 `reasoning_content`（pi-ai 转 `thinking_delta`）；B 只吐 opaque replay blob。宿主 `@earendil-works/pi-ai/dist/api/openai-completions.js:172-173,416-428` 把 `reasoning_details` 当 replay 元数据，只写 `block.thinkingSignature`、不写 `block.thinking`、不推 delta；UI `blockIsVisible` 跳过空 reasoning。叠加 `transcriptView: standard / collapseTiming: completion / foldedReplies: final` 整轮折叠与 `reasoningDisplay: stepped` 两行步进。C2 负证据：查不到解密或强制明文的请求参数，8 类参数 ×5 轮全部照样命中 B。
+- **怎么避**：三层各管一段 —— ① 展示层 `cordis.patch.yml` 的 `ui-chat` 改 `verbose / next-input / all`、`ui-skin-claude-style` 加 `reasoningDisplay: continuous`（刷新 GUI 生效）；② 网关层 `zgate.json` 的 `reasoningGuard` + `router.go` 首包判定，命中 B 直接关流透明重抽同一跳，**改 Go 必须按 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16.2 换版二进制**；③ 探针识别口径以 [MODEL-STREAM.md](MODEL-STREAM.md) §3 / §4 为正本。回退：守卫零值=禁用，删 `reasoningGuard` 段即恢复原透传。
+- **二次修复（2026-11-10 下午，前两版修完仍看不到思考的真因）**：三条，缺一条都白修。
+  1. **重抽必须换连接 + 换会话**：首版重抽沿用原 headers「保 `X-Opencode-Session`」+ keep-alive 连接，而上游是按会话/连接粘后端的 —— 3 次重抽全落回同一路加密后端，达上限放行的还是加密流（`zgate.log` 里 3 条「透明重抽同一跳 1/3..3/3」紧接着 WARN「达上限放行最后一次」就是这个形态）。现改为每次重抽 `req.Close = true` + `X-Opencode-Session` 追加 `#r<N>-<随机>`（原值留在前缀里便于排查），默认重抽上限提到 5。
+  2. **SSE 改长度时必须摘掉上游的 `Content-Length`**：上游事件流自带 CL 时，守卫丢弃首段、插提示、掺心跳都会改长度，写端直接报 `http: wrote more than the declared Content-Length` 并断流 —— 客户端拿到 200 却 0 字节，表现是「连上了但什么都没有」。修法：`copyHeaders` 之后对事件流一律 `w.Header().Del("Content-Length")`，交给 `net/http` 按 chunked 重新分帧。
+  3. **思考阶段静默要喂心跳**：上游思考停顿实测 51.9 秒，中间层与宿主会判空闲。`streamIdleHeartbeatSec`（缺省 15，负数关）控制空闲多久补一行 `: zgate keepalive` 注释；非事件流一律不掺（否则会毁掉 JSON 报文）。
+- **同类模型免配置适配**：`reasoningGuard.mode` 缺省按「有没有 `models` 白名单」决定，显式写 `"auto"` 时**不看白名单** —— 凡是客户端声明要思考（`reasoning_effort` / `thinking=enabled`）的流式请求都走探针，新增匿名代号模型不用再改配置；配合按模型学习表（连续 `giveUpAfter` 轮重抽到上限仍是纯加密且从未见过明文 → `giveUpForSeconds` 内不再白等，到期自动复探）。达上限时 `injectNotice` 会在流首插一条 `reasoning_content` 提示，GUI 至少显示「上游本次只下发加密思考」而不是空块。
+- **验证**：`go test ./internal/router` 12 项 PASS（首包判定四形态、白名单 / off / 禁用、auto 模式覆盖陌生模型、重抽必须换会话且 `Connection: close`、上限放行注入提示、学习表跳过、心跳写入、非流式不掺心跳、带 `Content-Length` 的上游形态）；`internal/config` 2 项 PASS（JSON 接线 + 缺省值）；`gofmt` / `go build` / `go vet` 全 exit 0（`internal/supervisor` 两例失败是 Windows 临时目录清理占用，与守卫无关）。隔离实例实测（`%TEMP%\zgate-iso2-*`，假上游带 `Content-Length`）：首跳加密 → 客户端拿到明文 `reasoning_content`、加密首跳一字未泄漏、`attempts.log` 显示第二次调用会话变成 `#r1-*` 且 `Connection: close`；始终加密 → 200 + 597 字节 = 提示 + 上游正文（修前这里 0 字节断连）。探针 `ENC` 列与 `check-project.py --stream-contract` 七处接线 exit 0。
+- **三次修复（2026-11-10 傍晚）：守卫压根没上场**。换版后用户复测仍「看不到思考 + 一节一节」，而 zgate.log 里那两条请求**一个守卫行都没有** —— 不是重抽失败，是触发条件不成立：guardApplies 首行 !reasoningExpectsThinking(body)，而 DSH 的模型选择器没有逐模型默认档位（catalog 的 reasoning.defaultEffort 为空 → 选的是 Default 伪档位），真实请求体只有 provider/model/maxTokens，**不带 reasoning_effort**。诊断入口：会话 session.v4.jsonl.zstd 的 request/header 记录里看 config 字段，没有 reasoningEffort 就实锤。修法：reasoningGuard.forceEffort + forceEffortModels，由 injectThinkingEffort 在转发前补档（日志「客户端未声明思考档位，按配置补 reasoning_effort=high」），补档后原有「换连接+换会话重抽」才会真正生效。**不要**再走给 dsh-claude-style/lib/client.js 打补丁的老路：该文件 2026-11-10 12:35 被重建后 11-09 的 effort 补丁整段消失（patch-claude-style-effort.mjs --check 报 NEEDS_REVIEW，六条锚点全归零），profile 每次重建都会重演。补档只影响「客户端没说话」的情况：显式 off / thinking 原样透传。
+- **四次修复（2026-11-10 傍晚）：探针把用户的等待放大了**。三次修完后守卫确实上场，但每个请求要空等 85 秒（用户手动点停止）。代码级原因有三层：① `probeReasoningStream` 只在**第一个正文 delta** 时返回 `streamEncrypted`，而加密那一路思考阶段整段静默（无明文 `reasoning_content`、无正文），于是"判定"的延迟就等于那一次尝试的整段思考时长（`zgate.log` 实测两次判定隔 61 秒）；② 重抽预算花完的最后一发仍用无上限探针，再叠一段空等；③ 跳过期命中就续期，窗口过去也探不回来。现网口径：`probeSeconds`（缺省 12）到点换连接重抽；重抽预算花完或处于跳过期时**不探测、直接放行上游原始流**并插一条按成因写的提示（超时说"探测超时"、`reasoning.encrypted` 才说"只回加密"）；`guardInSkip` 到期清计数再复探，进跳过表改成"自上一条明文以来连续 N 轮失败"。**诊断入口**：日志里出现 `内没有可判定的思考信号（上游静默）` = 探针超时在换连接，`连续 N 次探测超时` = 已放弃探测直接放行；两者都在 `probeSeconds` 附近出现即说明修复在位。参数联动：`probeSeconds` 要大于正常流的首字节耗时（明文实测最高 13.5 秒 → 配置 15），小了会把慢流误判成静默；`maxRetries` 大于 1 在窗口期纯属白等（12:01 连续 3/3、13:20 连续 2/2 都落回同一后端）。

@@ -356,8 +356,8 @@ schtasks /query /tn "ModelBus-zgate-hidden" /fo LIST; schtasks /query /tn "Model
 | `status` 的 Provider 段显示 key 缺失 | 四组没指向 7871，或 provider 里没有 apiKey：重跑 `python tools/model_alias.py --slot auto --apply`，或检查 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` |
 | 想彻底回到手动 | `zgate.exe uninstall` 移除自启；网关仍可用 `gateways/upstream/workbuddy/run.bat`、Qoder 用 `start-qoder-proxy.bat` 单独起 |
 
-> zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管 3 个子进程
-> （workbuddy / qoder / cliproxyapi，均 `ondemand` + `windows` 定时窗口兜底）。ZCode 最小化到托盘不影响任何进程，
+> zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管 2 个子进程
+> （workbuddy / qoder，均 `ondemand` + `windows` 定时窗口兜底）。ZCode 最小化到托盘不影响任何进程，
 > 这是预期行为。生命周期设计与配置项见 [MAINTENANCE.md](MAINTENANCE.md) §8。
 
 ---
@@ -554,6 +554,30 @@ curl http://127.0.0.1:7871/health
 **注意**：严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate —— 它们落在 CMD/DSH 会话的
 Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程消失）。机制与完整流程见
 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
+
+---
+
+## 17. Iceman 看不到思考、输出一节一节出 【实例 A】
+
+**现象**：开了思考强度，`Iceman` 界面仍完全看不到思考，正文一段一段拖出来；直连网关有时又能看到思考。
+
+**排查步骤**：
+
+1. 看探针 `ENC` 列：`python tools/model_stream_check.py --model Iceman --no-heal`；`THINK=0` 且 `ENC>0` = 上游加密分流，不是模型故障。
+2. 看展示配置：`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `ui-chat` 是否还是 `standard / completion / final`，`ui-skin-claude-style` 有没有 `reasoningDisplay`。
+3. 看网关守卫是否真生效：`zgate.json` 有 `reasoningGuard` 不等于二进制有新代码 —— 改过 Go 就必须换 `zgate.exe`（§16.2），`/admin/reload` 只热加载配置。守卫日志这几行就能定性：
+   - `上游返回加密思考分流…换连接+换会话重抽 1/5`：探针判定成功，正在重抽（行里带上游模型名，一眼能看出是哪个模型被判成加密分流）；
+   - 下一行 `连续 N 次加密思考，达上限放行最后一次` 之后的流首出现 `ⓘ 上游本次只下发加密思考`：上游这一段窗口全在加密后端，属上游行为；
+   - `模型 "iceman-contributor-free" 1s 内没有可判定的思考信号（上游静默），换连接+换会话重抽 1/1`：探针到 `probeSeconds` 还没信号，正在换连接重抽（加密那一路思考阶段整段静默，只有第一块正文才判得出来，所以必须设时限）；
+   - `连续 N 次探测超时（上游思考阶段静默），放行上游原始流` / `在「近期拿不到明文思考」跳过期内，直接放行（不再探测）`：这轮不再探测，客户端直接拿到上游原始流 + 一条提示（`ⓘ 本次思考探测超时…` 或 `ⓘ 该模型近期思考拿不到明文…`），正文照常输出；
+   - 完全没有这两行：要么模型没声明思考（`reasoning_effort` 空 / `off`），要么二进制是旧的（老版本日志写的是「透明重抽同一跳」）。
+4. 采样确认：同一请求连打 10 轮，A / B 与参数无关即上游分流，不要再调 `thinking` / `reasoning_effort`（8 类参数 ×5 轮已证无效）。
+5. **客户端 200 但 0 字节 / 流被掐断**：看网关日志有没有 `wrote more than the declared Content-Length`，有就是上游 SSE 自带 CL 而守卫改了长度 —— 现代码对事件流一律摘 CL 走 chunked，仍复现说明二进制是旧的。
+6. **守卫一次都没触发**（日志里只有 `POST … model=Iceman`，没有重抽行）：先看宿主真实请求体有没有 `reasoning_effort` —— 会话 `session.v4.jsonl.zstd` 的 `request/header` 里 `"config"` 只有 provider/model/maxTokens 就是没有。守卫的触发条件是「客户端声明要思考」，DSH 的 "Default" 伪档位不声明，于是守卫连上场机会都没有。现网关注解：`zgate.json` 的 `reasoningGuard.forceEffort: "high"` + `forceEffortModels` 让网关替客户端补档（日志 `客户端未声明思考档位，按配置补 reasoning_effort="high"`）；补档后守卫才会接管加密分流。显式关思考（`off`）不受影响。
+7. **每个请求都要先空等十几秒才出字**：正常流被 `probeSeconds` 误判成静默了。看日志有没有 `内没有可判定的思考信号（上游静默）` —— 有就说明探针没等到首块。先量正常流的首字节耗时（`tools/model_stream_check.py` 的 TTFB），把 `reasoningGuard.probeSeconds` 调到明显大于它（现配置 15，明文实测最高 13.5 秒）；窗口期把 `maxRetries` 调大的做法无效，重抽几乎必然落回同一后端，只会让用户多等。想完全关掉这套探测就把 `probeSeconds` 设负数并把 `maxRetries` 设 0。
+8. **新模型也这样怎么办**：不用改 `models` 白名单，`mode: "auto"` 已覆盖「客户端声明要思考」的所有流式请求；真要停手只把 `giveUpAfter` / `giveUpForSeconds` 调小调大。适配规则见 [PITFALLS.md](PITFALLS.md) §41「同类模型免配置适配」与 [MODEL-STREAM.md](MODEL-STREAM.md) §10。
+
+**原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层改完**刷新 GUI** 即生效；网关层要换版二进制，会话内不自动重启长驻网关。
 
 ---
 

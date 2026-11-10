@@ -1,13 +1,12 @@
 # 运行架构整合方案
 
 > **一句话**：把「PowerShell 守护 + Node 路由 + 本地网关进程」收敛成
-> **一个 Go 入口进程 + 6 个 upstream / 3 个按需拉起的 child**（WB / Qoder / CLIProxyAPI），
-> 落地时实测常驻内存从 293.4（MB，改造前 4 进程）降到 ~128 MB（ZCode 关闭时 ~20 MB）；2026-11-09 空闲态另测 64.0 MB（zgate + wb2api，qoder / CP 未拉起），数字随时点与子进程状态变化，目录按「运行层 / 接入层」两轴重排。
+> **一个 Go 入口进程 + 6 个 upstream / 2 个按需拉起的 child**（WB / Qoder），
+> 落地时实测常驻内存从 293.4（MB，改造前 4 进程）降到 ~128 MB（ZCode 关闭时 ~20 MB）；2026-11-09 空闲态另测 64.0 MB（zgate + wb2api，qoder 未拉起），数字随时点与子进程状态变化，目录按「运行层 / 接入层」两轴重排。
 
 **状态：已落地（2026-10-23），现行架构 2026-11-09 对齐。**
 运行层现在是 `gateways/`：`zgate`（Go）监听 `127.0.0.1:7871`，按 `zgate.json` 托管
-6 个 upstream（OC / WB / QD / QW / QN / CP）与 3 个 child（workbuddy :7863、qoder :8790、
-cliproxyapi :8317）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
+6 个 upstream（OC / WB / QD / QW / QN / GM）与 2 个 child（workbuddy :7863、qoder :8790）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
 [MAINTENANCE.md](MAINTENANCE.md) §8，自启与换版见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 ---
@@ -100,14 +99,13 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 ```
 ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
-             │  zgate.json 配 6 个 upstream：OC / WB / QD / QW / QN / CP
+             │  zgate.json 配 6 个 upstream：OC / WB / QD / QW / QN / GM
              ├─ OC / QW / QN ──▶ 远程（opencode.ai / 千问 / 七牛云，无本地进程）
              ├─ WB 通道 ──▶ 子进程 wb2api.exe :7863          （按需拉起 / 空闲回收）
-             ├─ QD 通道 ──▶ 子进程 python qoder_proxy.py :8790（按需拉起 / 空闲回收）
-             └─ CP 通道 ──▶ 子进程 cli-proxy-api.exe :8317    （按需拉起 / 空闲回收）
+             └─ QD 通道 ──▶ 子进程 python qoder_proxy.py :8790（按需拉起 / 空闲回收）
 ```
 
-- **监听面不变**：仍然只有 7871 对 ZCode 暴露；7863 / 8790 / 8317 继续只绑 `127.0.0.1`。
+- **监听面不变**：仍然只有 7871 对 ZCode 暴露；7863 / 8790 继续只绑 `127.0.0.1`。
 - **子进程用 Windows Job Object 托管**：`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，
   zgate 崩了/被结束，子进程一起收掉，不会留孤儿（现在靠 PowerShell 启动时对账清理）。
 - **单飞（single-flight）拉起**：同一通道并发首请求只触发一次启动，其余请求排队等
@@ -194,7 +192,6 @@ ModelBus/
 │  └─ qoder/                    #   ← qoder/*.py、.env.local、qoder_probe.json
 ├─ tools/                       # 跨供应商工具：model_alias / arena / model_probe / check-*
 ├─ third-party/                 # 随仓分发的上游切片
-│  └─ cliproxyapi/              #   CLIProxyAPI（CP，:8317 /v1/models），exe 由 zgate 的 child cliproxyapi 按需拉起
 ├─ docs/  evidence/  memories/  # 不变
 └─ README.md  AGENTS.md  CHANGELOG.md  PROGRESS.md
 ```
@@ -396,7 +393,7 @@ foreach ($p in 7863,7871,8790,8787) {
 | P0 目录重构 | 完成。`gateways/{zgate,legacy-router,upstream/{workbuddy,qoder}}` + `providers/{opencode-go,workbuddy,qoder}`；4 个脚本的硬编码路径、`.gitignore`、19 篇文档/模板的路径全部改齐，`check-docs` / `check-secrets` 通过 |
 | P1 守护器 | 完成，但**没有**按原计划跟随 ZCode 主进程 —— 见 §10.2 |
 | P2 路由 + 协议桥 | 完成。Go 实现约 2000 行（含测试），替换 857 行 JS |
-| P3 子进程回收 | 三个 child 都用 `ondemand`（空闲 300 秒回收；CLIProxyAPI 的 `windows` 为空，纯按需）；签到/保活用 `windows` 定时窗口兜底 |
+| P3 子进程回收 | 两个 child 都用 `ondemand`（空闲 300 秒回收）；签到/保活用 `windows` 定时窗口兜底 |
 
 ### 10.2 与提案的差异
 

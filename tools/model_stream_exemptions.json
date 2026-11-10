@@ -1,0 +1,18 @@
+{
+  "schema": 1,
+  "note": "上游真故障豁免：探针仍会实测，满足 recoverWhen 自动标 RECOVERED，恢复后删条目即可。禁止把凭据或本机绝对路径写进本文件。",
+  "exemptions": [
+    {
+      "id": "Muse-Spark1.3",
+      "reason": "上游空 completion：HTTP 200 仅 role / finish_reason=stop 两个 chunk，无 delta 正文",
+      "since": "2026-11-09",
+      "recoverWhen": "contentChars>0"
+    },
+    {
+      "id": "Claude-Haiku-5.5",
+      "reason": "上游 403：bridge upstream error: Endpoint is unavailable.",
+      "since": "2026-11-09",
+      "recoverWhen": "http!=403"
+    }
+  ]
+}
