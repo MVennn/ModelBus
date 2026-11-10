@@ -6,7 +6,22 @@
   "qoderEnvFile": "../../providers/qoder/.env.local",
   "qwenEnvFile": "../../providers/qwen/.env.local",
   "qiniuEnvFile": "../../providers/qiniu/.env.local",
+  "geminiEnvFile": "../../providers/gemini/.env.local",
   "session": "unified-router",
+  "streamIdleHeartbeatSec": 15,
+  "reasoningGuard": {
+    "enabled": true,
+    "mode": "auto",
+    "models": ["Iceman", "iceman-contributor-free"],
+    "maxRetries": 1,
+    "maxProbeBytes": 32768,
+    "probeSeconds": 15,
+    "injectNotice": true,
+    "giveUpAfter": 1,
+    "giveUpForSeconds": 600,
+    "forceEffort": "high",
+    "forceEffortModels": ["Iceman", "iceman-contributor-free"]
+  },
   "log": { "dir": "%LOCALAPPDATA%/ZCodeGateway", "file": "zgate.log", "maxMB": 5 },
   "upstreams": {
     "OC": { "base": "https://opencode.ai/zen/go/v1" },
@@ -14,7 +29,7 @@
     "QD": { "base": "http://127.0.0.1:8790/v1", "child": "qoder" },
     "QW": { "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1", "keyEnv": "QWEN_API_KEY" },
     "QN": { "base": "https://api.qnaigc.com/v1", "keyEnv": "QINIU_API_KEY" },
-    "CP": { "base": "http://127.0.0.1:8317/v1", "child": "cliproxyapi", "keyEnv": "CLIPROXY_API_KEY" }
+    "GM": { "base": "https://catiecli.sukaka.top/v1", "keyEnv": "GEMINI_API_KEY" }
   },
   "children": {
     "workbuddy": {
@@ -38,17 +53,6 @@
       "port": 8790,
       "health": "http://127.0.0.1:8790/ping",
       "startTimeoutSeconds": 40
-    },
-    "cliproxyapi": {
-      "policy": "ondemand",
-      "idleSeconds": 1800,
-      "windows": [],
-      "exe": "../../third-party/cliproxyapi/cli-proxy-api.exe",
-      "args": ["-config", "config.yaml"],
-      "cwd": "../../third-party/cliproxyapi",
-      "port": 8317,
-      "health": "http://127.0.0.1:8317/v1/models",
-      "startTimeoutSeconds": 30
     }
   }
 }

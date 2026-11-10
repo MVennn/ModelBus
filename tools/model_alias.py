@@ -87,6 +87,14 @@ WB_BASE = "http://127.0.0.1:7863/v1"
 QD_BASE = "http://127.0.0.1:8790/v1"
 OC_BASE = "https://opencode.ai/zen/go/v1"
 QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
+# 谷歌 Gemini（catiecli 中转，OpenAI 兼容直连）。第三方转售通道没有公开价目表，
+# 价格按 DeepSeek 主力标准档估算，只影响组内排序与展示；渠道级返回 None 会让
+# 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
+# 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
+GM_BASE = "https://catiecli.sukaka.top/v1"
+GM_PRICES = {
+    "ais-gemini-3.8-flash": 0.11,
+}
 # 千问渠道是**预付额度**：先用掉「每模型 1M tokens」的试用池（2026-12-15 到期），
 # 之后走 ¥300 学生额度（一年有效，到期作废，用不完也不退）。
 # 预付额度的边际单价就是 0，所以整段窗口内按 0 记账；额度真烧光时上游返回配额错误，
@@ -101,37 +109,30 @@ QN_FREE_UNTIL = "2026-11-30"
 # tools/arena_leaderboard.py); `--no-arena` restores this list only.
 # 键一律 `<协议>:<上游 id>`：同一型号会以 chat / messages 两种形态出现
 # （千问桥接版是 messages），只写型号名会把两条一起吸进主力。
-# 主力顺序：组内按此顺序排（DeepSeek 置顶，Qwen 贵备份次之，千问尾跳最后）。
+# 主力顺序：组内按此顺序排（DeepSeek 置顶，千问渠道免费 DeepSeek 尾跳最后）。
 # 组内排序的权威来源；MAIN_IDS 由它派生，避免"按厂商最低价排序把便宜厂商顶到前面"。
 MAIN_ORDER = [
-    # 用户 2026-11-09 口径：主力组只放 DeepSeek 与 Gemini（"主力=deepseek+gemini"）。
+    # 用户 2026-11-10 口径：主力组只放 DeepSeek（原反代通道已整体移除）。
     # 原主力的 hy4std（2026-11-06 曾因竞技榜前十被拍到第一位）与
     # qoder:Qwen3.8-Max（AA 1122 的贵备份）一起下沉省钱组，见 LOW_ORDER；
     # 不补进 LOW_PICKS 的话它们价格 >0 又不在任何名单里，会被判 drop 直接掉档。
     # 日常主力：最便宜的付费档，两跳同型号（WB cn / OC 直连）
     "chat:cn:deepseek-v4.1-flash",
     "chat:deepseek-v4.1-flash",
-    # Gemini：全部走 CLIProxyAPI（CP 渠道）的 Gemini API-key 路由，按 0 计价。
-    # 用户 2026-11-09 13:04 口径：opencode 的 Gemini（gemini-4-argon，1.76 积分）
-    # 从主力链上摘掉，避免回落过去把付费额度烧掉。
-    # 型号名 = AI Studio 上游真名（AQ. key，x-goog-api-key 实测 200）：
-    #   gemini-3.7-flash / 3.6-flash 为推理型（content 可能被 thinking 吃掉，需大 max_tokens）；
-    #   antigravity OAuth 仍 403 VALIDATION_REQUIRED，其独有 3.8-flash-high / 3-flash 不采用。
-    "chat:cp:gemini-3.6-flash",
-    "chat:cp:gemini-3-flash-preview",
-    "chat:cp:gemini-3.5-flash-lite",
-    "chat:cp:gemini-3.1-flash-lite",
     # 免费 DeepSeek（千问渠道，messages 协议）：¥300 预付额度先烧这一条。
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
+    # 谷歌 Gemini 3.8 Flash（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
+    # 单跳直连（无本地进程、无孪生跳），排在三跳 DeepSeek 之后。
+    "chat:gem:ais-gemini-3.8-flash",
 ]
 MAIN_IDS = set(MAIN_ORDER)
 
 # 竞技榜（~/.zcode/v2/arena-main.json）只负责给主力"补候选"，不推翻用户分组：
-# 用户 2026-11-09 口径是主力=DeepSeek+Gemini，而榜单 candidates 里还挂着
+# 用户 2026-11-10 口径是主力=DeepSeek，而榜单 candidates 里还挂着
 # MiMo-2.6-Flash / Space-Bunny，不过滤会把它们重新拉回主力。
-MAIN_UPSTREAM_HINTS = ("deepseek", "gemini")
+MAIN_UPSTREAM_HINTS = ("deepseek",)
 # 省钱组：每个厂商留 1–2 个特色型号（用户 2026-10-28 口径：前旗舰/旧版本全砍，
 # 只留"最能代表这家、日常会用"的）。
 # ⚠️ 这是**严格有序白名单**：组内顺序由 LOW_ORDER 决定（不是按厂商最低价，
@@ -199,7 +200,8 @@ WB_FIRST_CHANNELS = {"WB"}
 #   · QN=3：限免渠道排最后 —— 免费不等于该优先烧，它的价值是兜底
 # 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
 # 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
-CHANNEL_RANK = {"WB": 0, "CP": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3}
+#   · GM=1：谷歌中转（catiecli）直连付费档，与 OC/QD 同档，同型号多跳时按价格排
+CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1}
 CHANNEL_RANK_DEFAULT = 4
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
@@ -290,12 +292,6 @@ OC_PRICES = {
     "gpt-5.6-luna": {"flat": 0.21},
     "muse-spark-1.3-contributor": {"flat": 0.04},
     "muse-spark-1.2-contributor": {"flat": 0.04},
-    # Gemini 4 Argon（opencode zen go 唯一在售 Gemini 档）：官方目录 cost
-    # input 2 / output 10（USD per 1M），按 1:1 混合 (2+10)/2 ÷ 3.409 = 1.76 积分。
-    # 上式 ÷ 3.409 即 ÷ USD_PER_WB_CREDIT（统一折算为 WorkBuddy 积分）；
-    # 1.76 是预折算后写入本表的积分值，运行时 price_of() 直接取用、不再折算。
-    # 这是本表最贵的条目（比 hy4std 0.29 贵 6 倍），主力组不设价格上限故可收录。
-    "gemini-4-argon": {"flat": 1.76},
 }
 # Qoder fallback if the hub is not reachable; live /v1/models wins.
 QD_PRICES = {
@@ -309,36 +305,18 @@ QD_PRICES = {
 }
 
 # 补建条目（provider_config 里原本没有、由 whitelist_items 新建的型号）默认只有
-# enabled:true，DSH 侧只能吃 dsh_sync 的兜底值（1000000 ctx / 128000 output），
-# 一旦超过上游真实 output 上限就会被 400。这里给已知真值的型号补元数据，
-# 键是上游 id，值直接贴合 providerModelRules 的 config 形态。
-MODEL_META = {
-    # opencode zen go 目录原文：limit.context 1048576 / limit.output 65536，
-    # capabilities.tools true，reasoning.effort [low, medium, high]。
-    # Gemini 支持图片输入，inputFormat 显式打开，否则界面只给纯文本。
-    "gemini-4-argon": {
-        "properties": {
-            "contextWindow": 1048576,
-            "supportsToolCall": True,
-            "inputFormat": {"supportsImage": True},
-        },
-        "optionSpecs": {
-            "maxOutputTokens": {"max": 65536},
-            "reasoningLevel": {"values": ["disabled", "low", "medium", "high"]},
-        },
-    },
-}
+# enabled:true，DSH 侧只能吃 dsh_sync 的兜底值（1000000 ctx / 128000 output）。
+# 一旦拿到某型号的真实 context / output 上限，在这里按上游 id 补元数据，
+# 值直接贴合 providerModelRules 的 config 形态；当前无需要补建的型号。
+MODEL_META = {}
 
 ABBR = {
     # 七牛云网关的 id 形如 `qiniu/conatus-free`：去掉 `qiniu/` 前缀，Conatus 自成系列。
     "qiniu/conatus-free": "Conatus",
+    # catiecli 中转的谷歌 id 形如 ais-gemini-3.8-flash：ais- 是中转站自己的前缀，
+    # 不是谷歌型号的一部分，显示名里去掉。
+    "ais-gemini-3.8-flash": "Gemini-3.8-Flash",
     "moonshotai/kimi-k3-free": "Kimi-K3",
-    # CLIProxyAPI 四个 Gemini 档（2026-11-09 接入，渠道 CP，上游 AI Studio API key）。
-    # 型号名就是上游 id，不做缩写。
-    "gemini-3.6-flash": "Gemini-3.6-Flash",
-    "gemini-3-flash-preview": "Gemini-3-Flash",
-    "gemini-3.5-flash-lite": "Gemini-3.5-Flash-Lite",
-    "gemini-3.1-flash-lite": "Gemini-3.1-Flash-Lite",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
     "deepseek-v4-flash": "DeepSeek-4-Flash",
@@ -399,7 +377,6 @@ ABBR = {
     "claude-haiku-5-5": "Claude-Haiku-5.5",
     "gpt-6-luna": "GPT-6-Luna",
     "gpt-5.6-luna": "GPT-5.6-Luna",
-    "gemini-4-argon": "Gemini-4-Argon",
     "muse-spark-1.3-contributor": "Muse-Spark1.3",
     "muse-spark-1.2-contributor": "Muse-Spark1.2",
 }
@@ -787,12 +764,11 @@ def qw_credit_active() -> bool:
 
 def price_of(channel: str, upstream: str, wb: dict[str, dict],
              qd: dict[str, dict], slot: str) -> float | None:
+    if channel == "GM":
+        # 中转站没有公开价目表：只认 GM_PRICES 的显式价，未收录即 None（该跳被丢）。
+        return GM_PRICES.get(upstream)
     if channel == "QW":
         return 0.0 if qw_credit_active() else None
-    if channel == "CP":
-        # CLIProxyAPI / Antigravity：账号级免费额度，按 0 计。
-        # 它必须排在 opencode 付费档之前，否则用户额度会被静默烧掉。
-        return 0.0
     if channel == "QN":
         # 七牛限免只覆盖带 -free 后缀的模型（2026-11-30 前）。渠道级一律返 0
         # 会把将来播种的付费模型也误标成免费，所以必须按上游 id 判定。
@@ -860,8 +836,8 @@ def abbreviate(model: str) -> str:
 VENDOR_PREFIXES = (
     ("DeepSeek", "DSP"), ("Qwen", "QW"), ("QwQ", "QW"), ("GLM", "GLM"), ("MiniMax", "MM"),
     ("Kimi", "KIMI"), ("HY", "HY"), ("MiMo", "MIMO"), ("LongCat", "LONG"),
-    ("Beam", "BEAM"), ("Claude", "CL"), ("GPT", "GPT"), ("Muse", "MUSE"), ("Gemini", "GEM"),
-    ("Step", "STEP"), ("Space", "SPB"), ("Conatus", "CONATUS"),
+    ("Beam", "BEAM"), ("Claude", "CL"), ("GPT", "GPT"), ("Muse", "MUSE"),
+    ("Step", "STEP"), ("Space", "SPB"), ("Conatus", "CONATUS"), ("Gemini", "GEM"),
 )
 
 
@@ -898,7 +874,7 @@ def protocol_hints() -> dict:
     return _PROTOCOL_HINTS
 
 
-PREFIXES = ("qwen:", "qoder:", "cn:", "global:")
+PREFIXES = ("qwen:", "qoder:", "cn:", "global:", "gem:")
 
 
 def _bare(model_id: str) -> str:
@@ -986,21 +962,6 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "fallbacks": [],
             "legacy_ids": [model],
         }
-    if model.startswith("cp:"):
-        # CLIProxyAPI（本机 8317）：Gemini 走 Antigravity / Vertex / AI Studio，
-        # 与 OC 同名型号同价，靠链序决定先用哪条。
-        upstream = model[len("cp:"):]
-        return {
-            "raw": model,
-            "original": model,
-            "channel": "CP",
-            "region": "",
-            "upstream": upstream,
-            "base_model": upstream,
-            "protocol": protocol,
-            "fallbacks": [],
-            "legacy_ids": [model],
-        }
     if model.startswith("qoder:"):
         upstream = model[len("qoder:"):]
         return {
@@ -1040,6 +1001,21 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "base_model": upstream,
             # 七牛云 AI 网关同样只有 Anthropic Messages 端点。
             "protocol": "messages",
+            "fallbacks": [],
+            "legacy_ids": [model],
+        }
+    if model.startswith("gem:"):
+        # 显式 GM 渠道：白名单写 chat:gem:ais-gemini-3.8-flash 走到这里；
+        # 不写前缀会落到末尾 OC 兜底，那条会把 ais- 前缀当成型号名。
+        upstream = model[len("gem:"):]
+        return {
+            "raw": model,
+            "original": model,
+            "channel": "GM",
+            "region": "GB",
+            "upstream": upstream,
+            "base_model": upstream,
+            "protocol": protocol,
             "fallbacks": [],
             "legacy_ids": [model],
         }
@@ -1087,7 +1063,7 @@ def whitelist_items(order: list[str]) -> list[dict]:
         # 只有显式的才按 (渠道, 裸名) 去重，否则 classify 猜出来的渠道会把
         # 「同一个 upstream 名在另一个渠道的跳」误判成重复（见 main 里的补建过滤）。
         item["explicit_channel"] = str(model).lower().startswith(
-            ("qoder:", "qwen:", "cn:", "global:", "wb:", "oc:", "qd:")
+            ("qoder:", "qwen:", "cn:", "global:", "wb:", "oc:", "qd:", "gem:")
         )
         out.append(item)
     return out
@@ -1201,8 +1177,8 @@ def raw_models(cfg: dict, alias_models: dict, legacy: dict) -> list[dict]:
 
 
 QN_BASE = "https://api.qnaigc.com/v1"
-CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE, "QN": QN_BASE,
-                "CP": "http://127.0.0.1:8317/v1"}
+CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE,
+                "QN": QN_BASE, "GM": GM_BASE}
 
 
 def base_of(channel: str) -> str:
@@ -1376,7 +1352,8 @@ def pool_entries(pools: list[dict], slot: str) -> list[dict]:
     return entries
 
 
-CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:", "QW": "qwen:", "QN": "qn:", "CP": "cp:"}
+CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:",
+                  "QW": "qwen:", "QN": "qn:", "GM": "gem:"}
 
 
 def hop_specs(protocol: str, hop: dict) -> list[str]:
@@ -1532,14 +1509,6 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
     # 池子只按价格归组 —— 0 积分就是免费。
     if entry.get("is_pool"):
         return ("free", "") if entry["price"] <= 0 else ("drop", "")
-    # CP（CLIProxyAPI）只收录人工白名单。它同时暴露 antigravity 的 8 个 403 模型
-    # 和若干 404 / 过载型号，价格一律按 0 计会把它们全灌进免费组 —— 界面上看着是
-    # 免费型号，实际调用分别回 404（gemini-3-flash 裸名不存在）、503（3.7-flash
-    # 高需求）、403（3.8-flash-high 需账号验证），会让客户端选到死路。
-    if all(hop["channel"] == "CP" for hop in entry["chain"]) and not any(
-        _picked(entry, hop, MAIN_IDS) for hop in entry["chain"]
-    ):
-        return "drop", "cp-whitelist"
     for hop in entry["chain"]:
         if _picked(entry, hop, MAIN_IDS):
             return "main", "manual"
@@ -1941,7 +1910,16 @@ def main() -> int:
                 + (" …" if len(stale_probe) > 5 else ""),
                 file=sys.stderr,
             )
-        transient = {"queued", "timeout", "rate_limited"}
+        # 只有「上游明确说没有这个型号」（unavailable，404）才摘。其余非 ok 状态
+        # 都是这一次请求的运气问题，不是型号死活的证据：
+        #   · queued / rate_limited / timeout —— 本来就该留；
+        #   · blocked —— 地区/权限拒绝，通常是这条出口进不去（机场孪生跳就是为它存在的）；
+        #   · error —— 连 HTTP 码都没拿到（WinError 10054 / 连接重置），最没有资格判定型号。
+        # 2026-11-10 12:00 的部署重启 (zgate.exe.bak-deploy-20261110-120031) 打断了在途
+        # 探测：beam-free / qiniu/conatus-free 记成 error，claude-haiku-5-5 的 403 地区
+        # 拒绝被写成 unavailable，三条 ever_ok=true 的型号就这样从配置里消失，
+        # 用户侧看到的是「Beam 直连连不上」。
+        transient = {"queued", "timeout", "rate_limited", "blocked"}
         reverse_legacy: dict[str, list[str]] = {}
         for old_id, new_id in legacy.items():
             reverse_legacy.setdefault(new_id, []).append(old_id)
@@ -1954,7 +1932,13 @@ def main() -> int:
                 candidates += reverse_legacy.get(row["new_id"], [])
                 entry = next((probe[c] for c in candidates if c in probe), {})
                 status = entry.get("status")
-                if status == "ok" or (status in transient and entry.get("ever_ok")):
+                # 旧版探活把 403 写成 unavailable（2026-11-10 12:02 的账本正是如此：
+                # claude-haiku-5-5 http=403 status=unavailable），历史账本不能拿
+                # 来判型号死刑，按地区/权限拒绝处理。
+                if status == "unavailable" and entry.get("http") == 403:
+                    status = "blocked"
+                # error 不看 ever_ok：网络层失败连响应都没有，不能当「型号不存在」用。
+                if status in ("ok", "error") or (status in transient and entry.get("ever_ok")):
                     kept.append(row)
                 elif not entry and row["new_id"] in existing_models:
                     # Renamed since the last probe: the model was already in

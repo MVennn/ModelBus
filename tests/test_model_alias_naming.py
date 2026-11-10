@@ -64,10 +64,11 @@ class ExplicitOcPrefixTest(unittest.TestCase):
         self.assertEqual(items[0]["upstream"], "qwen3.8-max")
         self.assertTrue(items[0].get("explicit_channel"))
 
-    def test_main_order_names_the_oc_hop_explicitly(self) -> None:
-        # QD 那条已经进配置，OC 那条要靠显式前缀才能单独建跳（缺价时只留 WARN）。
-        self.assertIn("chat:qoder:Qwen3.8-Max", ma.MAIN_ORDER)
-        self.assertIn("chat:oc:qwen3.8-max", ma.MAIN_ORDER)
+    def test_main_order_names_the_gem_hop_explicitly(self) -> None:
+        # 主力组当前是 DeepSeek 三跳 + Gemini 单跳。Gemini 那条走 gem: 显式前缀
+        # （渠道 GM 不在 cn:/qoder: 这些天然前缀里），缺价时只留 WARN 不中断。
+        self.assertIn("chat:cn:deepseek-v4.1-flash", ma.MAIN_ORDER)
+        self.assertIn("chat:gem:ais-gemini-3.8-flash", ma.MAIN_ORDER)
 
 
 if __name__ == "__main__":

@@ -4,10 +4,11 @@
 真值唯一来源：gateways/zgate/zgate.json（children / ports / upstreams）。
 
 用法:
-  python tools/check-project.py              # 全跑（语义 + 换行/BOM + PS1 语法）
+  python tools/check-project.py              # 全跑（语义 + 换行/BOM + PS1 语法 + 流式准入接线）
   python tools/check-project.py --semantic   # 只跑门面语义
   python tools/check-project.py --lineendings
   python tools/check-project.py --ps1
+  python tools/check-project.py --stream-contract  # 只跑流式准入接线守卫
 
 补的是旧门禁中间的空白：zgate.json 真值、新脚本 LF/BOM、PS1 语法
 过去没有统一判据；.github/workflows/ci.yml 只在 push/PR 触发，
@@ -61,6 +62,15 @@ STALE = [
     (r"3\s*个\s*provider", "旧口径：3 个 provider"),
     (r"四个常驻进程", "旧口径：四个常驻进程"),
     (r"293\s*MB", "旧口径：293 MB"),
+    # 6 个 upstreams 在 GM（Gemini 中转）恢复后就是现行数，不能再按数量判旧；
+    # 真正退役的是 CP（CLIProxyAPI）这一跳，所以只认带 CP 的写法。
+    # 2026-11-10 起 upstreams 重新回到 6 个（新增 GM = catiecli Gemini 中转），
+    # 这条数字旧口径作废；真正退役的是 Gemini 反代那套（见下方 8317 / CLIPROXY_API_KEY）。
+    (r"6\\s*个\\s*upstreams?[^\\n]{0,40}CP", "旧口径：6 个 upstreams 含 CP（CLIProxyAPI 已移除）"),
+    (r"3\s*个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：3 个 child（Gemini 反代已移除）"),
+    (r"三个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：三个 child（Gemini 反代已移除）"),
+    (r"8317", "旧口径：CLIProxyAPI 端口 8317（Gemini 反代已移除）"),
+    (r"CLIPROXY_API_KEY", "旧口径：CLIPROXY_API_KEY 凭据项（Gemini 反代已移除）"),
 ]
 
 # 现行正本：退役的 JS 协议桥不得再被门面写成现行实现；Go 正本必须带流式实现。
@@ -91,7 +101,7 @@ def check_canonical(results: list) -> None:
 
 
 def check_gateway(results: list) -> None:
-    # 评估 m00494 暴露的三处回归：聚合 catalog、六段 /health、QN Bearer。
+    # 评估 m00494 暴露的三处回归：聚合 catalog、五段 /health、QN Bearer。
     # 门面文档写「已落地」之前源码实现必须真的在位；pre-commit 与 CI 共用这道闸。
     before = len(results)
     try:
@@ -102,19 +112,18 @@ def check_gateway(results: list) -> None:
         return
     checks = [
         ('func (s *Server) models(', 'GET /v1/models 聚合 catalog handler'),
-        ('upstreamView("CP")', '/health 第六段 cliproxyapi'),
-        ('case "WB", "QD", "QW", "QN", "CP":', 'QN 原生 chat 跳的 Bearer 覆盖'),
+        ('case "WB", "QD", "QW", "QN"', 'QN/GM 原生 chat 跳的 Bearer 覆盖'),
     ]
     for needle, why in checks:
         if needle not in router:
             results.append(('FAIL', 'router.go: 缺 ' + why + ' -> ' + repr(needle)))
-    for seg in ('opencode', 'workbuddy', 'qoder', 'qwen', 'qiniu', 'cliproxyapi'):
+    for seg in ('opencode', 'workbuddy', 'qoder', 'qwen', 'qiniu', 'gemini'):
         if ('"' + seg + '":') not in router:
             results.append(('FAIL', 'router.go: /health payload 缺 ' + seg + ' 段'))
     if 'func (m *Map) Catalog(' not in alias:
         results.append(('FAIL', 'alias.go: 缺 func (m *Map) Catalog(...)：聚合视图退回 OC 透传'))
     if len(results) == before:
-        results.append(('OK', '网关实现: /v1/models 聚合 + /health 六段 + QN Bearer 在位'))
+        results.append(('OK', '网关实现: /v1/models 聚合 + /health 六段 + QN/GM Bearer 在位'))
 
 
 def check_semantic(results: list) -> None:
@@ -136,8 +145,9 @@ def check_semantic(results: list) -> None:
             if m:
                 results.append(("FAIL", rel + ": 命中 " + why + " -> 字面量 " + repr(m.group(0))))
     try:
-        if "8317" not in read_text("README.md"):
-            results.append(("FAIL", "README.md: 缺 8317（zgate.json 第三个 child cliproxyapi 的端口）"))
+        readme = read_text("README.md")
+        if "8317" in readme or "CLIProxyAPI" in readme:
+            results.append(("FAIL", "README.md: 仍残留 Gemini 反代现行描述（8317 / CLIProxyAPI）"))
     except OSError:
         results.append(("FAIL", "README.md: 门面文件缺失"))
     try:
@@ -248,13 +258,82 @@ def check_ps1(results: list) -> None:
         results.append(("OK", "PS1 语法: " + str(len(files)) + " 个脚本 Parser 通过（" + exe + "）"))
 
 
+# ---------- 4) 流式准入接线守卫（离线；活体探针绝不进 CI） ----------
+def check_stream_contract(results: list) -> None:
+    """守住「新增模型免人工测试」这条链：接线掉一处就 FAIL。
+
+    只做静态文本 + 本机报告摘要，不发任何推理请求。CI 上没有 .work 报告时
+    报告分支 SKIP，静态接线仍全程校验，保证自动机制不会被悄悄拆掉。
+    """
+    try:
+        ps1 = read_text("sync-models.ps1")
+        probe = read_text("tools/model_stream_check.py")
+        readme = read_text("docs/README.md")
+    except OSError as e:
+        results.append(("FAIL", "流式准入接线: 读取失败 " + repr(e)))
+        return
+    wiring = [
+        ("sync-models.ps1: 缺每日同步链尾的活体探针钩子",
+         "model_stream_check.py" in ps1 and "--changed" in ps1 and "--soft" in ps1),
+        ("tools/model_stream_check.py: 缺 --changed 增量选择", "--changed" in probe),
+        ("tools/model_stream_check.py: 缺同档位补测预算 RECOVER_TOKENS",
+         "RECOVER_TOKENS" in probe),
+        ("tools/model_stream_check.py: 缺待复查状态集合 RETRY_STATES",
+         "RETRY_STATES" in probe),
+        ("tools/model_stream_check.py: 缺加密思考分流识别（reasoning.encrypted）",
+         "reasoning.encrypted" in probe and "encryptedReasoning" in probe),
+        ("docs/MODEL-STREAM.md: 契约正本缺失",
+         os.path.isfile(os.path.join(ROOT, "docs", "MODEL-STREAM.md"))),
+        ("docs/README.md: 未索引 MODEL-STREAM.md（孤儿）",
+         "MODEL-STREAM.md" in readme),
+    ]
+    broken = [msg for msg, ok in wiring if not ok]
+    report_rel = ".work/model-stream/latest.json"
+    report_path = os.path.join(ROOT, ".work", "model-stream", "latest.json")
+    if not os.path.isfile(report_path):
+        results.append(("SKIP", "流式准入报告: 本机无 " + report_rel + "（CI 常态，活体探针不进 CI）"))
+    else:
+        try:
+            with open(report_path, encoding="utf-8") as f:
+                data = json.load(f)
+            models = data.get("models")
+            n = data.get("contractCount")
+            if not isinstance(models, list) or not isinstance(n, int):
+                raise ValueError("models 应为 list 且 contractCount 应为 int")
+            if len(models) != n:
+                raise ValueError("models=" + str(len(models)) + " 与 contractCount=" + str(n) + " 不一致")
+            if any(not isinstance(x, dict) or "state" not in x for x in models):
+                raise ValueError("存在缺少 state 的模型行")
+            # 只有「零明文思考 + 加密 detail」才是 B 分流；A 格式尾部也会带一条
+            # replay 元数据 detail，不能据此要求标注。
+            if any(x.get("state") == "WARN" and x.get("reasoningChars", 0) == 0
+                   and x.get("encryptedReasoning", 0) > 0
+                   and not any("加密思考分流" in str(y) for y in (x.get("reasons") or []))
+                   for x in models):
+                raise ValueError("加密思考分流未被探针标注（reasons 缺加密分流说明）")
+            states = ("PASS", "WARN", "FAIL", "SKIP", "EXEMPT", "RECOVERED")
+            tally = {s: sum(1 for x in models if x.get("state") == s) for s in states}
+            results.append(("OK", "流式准入报告: " + str(len(models)) + " 条全量视图可解析；"
+                            + " / ".join(s + " " + str(tally[s]) for s in states)
+                            + "（模型健康只记录，不阻断提交）"))
+        except (ValueError, OSError) as e:
+            broken.append("流式准入报告: " + report_rel + " 结构损坏 " + repr(e))
+    if broken:
+        for msg in broken:
+            results.append(("FAIL", "流式准入接线: " + msg))
+    else:
+        results.append(("OK", "流式准入接线: 同步钩子 / --changed / RECOVER_TOKENS / "
+                        "RETRY_STATES / 加密分流识别 / 契约正本 / 索引 七处全在位"))
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--semantic", action="store_true")
     ap.add_argument("--lineendings", action="store_true")
     ap.add_argument("--ps1", action="store_true")
+    ap.add_argument("--stream-contract", action="store_true")
     a = ap.parse_args()
-    all_ = not (a.semantic or a.lineendings or a.ps1)
+    all_ = not (a.semantic or a.lineendings or a.ps1 or a.stream_contract)
     results = []
     if all_ or a.semantic:
         check_semantic(results)
@@ -262,13 +341,15 @@ def main() -> int:
         check_lineendings(results)
     if all_ or a.ps1:
         check_ps1(results)
+    if all_ or a.stream_contract:
+        check_stream_contract(results)
     for st, msg in results:
         print("[" + st + "] " + msg)
     fails = [m for st, m in results if st == "FAIL"]
     if fails:
         print("[FAIL] check-project: " + str(len(fails)) + " 项失败")
         return 1
-    print("[OK] check-project: " + str(len(results)) + " 项通过（语义 / 换行BOM / PS1）")
+    print("[OK] check-project: " + str(len(results)) + " 项通过（语义 / 换行BOM / PS1 / 流式接线）")
     return 0
 
 

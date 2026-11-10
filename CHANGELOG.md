@@ -17,6 +17,70 @@
 
 ## [未发布]
 
+### Gemini 3.8 Flash 并入主力组：新增 `GM` 渠道与 `gem:` 前缀（2026-11-10）
+
+- **为什么必须改 Go**：`zgate.json` 的 `keyEnv` 是死字段（`internal/config/config.go` 只赋值、无读取方），上游 key 只能来自 `internal/keys` 的 `Set.For(channel)`，而它硬编码 OC/WB/QD/QW/QN。不新增渠道，`key` 恒为空，`router.attemptChain` 会在 `router.go` 直接跳过该跳，表现为单跳 502。
+- **网关层**：`internal/keys/keys.go` 的 `Set` 加 `GM`、新增 `reGMBase`（匹配 `catiecli.sukaka.top`）、`Load` 增 `geminiEnvFile` 参数并支持 env → env 文件 → provider_config 正则回退三级取 key、`For` 加 `case "GM"`；`internal/config/config.go` 加 `GeminiEnvFile` 与 `upstreams["GM"]` 默认；`main.go` / `internal/router/router.go` 两处 `keys.Load` 补参、`/health` 负载加 `gemini` 段；**`applyHeaders` 的 Authorization 覆盖名单补 `GM`** —— 漏掉这一步会把客户端空 Bearer 透传上去，上游回 401 `未提供API Key`（实测踩到）。`zgate.json` 同步加 `geminiEnvFile` 与 `upstreams.GM`。
+- **命名与分组**：`tools/model_alias.py` 新增 `GM_BASE` / `GM_PRICES`、`MAIN_ORDER` 追加 `chat:gem:ais-gemini-3.8-flash`、`CHANNEL_RANK["GM"]=1`、`ABBR` 映射 `Gemini-3.8-Flash`、`VENDOR_PREFIXES` 加 Gemini、`price_of` 的 GM 分支、`gem:` 前缀（`PREFIXES` / `CHANNEL_PREFIX` / `whitelist_items`）、`classify` 的 `gem:` 分支、`CHANNEL_BASE["GM"]`。中转无公开价目，价格在 `GM_PRICES` 显式登记，未登记的 id 返 `None` 会被当死链丢弃。
+- **凭据**：`providers/gemini/.env.local`（`GEMINI_API_KEY`，已 gitignore），由 DSH credentials 搬运，未回显。
+- **DSH 侧入口唯一化**：删除 `cordis.patch.yml` 里手工直连的 `gemini` provider 与 `quickProviders` 的 `- gemini`，provider 由 4 个降为 3 个（zcode-main / zcode-free / zcode-saver），Gemini 改由 `zcode-main` 经 7871 提供。备份 `cordis.patch.yml.bak-gemini-merge-20261110-1352`。
+- **门禁与测试**：`tools/check-project.py` 三处随代码更新（Bearer needle 去尾冒号、`/health` 段循环加 `gemini`、提示文案改「六段」）；`tests/test_model_alias_naming.py` 与 `tests/test_model_alias_price.py` 修掉 11-10 主力收敛后遗留的漂移断言（原期望 `Qwen3.8-Max` 在主力的两条，现按 DeepSeek 三跳 + Gemini 单跳重写）；`evidence/agent-thinking-adapt.md` 的本机绝对路径脱敏为 `~`。
+- **验收**：`go build ./...` exit 0；`go test ./...` alias/bridge/config/router ok（`internal/supervisor` 的 `TestOnDemandStartAndIdleStop` 挂在 Windows TempDir 文件占用，与本次改动无关）；`python -m unittest discover -s tests` 56 项 OK；`check-project.py` / `check-docs.py` / `check-secrets.py` 全 exit 0；隔离实例 `/health` 200、`/v1/models` 89 条含 `Gemini-3.8-Flash`；生产 `--apply` 后 alias map 主力 2 条、`personalModelIds` 含 `Gemini-3.8-Flash`。
+- **未定论项**：上游四次探测（含经 zgate 生产链路）全部返回 503 `This model is currently experiencing high demand`，SSE 零事件、零 token 消耗，**思考能力待复测**，因此 `optionSpecs.reasoningLevel` 暂不配；上游恢复后发一次 `stream:true, reasoning_effort:"high"`，看 delta 里有无 `reasoning_content` 即可定论。
+- **回退**：删 `keys.go` / `config.go` / `router.go` / `main.go` / `zgate.json` 里的 GM 段，删 `model_alias.py` 的 GM 与 `gem:` 相关行，还原 `cordis.patch.yml.bak-gemini-merge-20261110-1352` 与 `provider_config.json.bak-alias-20261110-134823-055600`；二进制回退用 `zgate.exe.bak-deploy-*`。
+
+### Iceman 看不到思考 / 输出一节一节：加密分流透明重抽 + 展示层展开（2026-11-10）
+
+- **展示层**：`~/.dsh/profiles/desktop/cordis.patch.yml` 的 `ui-chat` 由 `standard / completion / final` 改成 `verbose / next-input / all`（verbose 的 `foldCompletedTurns:false` 让轮次结束后思考与过程行不再整轮折叠），`ui-skin-claude-style` 加 `reasoningDisplay: continuous`（取消两行步进）；`tools/dsh_sync.py` 只重写 `llm-pi-ai` 段，改动不会被每日同步覆盖；**刷新 GUI 即生效**。
+- **网关层**：`gateways/zgate/internal/config/config.go` 新增零值禁用的 `ReasoningGuard`（enabled / models / maxRetries / maxProbeBytes），`zgate.json` 只圈 `Iceman` 与 `iceman-contributor-free`；`internal/router/router.go` 在 `doForwardWith` 写响应头前探测首包，命中「期待思考却先给正文且零明文 thinking delta」直接关流重抽同一跳（上限 3 次，沿用原 headers 保鉴权与 `X-Opencode-Session`），A 格式用 `io.MultiReader` 原字节续上。**改 Go 必须换 `zgate.exe`**：`/admin/reload` 只热加载配置，换版流程见 [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) §16.2；本会话未重启长驻网关。
+- **探针与门禁**：`tools/model_stream_check.py` 新增 `_encrypted_reasoning()` / `encryptedReasoning` / `ENC` 列，`judge()` 把零明文思考 + `ENC>0` 明确标成「上游加密思考分流」；顺带修 `_effort_map()`，YAML 1.1 把裸 `off` 读成 `False` 会让 `load_contract()` 抛 `TypeError: sequence item 3: expected str instance, bool found`。`tools/check-project.py` 静态接线由六处扩到七处，并复核报告里的加密分流标注没丢。
+- **文档**：[docs/MODEL-STREAM.md](docs/MODEL-STREAM.md) §1/§3/§4/§6/§9 补探针口径，[docs/PITFALLS.md](docs/PITFALLS.md) §41 记现象 → 根因 → 怎么避，[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) §17 记排查顺序，[docs/TOOLS.md](docs/TOOLS.md) 与 [docs/README.md](docs/README.md) 工具表 / 索引同步。
+- **验收**：`go vet ./...` / `go test ./...` exit 0；新增 `internal/router/reasoning_guard_test.go` 7 项 PASS（首包判定四形态、白名单 / off / 禁用、重抽保鉴权、上限放行）；`py_compile` / `check-project.py` / `--stream-contract` / `check-docs.py` / `check-secrets.py` 全 exit 0；探针实跑 Iceman 307 块 / 1404 思考 / ENC=1，离线构造 B 格式 `judge()` 正确标注。`build.py --candidate` 编出含守卫的 `zgate.candidate.exe`（PE Subsystem 2 / GUI），隔离端口 17871 + 假上游端到端 PASS：B 首包即时判定重抽（上游 2 次调用、0.00s，不等 B 后端拖尾）、A 格式 `io.MultiReader` 原字节续上不丢块。**线上 7871 的 `zgate.exe` 仍是旧二进制（PID 17852 未动、不含守卫代码）**，网关层要按 §16.2 换版才生效，会话内未重启长驻网关。回退：删 `zgate.json` 的 `reasoningGuard`（零值=禁用）、还原 `cordis.patch.yml` 两个 config 段。
+
+
+### 守卫二次修复：换连接+换会话重抽、auto 适配、SSE 心跳与 Content-Length（2026-11-10 下午）
+
+> 上一条修的是「有没有守卫」，这一条修的是「守卫为什么没救回思考」——前两版上线后界面依旧看不到思考。
+
+- **重抽为什么白抽**：首版重抽故意沿用原 headers「保 `X-Opencode-Session`」且复用 keep-alive 连接，而上游是按会话/连接粘后端的，3 次重抽全落回同一路加密后端（`zgate.log` 里 3 条「透明重抽同一跳 1/3..3/3」后紧跟 WARN「达上限放行最后一次」）。现改为每次重抽 `req.Close = true` + 会话头追加 `#r<N>-<随机>`，默认上限 5 次。
+- **200 却 0 字节**：上游 SSE 自带 `Content-Length` 时，守卫丢弃首段 / 插提示 / 掺心跳都会改长度，写端报 `http: wrote more than the declared Content-Length` 并断流。现对事件流一律 `w.Header().Del("Content-Length")`，交给 `net/http` 按 chunked 重新分帧（`router.go` `copyHeaders` 之后）。
+- **思考期静默**：新增 `streamIdleHeartbeatSec`（缺省 15，负数关），空闲超阈值补 `: zgate keepalive` SSE 注释行；非事件流一律不掺。
+- **同类模型免配置**：`reasoningGuard.mode` 新增 `"auto"`（`zgate.json` 已切 auto）—— 不再依赖 `models` 白名单，凡声明要思考的流式请求都探针；配按模型学习表（`giveUpAfter` / `giveUpForSeconds`，连续几轮全程加密就短暂停手、到期复探）与达上限提示注入（`injectNotice`，流首插一条 `reasoning_content` 说明）。适配口径见 [docs/MODEL-STREAM.md](docs/MODEL-STREAM.md) §10。
+- **日志可定性**：守卫两条命中日志补上游模型名（`模型 %q`），并发多模型时不必再靠时间戳猜是哪个模型被判成加密分流。
+- **验收**：`gofmt` / `go build ./...` / `go vet ./...` exit 0；`internal/router` 12 项、`internal/config` 2 项 PASS（新增 auto 覆盖陌生模型、换会话换连接、提示注入、学习跳过、心跳、非流式不掺心跳、带 `Content-Length` 的上游形态）；隔离实例 17881 + 带 CL 的假上游实测两条路径：首跳加密 → 客户端拿到明文思考且加密首跳未泄漏，始终加密 → 200 + 597 字节（提示 + 正文）。**线上已换版**（2026-11-10 12:59 由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`，`zgate.exe` 与候选同 sha、PID 27360；换版后实跑命中「换连接+换会话重抽 1/5」）。回退：`mode` 改回 `models` 或删 `reasoningGuard` 段；二进制回退用 `zgate.exe.bak-deploy-*`。
+
+### 守卫第三次修复：客户端不发思考档位时由网关补（2026-11-10 下午）
+
+> 前两条都在修「守卫怎么重抽」，换版后仍看不到思考 —— 因为守卫根本没被触发过。
+
+- **真因**：DSH 模型选择器没有逐模型默认档位（catalog 的 `reasoning.defaultEffort` 为空 → 选的是 "Default" 伪档位），真实请求体只有 `{"model":"Iceman","max_tokens":128000}`，**不带 `reasoning_effort`**；而 `guardApplies` 首行 `!reasoningExpectsThinking(body)` 直接返回 false —— `zgate.log` 13:10 那两条请求全程没有任何守卫行，就是这个原因。思考为空不是守卫失效，是守卫没上场。
+- **修法（网关侧补档，不动前端 minified）**：`ReasoningGuard` 新增 `forceEffort` / `forceEffortModels`；`doForwardWith` 在发上游前调用 `injectThinkingEffort`，命中「模型在白名单 + 客户端没带 `reasoning_effort`/`thinking`」时补 `reasoning_effort: "high"`，日志写一行 `客户端未声明思考档位，按配置补 reasoning_effort="high"`。客户端显式 `off` 一律原样保留（不能只看 `reasoningExpectsThinking`，它把 off 判成「不期待思考」，照它改会把用户关掉的思考偷偷打开）。
+- **为什么不在前端补**：`~/.dsh/profiles/desktop/node_modules/dsh-claude-style/lib/client.js` 在 2026-11-10 12:35 被重建，11-09 打进去的 effort 补丁随之丢失（`patch-claude-style-effort.mjs --check` 报 `NEEDS_REVIEW`，六条锚点全归零）；profile 每次重建都会重演，网关配置不会。
+- **验收**：`gofmt` / `go build ./...` / `go vet ./...` exit 0；`internal/router` 14 项、`internal/config` 2 项 PASS（新增 `TestInjectThinkingEffort` 七条边界 + `TestReasoningGuardForcesEffortThenRedraws` 全链路：不带档位的请求 → 补 high → 首跳加密自动重抽 → 客户端只拿到明文思考）。隔离实例 17871 + 真上游实跑（请求体与 DSH 完全同形、无 `reasoning_effort`）：日志两行补档记录，流式 226 / 202 个 `reasoning_content` 块、801 / 714 字明文思考、最大间隔 2.9s。**线上 7871 仍是旧二进制**，需执行 `tools/zgate-lifecycle/restart-zgate.cmd`（会话内不重启长驻网关）。回退：删 `forceEffort` 两行即恢复「客户端不说就不补」。
+
+### 守卫第四次修复：探针设时限 + 窗口期直通（2026-11-10 傍晚）
+
+> 上一条修完触发条件后守卫确实上场了，但用户每次都要等 85 秒再手动点停止 —— 探针在等一整段加密思考，等来的结论却是「重抽也没用」。
+
+- **真因（代码级）**：`probeReasoningStream` 只在读到**第一个正文 delta** 时才返回 `streamEncrypted`；加密那一路在思考阶段整段静默（既没有明文 `reasoning_content`，也没有正文），所以判定延迟 = 那一次尝试的整段思考时长。`zgate.log` 实测 13:20:42「重抽 1/5」与 13:21:43「2/5」两次判定之间隔 61 秒；会话 `05:20:31 turn/start → 05:21:56` 用户手动取消，整轮 85 秒 0 字节。而重抽预算花完的「最后一发」又故意用无上限探针，等于把最后一段空等也摊给用户。
+- **修法一：探针设时限**（`ReasoningGuard.probeSeconds`，缺省 12）。新增 `probeReasoningStreamDeadline`：goroutine 跑原探针、`select` 到点返回 `timedOut`，调用方关流重抽（缓冲字节丢弃，goroutine 靠 `Close` 解除读阻塞）。日志：`%v 内没有可判定的思考信号（上游静默），换连接+换会话重抽 N/M`。
+- **修法二：重抽预算花完就直接放行，不再探测**。守卫块改成三分支 switch —— ① 跳过期：`在「近期拿不到明文思考」跳过期内，直接放行（不再探测）`；② 预算花完：**不探测**，把上游原始流交给客户端（`io.MultiReader(提示, resp.Body)`）；③ 还有预算：按 `probeSeconds` 探测。85 秒空等的直接来源就是「最后一发还探」，删掉即消失。
+- **修法三：提示按成因分开写**。探针超时只说「本次思考探测超时（上游思考阶段静默）」；只有真读到 `reasoning.encrypted` 才说「上游本次只下发加密思考」；跳过期说「该模型近期思考拿不到明文（上游加密或思考阶段静默）」。混写会让「重抽之后其实拿到了明文」的界面与日志自相矛盾。
+- **修法四：跳过期不滑动续期**。`guardInSkip` 到期先清 `skipUntil` 与 `encryptedOnly` 再返回 false，否则命中一次续一次，窗口期过后永远探不回来；进跳过表的条件也从「从未见过明文」改成「自上一条明文以来连续 N 轮失败」（旧条件在真机永远进不去）。
+- **配置**（`zgate.json`）：`maxRetries: 1`（窗口期内重抽几乎必然落回同一后端，实测 12:01 连续 3/3、13:20 连续 2/2）、`probeSeconds: 15`（明文流实测 ttfb 最高 13.5 秒，取 15 才不会把慢而正常的流误判成静默）、`giveUpAfter: 1`（跳过只关掉「重抽」，明文照常流，误跳代价低），`maxProbeBytes: 32768` / `giveUpForSeconds: 600` / `forceEffort` 不变。
+- **验收**：`gofmt -l` 空、`go vet` / `go test -count=1 ./...` exit 0（`internal/router` 19 项；新增 `TestProbeReasoningStreamDeadlineTimesOut`、`TestProbeReasoningStreamDeadlinePassesThrough`、`TestReasoningGuardSilentStreamProbesWithDeadline`、`TestReasoningGuardSkipWindowPassesThroughFast`、`TestReasoningGuardSkipWindowExpiresAndReprobes`）；`build.py --candidate` 出 `zgate.candidate.exe`（PE Subsystem 2 / GUI，10,570,752 字节）。隔离实例 `%TEMP%\zgate-iso-probe`（假上游第 1 发先 flush 再静默 3 秒吐加密、第 ≥2 发立即吐明文）：首轮 1,263 ms 拿到明文思考（1 秒探针超时 → 重抽 1 次 → 明文，`attempts.log` 两次调用），第二轮 2 ms 直通并带跳过提示。**线上 7871 仍是旧二进制**，需执行 `tools/zgate-lifecycle/restart-zgate.cmd`（会话内不重启长驻网关）。回退：`probeSeconds` 设负数并把 `maxRetries` 调回 5 即恢复「探满再重抽」，或整段删 `reasoningGuard`。
+
+### 移除 Gemini 反代与主力内 Gemini 模型（2026-11-10）
+
+- **反代下线**：`zgate.json` 删 `CP` upstream 与 `cliproxyapi` child（8317），现役为 5 个 upstream（OC / WB / QD / QW / QN）+ 2 个按需 child（workbuddy :7863 / qoder :8790）；`third-party/cliproxyapi/`（含 exe 与真值配置）整体移到 `.work/cliproxyapi-removed-20261110/` 可逆保留，未删真值、未重启长驻网关。
+- **主力收敛**：`tools/model_alias.py` 的 `MAIN_ORDER` 去掉 4 条 `chat:cp:gemini-*`，`MAIN_UPSTREAM_HINTS = ("deepseek",)`；`CHANNEL_RANK` / `CHANNEL_BASE` / `CHANNEL_PREFIX` 去 CP，`MODEL_META` 清空，`price_of` 删 CP 零价分支，`entry_group` 删 CP 白名单闸。
+- **运行时配置**：`~/.zcode/v2/provider_config.json` / `model-alias-map.json` / `~/.dsh/profiles/desktop/cordis.patch.yml` 删 4 个 Gemini 型号与 `cp:` legacy 键，各留 `.bak-20261110-gemini-removal` 备份；`arena-leaderboard.json` 属外部榜单快照，保留。
+- **Go 侧**：`main.go` / `config.go` / `keys.go` / `router.go` / `router_test.go` 去 CP 凭据、`/health` 第六段与测试段名，`go build` / `go test` / `go vet` / `gofmt` 全绿（分片 [evidence/agent-gemini-go-cleanup.md](evidence/agent-gemini-go-cleanup.md)）。
+- **门面与文档**：README / AGENTS / docs 11 篇统一改 5 upstream / 2 child，删 `docs/MODEL-PROVIDERS.md` §4.11 Gemini 反代整节与 `docs/ARCHITECTURE.md` 的 CP 架构图行；`tools/check-project.py` 加 5 条防回退 STALE 正则、把 `8317` 反向断言翻成残留检测。历史条目（CHANGELOG / PROGRESS / archive / BENCHMARKS）、tests 夹具与 `tools/check-secrets.py` 的 Gemini key 闸门按「历史与示例」口径保留。
+- **记忆**：5 篇 CP/Gemini 专述 Document 归档、2 篇现行句改写，`index.json` 44 条逐条 hash / sizeBytes 复核，`check-memory-hygiene.mjs` exit 0（分片 [evidence/agent-gemini-memory-cleanup.md](evidence/agent-gemini-memory-cleanup.md)）。
+- **验收**：`py_compile` / `check-project.py` / `check-docs.py` / `check-secrets.py` / Go 四件套 / 记忆门禁全 exit 0；未 `git add` / `commit` / `push`（用户未要求）。回退：三份 `.bak-20261110-gemini-removal` 与 `.work/cliproxyapi-removed-20261110/` 原位可逆。
+
+
 ### 检测性价比 / 收录价格口径正规化（2026-11-09）
 
 - **零新增推理请求**（用户 m01007「按你的想法去做，但是要考虑最性价比的打法」）：不新增「每次跑一遍好不好用」探测；每日同步里的 WorkBuddy 价格表骤降逐个探活（`probe_alive` 打 `/v1/chat/completions`）改为默认跳过、保留旧价，实测 19 次探活对最终 39 条 `wb_pricing.json` 零影响；`docs/PITFALLS.md` §35 补「现行口径」注记（`go_model_sync.py` 体检不再发探测请求，去留只看上游清单）。

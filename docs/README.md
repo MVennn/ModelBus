@@ -11,7 +11,7 @@
 
 | 文档 | 一句话定位 |
 |---|---|
-| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、ZCode 配置落点、6 个 upstreams（OC / WB / QD / QW / QN / CP）的分组 / 协议 / 工具调用 / 关思考参数 |
+| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、ZCode 配置落点、6 个 upstreams（OC / WB / QD / QW / QN / GM）的分组 / 协议 / 工具调用 / 关思考参数 |
 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（WB 固定链首、其余按价格稳定排序）、同类模型的判定（看上游回包 model / quota / credit，不看名字）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
 | [QODER.md](QODER.md) | **Qoder 接入正本**：qoder2api-hub 的 8790 进程、OAuth/签到、`qoder` provider 的模型与同步/探测命令、边界与故障处理 |
 | [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与 Go 协议桥流式双路径的边界 |
@@ -24,13 +24,14 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [DOC-RULES.md](DOC-RULES.md) | **文档规则正本**：文件命名（全大写连字符）、分类定位、单一正本映射表、链接纪律、变更触发矩阵、体量预算 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：3 个 child（7863 / 8790 / 8317）与 6 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：2 个 child（7863 / 8790）与 6 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
 | [MAINTENANCE.md](MAINTENANCE.md) | 日常维护：刷价格表、探测限速、快照保留、`--apply` 备份与回退、热重载注意事项 |
 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) | **zgate 生命周期正本**：计划任务双任务自启、CMD/DSH 会话树与 Job Object 问题、`build.py --candidate` + `tools/zgate-lifecycle/` 换版流程、失败回滚与常见故障 |
 | [TOOLS.md](TOOLS.md) | **工具清单正本**：运行环境、每个脚本的产物与去留标记、统一模式与 `--separate` 的区别 |
 | [VERSIONING.md](VERSIONING.md) | **版本晋升正本**：三段式进位、仓库发布号在哪维护、什么时候不动版本号。发版规则并入本篇 |
 | [SECRETS.md](SECRETS.md) | **凭据位置正本**：一律走环境变量，**只写位置不写值**；上传公开仓库前必读 |
 | [release-notes/README.md](release-notes/README.md) | **Release 说明格式正本**：形状、动词四选一、覆盖率红线、固定尾巴 |
+| [MODEL-STREAM.md](MODEL-STREAM.md) | **流式 / 思考 / 输出 / TPS 准入正本**：模型进表即自动纳入，新增模型免人工逐个测试；含上游加密思考分流 `ENC` 判定口径，§10 记网关守卫 `auto` 模式的同类模型免配置适配 |
 
 ## 三、排错与踩坑
 

@@ -22,9 +22,8 @@
 | 编译候选 | `python gateways/zgate/build.py --candidate` → `zgate.candidate.exe` | 在 `gateways/zgate/` 里裸跑 `go build .` |
 | 验证存活 | 会话结束后另起会话 `curl http://127.0.0.1:7871/health` 仍 200 | 只看启动那一刻的 `/health` |
 
-监听 `127.0.0.1:7871`；`zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / QN / CP）与 3 个按需拉起的 child：
-workbuddy `:7863`（health `/panel/`）、qoder `:8790`（health `/ping`）、cliproxyapi `:8317`（health `/v1/models`，
-可执行文件 `third-party/cliproxyapi/cli-proxy-api.exe`），三者 policy 均为 `ondemand`、`idleSeconds=300`。
+监听 `127.0.0.1:7871`；`zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / QN / GM）与 2 个按需拉起的 child：
+workbuddy `:7863`（health `/panel/`）、qoder `:8790`（health `/ping`），两者 policy 均为 `ondemand`、`idleSeconds=300`。
 
 ---
 

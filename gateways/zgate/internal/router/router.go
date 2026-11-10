@@ -8,6 +8,8 @@ package router
 
 import (
 	"bytes"
+	crand "crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -40,6 +42,12 @@ type Server struct {
 	// 集合体的链路有几十跳，不记住这些死跳，每个请求都要先把它们撞一遍。
 	coolMu sync.Mutex
 	cool   map[string]time.Time
+	// guardMu/guardMem 是 reasoningGuard 的按模型学习表：记住哪些模型能拿到明文
+	// 思考、哪些模型重抽多少次都只回加密。前者让守卫一直有效，后者在连续几轮
+	// 全程加密后自动停手一段时间（省掉每轮白等几十秒），到期再重新探路。
+	// 重启进程即清空，不落盘。
+	guardMu  sync.Mutex
+	guardMem map[string]*guardModelStat
 }
 
 // hopCooldown 是死跳的默认冷却时长；与额度窗口同一量级的短周期，够跨过一轮使用。
@@ -476,10 +484,10 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 		h.Set("User-Agent", "unified-router/1.0")
 	}
 	switch channel {
-	case "WB", "QD", "QW", "QN", "CP":
+	case "WB", "QD", "QW", "QN", "GM":
 		// 这些通道一律用 zgate 自己的 key 覆盖 Authorization：
-		// CP 走本机 CLIProxyAPI（access.api-keys 校验），QN 是七牛云网关；
-		// 漏掉任一通道都会把客户端原始 Bearer（或空）透传上去被回 401。
+		// QN 是七牛云网关、GM 是 catiecli 中转；漏掉任一通道都会把客户端原始
+		// Bearer（或空）透传上去被回 401「未提供API Key」。
 		h.Set("Authorization", "Bearer "+key)
 	case "OC":
 		h.Set("Authorization", "Bearer "+key)
@@ -520,6 +528,13 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	accept func(status int, head []byte) bool, retry func(reason string), onThrottled func()) {
 
 	target := strings.TrimRight(base, "/") + path + search
+	// 客户端没声明思考档位时由网关补一档（config.ReasoningGuard.ForceEffort）。
+	// 必须在上游请求、requestModel 与 guardApplies 之前替换 body —— 三者用的都是这份字节。
+	if injected, ok := injectThinkingEffort(s.Config().ReasoningGuard, body); ok {
+		s.log.Infof("[router] %s 客户端未声明思考档位，按配置补 reasoning_effort=%q",
+			target, s.Config().ReasoningGuard.ForceEffort)
+		body = injected
+	}
 	// 429 就地退避重试一次：限流窗口通常很短，先等一小会儿再试同一跳，
 	// 比立刻回落/直接失败更划算。重试仍 429 时再交给 onThrottled 冷却。
 	// txRetry 与 retry429 各自单独计数：传输层失败的重试不能消耗 429 的退避预算，
@@ -527,6 +542,10 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	// 那样先传输失败一次的请求就吃不到 429 的就地退避了。
 	txRetry := 0
 	retry429 := 0
+	guardRetries := 0 // reasoningGuard：同一跳透明重抽次数（上游加密思考分流）
+	// guardTimeoutRounds：其中有多少次是「探针到点都没有可判定信号」（上游思考阶段整段静默）。
+	// 放行时要按原因给不同提示：加密分流说「只回加密」，静默超时说「探测超时」，别混为一谈。
+	guardTimeoutRounds := 0
 	for {
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
@@ -534,6 +553,15 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			return
 		}
 		req.Header = headers.Clone()
+		if guardRetries > 0 {
+			// 重抽必须换「连接 + 会话」两样：2026-11-10 12:01 实测 3 次重抽全部落回
+			// 同一路加密后端（同一 keep-alive 连接、同一个写死的 X-Opencode-Session），
+			// 上限耗尽后放行的仍是加密流 —— 这就是前两次修完仍看不到思考的原因。
+			req.Close = true
+			if base := headers.Get("X-Opencode-Session"); base != "" {
+				req.Header.Set("X-Opencode-Session", guardRetrySession(base, guardRetries))
+			}
+		}
 		if len(body) > 0 {
 			req.ContentLength = int64(len(body))
 		}
@@ -600,8 +628,101 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			}
 		}
 
+		// reasoningGuard：上游同别名会随机分流到「只给加密 thinking 的后端」，
+		// 宿主把 reasoning.encrypted 当 replay 元数据丢弃、思考块留空，GUI 完全看不到思考。
+		// 命中条件（流式 + 白名单模型 + 期待思考 + SSE + 2xx）在写任何字节给客户端前
+		// 先判首段 SSE：零明文 thinking delta 且带加密 detail → 丢弃缓冲、重抽同一跳，
+		// 直到拿到明文思考流或达上限。重抽绝不调用 retry（不走 fallback），也绝不写 header。
+		var streamSrc io.Reader = resp.Body
+		guard := s.Config().ReasoningGuard
+		model := requestModel(body)
+		if resp.StatusCode < 300 && wantsStream(body) && isEventStreamGuard(resp) &&
+			s.guardWanted(model, guard, body) {
+			// 重抽预算已经花完，或者这个模型正处在「近期拿不到明文思考」的窗口期：都不再探测。
+			// 加密那一路探针要么等到整段思考结束才判得出（实测 11 s / 61 s），
+			// 要么白等满上限；而窗口期内重抽几乎必然落回同一路后端（12:01 连续 3/3、
+			// 13:20 连续 2/2）。直接把上游原始流交给客户端：可读提示先到，
+			// 空闲心跳负责证明连接还活着，正文一到就往下流。
+			switch {
+			case s.guardInSkip(model):
+				s.log.Infof("[router] %s 模型 %q 在「近期拿不到明文思考」跳过期内，直接放行（不再探测）", target, model)
+				if guard.InjectNotice {
+					streamSrc = io.MultiReader(bytes.NewReader(guardSkipNoticeSSE()), resp.Body)
+				}
+			case guardRetries >= guard.MaxRetries:
+				// 重抽预算花完的两种成因分开报：探针超时（静默）和对端明确给了加密思考。
+				// 最后一次不探测、直接放行上游原始流 —— 一旦探测，用户就要多等满一个
+				// probeSeconds，窗口期里纯属白等。
+				s.guardNoteEncryptedOnly(model, guard)
+				if guardTimeoutRounds > 0 {
+					s.log.Warnf("[router] %s 模型 %q 连续 %d 次探测超时（上游思考阶段静默），放行上游原始流",
+						target, model, guardTimeoutRounds)
+					if guard.InjectNotice {
+						streamSrc = io.MultiReader(bytes.NewReader(guardTimeoutNoticeSSE(guardRetries)), resp.Body)
+					}
+				} else {
+					s.log.Warnf("[router] %s 模型 %q 连续 %d 次没拿到明文思考，放行上游原始流", target, model, guardRetries)
+					if guard.InjectNotice {
+						streamSrc = io.MultiReader(bytes.NewReader(guardNoticeSSE(guardRetries)), resp.Body)
+					}
+				}
+			default:
+				verdict, buffered, timedOut := probeReasoningStreamDeadline(resp.Body,
+					guard.MaxProbeBytes, time.Duration(guard.ProbeSeconds)*time.Second)
+				if timedOut {
+					// 到点没有任何可判定的信号：加密分流那一路在思考阶段整段静默，
+					// 既没有明文 reasoning_content 也没有正文。换连接+换会话重抽，
+					// 别把「等满一整段思考」的成本摊给用户。
+					guardRetries++
+					guardTimeoutRounds++
+					s.log.Infof("[router] %s 模型 %q %v 内没有可判定的思考信号（上游静默），换连接+换会话重抽 %d/%d",
+						target, model, time.Duration(guard.ProbeSeconds)*time.Second, guardRetries, guard.MaxRetries)
+					resp.Body.Close()
+					select {
+					case <-time.After(guardRetryDelay):
+					case <-r.Context().Done():
+						return
+					}
+					continue
+				}
+				if verdict == streamEncrypted && guardRetries < guard.MaxRetries {
+					guardRetries++
+					s.log.Infof("[router] %s 模型 %q 上游返回加密思考分流（零明文 thinking delta），换连接+换会话重抽 %d/%d",
+						target, model, guardRetries, guard.MaxRetries)
+					// 首块已判定是加密分流：直接关掉这次响应重抽，不读剩余流，
+					// 否则加密后端拖到几十秒才 finish，用户要白等一整轮才看到重抽结果。
+					// 重抽之间留一点抖动，避开上游「同一瞬间同一窗口」的分流抖动。
+					resp.Body.Close()
+					select {
+					case <-time.After(guardRetryDelay):
+					case <-r.Context().Done():
+						return
+					}
+					continue
+				}
+				switch verdict {
+				case streamEncrypted:
+					s.guardNoteEncryptedOnly(model, guard)
+					s.log.Warnf("[router] %s 模型 %q 连续 %d 次加密思考，达上限放行最后一次", target, model, guardRetries)
+					if guard.InjectNotice {
+						buffered = append(guardNoticeSSE(guardRetries), buffered...)
+					}
+				case streamPlaintext:
+					s.guardNotePlaintext(model)
+				}
+				streamSrc = io.MultiReader(bytes.NewReader(buffered), resp.Body)
+			}
+		}
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
+		if isEventStreamGuard(resp) {
+			// 事件流一律交给 net/http 按 chunked 重新分帧。上游 SSE 可能自带
+			// Content-Length（实测 200 + CL 的假上游就能打出来），而守卫会丢弃首段、
+			// 插入可读提示、掺空闲心跳，长度必然与原值不同 —— 保留旧 CL 会让写端报
+			// "http: wrote more than the declared Content-Length" 并直接断流，
+			// 客户端收到 200 却 0 字节，表现就是「连上了但什么都没有」。
+			w.Header().Del("Content-Length")
+		}
 		w.WriteHeader(resp.StatusCode)
 		if len(head) > 0 {
 			if _, err := w.Write(head); err != nil {
@@ -613,17 +734,80 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			flusher.Flush()
 		}
 		buf := make([]byte, 32*1024)
+		heartbeat := time.Duration(s.Config().StreamIdleHeartbeatSeconds) * time.Second
+		if heartbeat > 0 && !isEventStreamGuard(resp) {
+			// 心跳只对 SSE 有意义：往普通 JSON 报文里插注释行会直接毁掉响应体，
+			// 所以非事件流一律走原来的同步转发。
+			heartbeat = 0
+		}
+		if heartbeat <= 0 {
+			for {
+				n, readErr := streamSrc.Read(buf)
+				if n > 0 {
+					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+						return
+					}
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+				if readErr != nil {
+					return
+				}
+			}
+		}
+		// 空闲心跳：上游思考阶段常静默 30-60 秒（2026-11-10 实测 iceman 正文中断
+		// 51.9 秒），中间层和宿主都会把这当成「连上了但没说话」。SSE 注释行对任何
+		// 合规客户端都是无操作，但足以证明连接还活着，也让用户看到界面还在动。
+		type streamRead struct {
+			data []byte
+			err  error
+		}
+		ch := make(chan streamRead, 4)
+		go func() {
+			for {
+				n, readErr := streamSrc.Read(buf)
+				var data []byte
+				if n > 0 {
+					// 主循环要立刻写出去，必须复制：buf 会被下一次 Read 覆盖。
+					data = append([]byte(nil), buf[:n]...)
+				}
+				select {
+				case ch <- streamRead{data: data, err: readErr}:
+				case <-r.Context().Done():
+					return
+				}
+				if readErr != nil {
+					return
+				}
+			}
+		}()
+		timer := time.NewTimer(heartbeat)
+		defer timer.Stop()
 		for {
-			n, readErr := resp.Body.Read(buf)
-			if n > 0 {
-				if _, writeErr := w.Write(buf[:n]); writeErr != nil {
+			select {
+			case rr := <-ch:
+				if len(rr.data) > 0 {
+					if _, writeErr := w.Write(rr.data); writeErr != nil {
+						return
+					}
+					if flusher != nil {
+						flusher.Flush()
+					}
+				}
+				if rr.err != nil {
+					return
+				}
+				resetTimer(timer, heartbeat)
+			case <-timer.C:
+				if _, err := io.WriteString(w, ": zgate keepalive\n\n"); err != nil {
 					return
 				}
 				if flusher != nil {
 					flusher.Flush()
 				}
-			}
-			if readErr != nil {
+				resetTimer(timer, heartbeat)
+			case <-r.Context().Done():
 				return
 			}
 		}
@@ -677,13 +861,13 @@ func (s *Server) health(w http.ResponseWriter) {
 		return view
 	}
 	payload := map[string]any{
-		"ok":          true,
-		"opencode":    upstreamView("OC"),
-		"workbuddy":   upstreamView("WB"),
-		"qoder":       upstreamView("QD"),
-		"qwen":        upstreamView("QW"),
-		"qiniu":       upstreamView("QN"),
-		"cliproxyapi": upstreamView("CP"),
+		"ok":        true,
+		"opencode":  upstreamView("OC"),
+		"workbuddy": upstreamView("WB"),
+		"qoder":     upstreamView("QD"),
+		"qwen":      upstreamView("QW"),
+		"qiniu":     upstreamView("QN"),
+		"gemini":    upstreamView("GM"),
 		"alias": map[string]any{
 			"path":   s.aliases.Path(),
 			"models": s.aliases.Count(),
@@ -928,6 +1112,13 @@ func transportFailed(result bridge.Result) bool {
 //
 // 桥接路径（messages / responses）不走 chainAccept，必须单独问这个，
 // 否则 403 会原样返回给客户端，链上的机场跳永远轮不到。
+//
+// 2026-11-10 补第五个 marker：opencode 的 messages 端点对进不去的出口只回一句
+// "Upstream request failed: Endpoint is unavailable."，bridge 再包一层
+// "bridge upstream error: "（见 internal/bridge/bridge.go 的 upstreamMessage）。
+// 这句既没有 RegionError 也没有 country 字样，只认前四串时 Claude-Haiku-5.5 的
+// 403 会直接漏给客户端，链尾的机场孪生跳永远轮不到。按大小写不敏感匹配，
+// 且仍受 403/400 门槛约束，真正的客户端 4xx（invalid_request 之类）不在此列。
 func regionBlocked(status int, head []byte) bool {
 	if status != 403 && status != 400 {
 		return false
@@ -942,7 +1133,7 @@ func regionBlocked(status int, head []byte) bool {
 			return true
 		}
 	}
-	return false
+	return bytes.Contains(bytes.ToLower(head), []byte("endpoint is unavailable"))
 }
 
 // proxyTwinAfter 判断 index 之后还有没有「同 channel、同上游、带出口」的孪生跳。
@@ -1011,7 +1202,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorBody("配置读取失败: "+err.Error(), "configuration_error"))
 		return
 	}
-	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.CliproxyEnvFile)
+	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)
 	s.aliases.Reload()
@@ -1080,6 +1271,407 @@ func wantsStream(body []byte) bool {
 		return false
 	}
 	return probe.Stream
+}
+
+// ---- reasoningGuard：上游加密思考分流的透明重抽 ----------------------------
+
+type streamReasoningVerdict int
+
+const (
+	streamPlaintext    streamReasoningVerdict = iota // 见到明文 thinking delta，思考可见
+	streamEncrypted                                  // 零明文 thinking delta + 加密 reasoning_details
+	streamUndetermined                               // 缓冲超限 / 未判定，按原样放行
+)
+
+// reasoningGuardMatches 判断请求体里的 model 是否落在守卫白名单。
+// doForwardWith 拿到的是 rewriteModel 之后的 body，model 已是 upstream 名，
+// 因此白名单同时写别名（Iceman）与 upstream（iceman-contributor-free）。
+func reasoningGuardMatches(models []string, body []byte) bool {
+	if len(models) == 0 {
+		return false
+	}
+	var probe struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return false
+	}
+	for _, m := range models {
+		if m != "" && strings.EqualFold(m, probe.Model) {
+			return true
+		}
+	}
+	return false
+}
+
+// reasoningExpectsThinking 判断这次请求是否声明要思考。用户显式关思考
+// （reasoning_effort=off / thinking.type=disabled）时守卫跳过，不重抽。
+func reasoningExpectsThinking(body []byte) bool {
+	var probe struct {
+		ReasoningEffort *string `json:"reasoning_effort"`
+		Thinking        *struct {
+			Type string `json:"type"`
+		} `json:"thinking"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return false
+	}
+	if probe.ReasoningEffort != nil && *probe.ReasoningEffort != "" &&
+		!strings.EqualFold(*probe.ReasoningEffort, "off") {
+		return true
+	}
+	return probe.Thinking != nil && strings.EqualFold(probe.Thinking.Type, "enabled")
+}
+
+// injectThinkingEffort 在客户端没声明思考档位时替它补上 reasoning_effort。
+// 只对 ForceEffort 命中的模型生效（ForceEffortModels，空则回落 Models 白名单），
+// 客户端自带 reasoning_effort / thinking.type 时一律不动它 —— 用户显式关思考（off）
+// 也要原样保留，否则「关掉思考」这个操作会被网关偷偷改回去。
+func injectThinkingEffort(g config.ReasoningGuard, body []byte) ([]byte, bool) {
+	if !g.Enabled || g.ForceEffort == "" || len(body) == 0 {
+		return body, false
+	}
+	models := g.ForceEffortModels
+	if len(models) == 0 {
+		models = g.Models
+	}
+	if !reasoningGuardMatches(models, body) {
+		return body, false
+	}
+	var raw map[string]json.RawMessage
+	if json.Unmarshal(body, &raw) != nil {
+		return body, false
+	}
+	if _, ok := raw["model"]; !ok {
+		return body, false
+	}
+	// 客户端自己带了档位就一律不动 —— 注意不能只看 reasoningExpectsThinking：
+	// 那个函数把 "off" 判成「不期待思考」，照它来的话用户点「关掉思考」会被悄悄改回 high。
+	if v, ok := raw["reasoning_effort"]; ok {
+		var s string
+		if json.Unmarshal(v, &s) != nil || s != "" {
+			return body, false
+		}
+	}
+	if _, ok := raw["thinking"]; ok {
+		return body, false
+	}
+	effort, err := json.Marshal(g.ForceEffort)
+	if err != nil {
+		return body, false
+	}
+	raw["reasoning_effort"] = effort
+	out, err := json.Marshal(raw)
+	if err != nil {
+		return body, false
+	}
+	return out, true
+}
+
+func isEventStreamGuard(resp *http.Response) bool {
+	return strings.Contains(strings.ToLower(resp.Header.Get("Content-Type")), "event-stream")
+}
+
+// probeReasoningStream 在写给客户端之前按 SSE 行顺序即时判定明文 / 加密思考分流。
+// 返回的 buffered 是全部已读原始字节，放行时用 io.MultiReader 原样续上，
+// 保证一个字节都不丢、也不重复。
+//
+// 实测两种上游后端（同一别名 iceman-contributor-free 随机分流）：
+//   - 格式 A：首个有效 delta 就是 reasoning_content（明文思考逐块流式），思考可见；
+//   - 格式 B：首个有效 delta 是 content（正文），全程零明文思考，收尾带
+//     reasoning.encrypted（宿主当 replay 元数据丢弃、思考块留空）。
+//
+// 因为守卫只圈「声明要思考的 deepseek 模型」，格式 A 思考必然领先正文，
+// 所以「正文先于思考」就是加密分流的可靠标志：首个正文块立即判 B 并透明重抽，
+// 不必读完整个响应（否则用户要白等一次完整生成才看到重抽结果）。
+func probeReasoningStream(r io.Reader, maxBytes int) (streamReasoningVerdict, []byte) {
+	type detail struct {
+		Type string `json:"type"`
+	}
+	type deltaFields struct {
+		Content          string   `json:"content"`
+		ReasoningContent string   `json:"reasoning_content"`
+		Reasoning        string   `json:"reasoning"`
+		ReasoningText    string   `json:"reasoning_text"`
+		Thinking         string   `json:"thinking"`
+		ThinkingContent  string   `json:"thinking_content"`
+		ReasoningDetails []detail `json:"reasoning_details"`
+	}
+	type chunk struct {
+		Choices []struct {
+			Delta deltaFields `json:"delta"`
+		} `json:"choices"`
+	}
+	buffered := make([]byte, 0, 4096)
+	sawEncrypted := false
+	scanned := 0
+	tmp := make([]byte, 4096)
+	for len(buffered) < maxBytes {
+		n, err := r.Read(tmp)
+		if n > 0 {
+			buffered = append(buffered, tmp[:n]...)
+		}
+		for {
+			idx := bytes.IndexByte(buffered[scanned:], '\n')
+			if idx < 0 {
+				break
+			}
+			line := bytes.TrimSuffix(buffered[scanned:scanned+idx], []byte("\r"))
+			scanned += idx + 1
+			trimmed := bytes.TrimSpace(line)
+			if !bytes.HasPrefix(trimmed, []byte("data:")) {
+				continue
+			}
+			payload := bytes.TrimSpace(trimmed[5:])
+			if len(payload) == 0 || bytes.Equal(payload, []byte("[DONE]")) {
+				continue
+			}
+			var c chunk
+			if json.Unmarshal(payload, &c) != nil {
+				continue
+			}
+			for _, ch := range c.Choices {
+				d := ch.Delta
+				// 格式 A：明文思考字段先于正文 → 思考可见，立即放行。
+				if d.ReasoningContent != "" || d.Reasoning != "" || d.ReasoningText != "" ||
+					d.Thinking != "" || d.ThinkingContent != "" {
+					return streamPlaintext, buffered
+				}
+				// 格式 B：期待思考却先吐正文、零明文思考 → 加密分流，首块即重抽。
+				if d.Content != "" {
+					return streamEncrypted, buffered
+				}
+				for _, det := range d.ReasoningDetails {
+					if strings.EqualFold(det.Type, "reasoning.encrypted") {
+						sawEncrypted = true
+					}
+				}
+			}
+		}
+		if err != nil {
+			break
+		}
+	}
+	if sawEncrypted {
+		return streamEncrypted, buffered
+	}
+	return streamUndetermined, buffered
+}
+
+// probeReasoningStreamDeadline 给 probeReasoningStream 套一个上限：到点返回
+// timedOut=true，由调用方关闭响应体后换连接重抽。探针 goroutine 会阻塞在
+// Read 上，直到调用方 Close 掉 Body 才退出，所以超时分支必须先关 Body 再走。
+// d<=0 表示不设上限，等价于直接调 probeReasoningStream。
+func probeReasoningStreamDeadline(r io.Reader, maxBytes int, d time.Duration) (streamReasoningVerdict, []byte, bool) {
+	if d <= 0 {
+		v, b := probeReasoningStream(r, maxBytes)
+		return v, b, false
+	}
+	type outcome struct {
+		verdict  streamReasoningVerdict
+		buffered []byte
+	}
+	// 缓冲 1：超时后 goroutine 仍会把结果塞进来，不能让它永久阻塞。
+	ch := make(chan outcome, 1)
+	go func() {
+		v, b := probeReasoningStream(r, maxBytes)
+		ch <- outcome{v, b}
+	}()
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case o := <-ch:
+		return o.verdict, o.buffered, false
+	case <-timer.C:
+		return streamUndetermined, nil, true
+	}
+}
+
+// guardRetryDelay 是两次重抽之间的抖动间隔。不是为了省资源，而是把重抽错开到
+// 上游分流的另一个时间窗口上；实测同步重抽更容易连续落回同一路加密后端。
+const guardRetryDelay = 250 * time.Millisecond
+
+// guardModelStat 是守卫的「按模型学习表」：一个模型能不能拿到明文思考，
+// 由实况累积决定，不靠人肉维护白名单。
+type guardModelStat struct {
+	plaintext     int       // 拿到过多少次明文思考流
+	encryptedOnly int       // 连续多少轮「重抽到上限仍是纯加密」
+	skipUntil     time.Time // 跳过守卫的截止时间（零值 = 不跳过）
+}
+
+// requestModel 取请求体里的 model（此时已是 rewriteModel 之后的 upstream 名）。
+func requestModel(body []byte) string {
+	var probe struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(body, &probe) != nil {
+		return ""
+	}
+	return probe.Model
+}
+
+// guardRetrySession 给第 attempt 次重抽造一个新的会话标识。
+// 前缀保留原值，便于日志里认人；后缀带序号与随机数，确保每次都不同 ——
+// 上游若按会话粘连后端，只有换掉它才可能脱身。
+func guardRetrySession(base string, attempt int) string {
+	var b [4]byte
+	if _, err := crand.Read(b[:]); err != nil {
+		return base + "#r" + strconv.Itoa(attempt) + "-" + strconv.FormatInt(time.Now().UnixNano()%0xffff, 16)
+	}
+	return base + "#r" + strconv.Itoa(attempt) + "-" + hex.EncodeToString(b[:])
+}
+
+func (s *Server) guardStat(model string) *guardModelStat {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	if s.guardMem == nil {
+		s.guardMem = map[string]*guardModelStat{}
+	}
+	st, ok := s.guardMem[model]
+	if !ok {
+		st = &guardModelStat{}
+		s.guardMem[model] = st
+	}
+	return st
+}
+
+// guardApplies 决定这一跳要不要跑守卫。
+//
+// mode=auto（默认，配置里不写 models 也生效）时不再看模型名：只要客户端声明了要思考、
+// 又是 SSE 流，就先把首段判一遍。这样以后任何同类模型（Conatus / 新的匿名代号）
+// 出现「只回加密思考」都不需要改配置或重新排障 —— 探针只多读一个首块，代价极小。
+// 反过来，某个模型连续 giveUpAfter 轮重抽都没拿到明文时会被记进跳过表：
+// 它本来就是「天生只给加密」，再重抽只是让用户白等，跳过更划算；到期自动复探。
+func (s *Server) guardApplies(model string, g config.ReasoningGuard, body []byte) bool {
+	return s.guardWanted(model, g, body) && !s.guardInSkip(model)
+}
+
+// guardWanted 只回答「这一跳的形态是否命中守卫条件」，不看跳过表。
+// 跳过期照样要注入可读提示，所以调用方需要把这两件事分开问。
+func (s *Server) guardWanted(model string, g config.ReasoningGuard, body []byte) bool {
+	if !g.Enabled || !reasoningExpectsThinking(body) {
+		return false
+	}
+	if strings.EqualFold(g.Mode, "models") && !reasoningGuardMatches(g.Models, body) {
+		return false
+	}
+	return true
+}
+
+// guardInSkip 报告该模型是否正处在「只回加密思考」的跳过期。到期当场清空计数，
+// 让下一轮重新探路（上游可能已经切回明文后端）；跳过期内不滑动续期，
+// 否则窗口会被一次次续上、永远探不到恢复。
+func (s *Server) guardInSkip(model string) bool {
+	s.guardMu.Lock()
+	defer s.guardMu.Unlock()
+	st := s.guardMem[model]
+	if st == nil || st.skipUntil.IsZero() {
+		return false
+	}
+	if time.Now().Before(st.skipUntil) {
+		return true
+	}
+	st.skipUntil = time.Time{}
+	st.encryptedOnly = 0
+	return false
+}
+
+func (s *Server) guardNotePlaintext(model string) {
+	st := s.guardStat(model)
+	s.guardMu.Lock()
+	st.plaintext++
+	st.encryptedOnly = 0
+	s.guardMu.Unlock()
+}
+
+// guardNoteEncryptedOnly 记录一次「重抽到上限仍是纯加密」，必要时把该模型记进跳过表。
+func (s *Server) guardNoteEncryptedOnly(model string, g config.ReasoningGuard) {
+	st := s.guardStat(model)
+	s.guardMu.Lock()
+	st.encryptedOnly++
+	// encryptedOnly 本身就是「自上一条明文思考以来连续失败」的计数，
+	// 不再要求「从未见过明文」——真机 iceman 天天能拿到明文，按旧条件跳过表永远进不去，
+	// 于是每个窗口期的第一条请求都要白等满重抽预算。
+	enter := st.encryptedOnly >= g.GiveUpAfter
+	if enter {
+		st.skipUntil = time.Now().Add(time.Duration(g.GiveUpForSeconds) * time.Second)
+	}
+	count := st.encryptedOnly
+	s.guardMu.Unlock()
+	if enter {
+		s.log.Warnf("[router] 模型 %q 连续 %d 轮没有拿到明文思考（加密分流或思考阶段静默），%d 秒内跳过守卫（到期自动复探）",
+			model, count, g.GiveUpForSeconds)
+	}
+}
+
+// guardSkipNoticeSSE 是跳过期内的提示：这一轮压根没探测，所以不能说「已重抽 N 次」，
+// 只能说「近期拿不到明文思考、本次直接放行」。上游其实已切回明文时，这条提示
+// 只是思考块开头多一行说明，不影响正文。文案不写死「只回加密」：进跳过表的成因
+// 也可能是探针超时（上游思考阶段整段静默），两种成因对用户是同一个观感。
+func guardSkipNoticeSSE() []byte {
+	note := "ⓘ 该模型近期思考拿不到明文（上游加密或思考阶段静默），本次已跳过重抽直接放行；正文照常输出。"
+	payload, err := json.Marshal(map[string]any{
+		"id":     "zgate-guard-skip",
+		"object": "chat.completion.chunk",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{"reasoning_content": note},
+			"finish_reason": nil,
+		}},
+	})
+	if err != nil {
+		return nil
+	}
+	return []byte("data: " + string(payload) + "\n\n")
+}
+
+// guardTimeoutNoticeSSE 是「探测到点没信号」那一路的提示。它不能说「上游只回加密思考」——
+// 探针超时只证明上游在思考阶段静默，成因可能是加密分流，也可能是首字节就是慢。
+func guardTimeoutNoticeSSE(retries int) []byte {
+	note := fmt.Sprintf("ⓘ 本次思考探测超时（上游思考阶段静默，已重抽 %d 次），已直接放行上游流；思考可能不可见或稍后出现，正文照常输出。", retries)
+	payload, err := json.Marshal(map[string]any{
+		"id":     "zgate-guard-timeout",
+		"object": "chat.completion.chunk",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{"reasoning_content": note},
+			"finish_reason": nil,
+		}},
+	})
+	if err != nil {
+		return nil
+	}
+	return []byte("data: " + string(payload) + "\n\n")
+}
+
+// guardNoticeSSE 生成一条可读的 reasoning delta，插在放行流的最前面：
+// 宿主会把它渲染进思考块，用户看到的是「思考被上游加密」而不是一片空白。
+func guardNoticeSSE(retries int) []byte {
+	note := fmt.Sprintf("ⓘ 上游本次只下发加密思考（已重抽 %d 次仍未拿到明文），思考内容不可见，正文照常输出。", retries)
+	payload, err := json.Marshal(map[string]any{
+		"id":     "zgate-guard-notice",
+		"object": "chat.completion.chunk",
+		"choices": []any{map[string]any{
+			"index":         0,
+			"delta":         map[string]any{"reasoning_content": note},
+			"finish_reason": nil,
+		}},
+	})
+	if err != nil {
+		return nil
+	}
+	return []byte("data: " + string(payload) + "\n\n")
+}
+
+// resetTimer 重置一个可能已经触发的定时器（time.Timer.Reset 的常见坑）。
+func resetTimer(t *time.Timer, d time.Duration) {
+	if !t.Stop() {
+		select {
+		case <-t.C:
+		default:
+		}
+	}
+	t.Reset(d)
 }
 
 func copyHeaders(dst, src http.Header) {

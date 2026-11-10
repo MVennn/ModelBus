@@ -1,4 +1,4 @@
-// Package keys finds the six upstream credentials without ever writing them
+// Package keys finds the five upstream credentials without ever writing them
 // to a log or to the health endpoint.
 //
 // Order per channel (same as the old Node router):
@@ -8,7 +8,6 @@
 //	QD: env QD_API_KEY       -> qoder .env.local -> provider_config.json (8790 / providerId qoder)
 //	QW: env QWEN_API_KEY     -> qwen .env.local  -> provider_config.json (qianwenaiapi / providerId)
 //	QN: env QINIU_API_KEY    -> qiniu .env.local -> provider_config.json (qnaigc base)
-//	CP: env CLIPROXY_API_KEY -> cliproxy.env (CLIPROXY_ACCESS_KEY)
 package keys
 
 import (
@@ -18,9 +17,9 @@ import (
 	"strings"
 )
 
-// Set is the six credentials; empty means "not configured".
+// Set is the five credentials; empty means "not configured".
 type Set struct {
-	OC, WB, QD, QW, QN, CP string
+	OC, WB, QD, QW, QN, GM string
 }
 
 func env(name string) string { return strings.TrimSpace(os.Getenv(name)) }
@@ -108,10 +107,11 @@ var (
 	reQDID   = regexp.MustCompile(`^qoder$`)
 	reQWBase = regexp.MustCompile(`(?i)(qianwenaiapi|qianwenai)\.com`)
 	reQNBase = regexp.MustCompile(`(?i)qnaigc\.com`)
+	reGMBase = regexp.MustCompile(`(?i)catiecli\.sukaka\.top`)
 )
 
-// Load resolves all four, falling back to the files the repo already keeps.
-func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFile, cliproxyEnvFile string) Set {
+// Load resolves all five, falling back to the files the repo already keeps.
+func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFile, geminiEnvFile string) Set {
 	rules := readProviderRules(providerConfig)
 	var s Set
 	s.OC = env("OPENCODE_GO_KEY")
@@ -119,7 +119,6 @@ func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFi
 	s.QD = env("QD_API_KEY")
 	s.QW = env("QWEN_API_KEY")
 	s.QN = env("QINIU_API_KEY")
-	s.CP = env("CLIPROXY_API_KEY")
 	if s.OC == "" {
 		s.OC = find(rules, reOCBase, reOCID)
 	}
@@ -153,18 +152,19 @@ func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFi
 	if s.QN == "" {
 		s.QN = find(rules, reQNBase, nil)
 	}
-	// zgate.json 的 keyEnv=CLIPROXY_API_KEY 声明的是环境变量主来源；
-	// cliproxy.env 里的 CLIPROXY_ACCESS_KEY 是 CLIProxyAPI 自身约定的键名，
-	// 二者来源不同、不是笔误，勿强行统一。缺 key 时回退到第三方文件。
-	if s.CP == "" {
-		if v := readEnvFile(cliproxyEnvFile)["CLIPROXY_ACCESS_KEY"]; v != "" {
-			s.CP = v
+	s.GM = env("GEMINI_API_KEY")
+	if s.GM == "" {
+		if v := readEnvFile(geminiEnvFile)["GEMINI_API_KEY"]; v != "" {
+			s.GM = v
 		}
+	}
+	if s.GM == "" {
+		s.GM = find(rules, reGMBase, nil)
 	}
 	return s
 }
 
-// For returns the key for a channel name (OC / WB / QD / QW / QN / CP).
+// For returns the key for a channel name (OC / WB / QD / QW / QN).
 func (s Set) For(channel string) string {
 	switch channel {
 	case "OC":
@@ -177,8 +177,8 @@ func (s Set) For(channel string) string {
 		return s.QW
 	case "QN":
 		return s.QN
-	case "CP":
-		return s.CP
+	case "GM":
+		return s.GM
 	}
 	return ""
 }

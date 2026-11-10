@@ -1,0 +1,14 @@
+{
+  "via": "prod 7871",
+  "status": 502,
+  "ctype": "application/json; charset=utf-8",
+  "elapsed_s": 4.85,
+  "events": 0,
+  "done": false,
+  "delta_keys": [],
+  "reasoning_chars": 0,
+  "reasoning_head": "",
+  "content": "",
+  "usage": null,
+  "error": "{\"error\":{\"message\":\"all upstreams failed: GM:ais-gemini-3.8-flash\",\"type\":\"proxy_error\"}}"
+}

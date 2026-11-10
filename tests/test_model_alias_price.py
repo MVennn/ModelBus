@@ -118,9 +118,10 @@ class PriceIsDerivedTest(unittest.TestCase):
             )[0]
             return dict(built, price=price)
 
-        # 贵备份：0.43 仍在名单里 -> 主力。名单里这条是 chat:oc:qwen3.8-max（显式渠道，
-        # 因为同名型号同时在 Qoder 有免费入口），所以命中要按 OC 跳来构造。
-        self.assertEqual(M.entry_group(entry_for("oc:qwen3.8-max", 0.43), {}), ("main", "manual"))
+        # 主力看名单：名单里的型号即使 0.43 也进主力（豁免价格上限）。
+        # 11-10 主力收敛后名单只剩 DeepSeek 三跳 + gem:ais-gemini-3.8-flash，
+        # 这里用三跳里的 cn:deepseek-v4.1-flash 做样本。
+        self.assertEqual(M.entry_group(entry_for("cn:deepseek-v4.1-flash", 0.43), {}), ("main", "manual"))
         # 名单里的便宜模型 -> 省钱
         self.assertEqual(M.entry_group(entry_for("cn:glm-5.3-flash", 0.08), {}), ("low", ""))
         # 不在名单的贵模型 -> 不收录

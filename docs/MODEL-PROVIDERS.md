@@ -498,44 +498,26 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 ---
 
-## 4.11 Gemini 反代（CLIProxyAPI，本次实例五）
+## 4.11 谷歌 Gemini（catiecli 中转，本次实例五）
 
-本地子进程 `third-party/cliproxyapi/cli-proxy-api.exe`（Go 单二进制，v8.0.61），
-默认端口 8317，入站 OpenAI `/v1` + Gemini `/v1beta` + Anthropic 三协议。
+网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
+2026-11-10 实测返回 7 个 id：`ais-gemini-3.5-flash-lite` / `ais-gemini-3.1-flash-lite` /
+`ais-gemini-3-flash-preview` / `ais-gemini-3.5-flash` / `ais-gemini-3.6-flash` /
+`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`。只收了 `ais-gemini-3.8-flash` 一条。
 
-| 项 | 值（2026-11-09） |
+| 项 | 值（2026-11-10） |
 |---|---|
-| 渠道 | `CP`，zgate 按需拉起（`policy: ondemand`），空闲回收 |
-| 凭证 | AI Studio **API key**（`api-keys.gemini`），请求头 `x-goog-api-key` |
-| 上游 | `https://generativelanguage.googleapis.com` |
-| 主力型号 | `gemini-3.6-flash` / `gemini-3-flash-preview` / `gemini-3.5-flash-lite` / `gemini-3.1-flash-lite` |
-| 积分 | 全部 0（免费层），`price_of` 里 `CP` 直接 return 0.0 |
+| 渠道 | `GM`，远程直连，无本地子进程 |
+| 协议 | `chat`（OpenAI 兼容），`stream:true` 走 SSE |
+| 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`router.go` 的 `applyHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
+| 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
+| 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
+| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash`，单跳，排在 DeepSeek 三跳之后） |
+| 思考参数 | **未定论**。三次探测（含经 zgate 生产链路）全部上游 503，没有拿到任何 delta，`optionSpecs.reasoningLevel` 暂不配 |
 
-**凭证格式是硬门槛**：`AQ.` 前缀的新版 key 只认 `x-goog-api-key` 头，
-换成 `Authorization: Bearer` 会 401 UNAUTHENTICATED。CLIProxyAPI 的
-`api-keys.gemini` 段就是走前者，写对了才能列模型。
-
-**三个必踩的坑**：
-
-1. `zgate.json` 里 child 的 `exe`/`cwd` 相对路径以 `gateways/zgate` 为基准，
-   写成 `../third-party/...` 会解析成 `gateways/third-party/...`，报
-   `fork/exec ...: The directory name is invalid`。必须是 `../../third-party/...`。
-2. `internal/router/router.go` 的 `switch channel` 决定用哪套 key。漏了
-   `CP` 时会保留客户端的 Bearer 直接转发，CLIProxyAPI 回
-   `401 {"error":"Invalid API key"}`（几毫秒就回，看着像鉴权失败，其实是没换 key）。
-3. `config.yaml` 的 `models[].alias` 会让部分型号（`gemini-3.8-flash-high`、
-   `gemini-3-flash`）挂死 >90s，**不写 alias**，客户端直接用上游真名。
-
-**免费组闸**：`tools/model_alias.py` 的 `entry_group()` 对「0 积分即免费」的
-规则会让 CP 暴露的全部型号（含 antigravity 的 8 个 403、`gemini-3-flash` 404）
-灌进免费组。函数开头有 CP 白名单闸：链路全是 CP 且未命中 `MAIN_IDS` 一律
-`drop`。
-
-**antigravity OAuth 走不通**：`-antigravity-login` 能拿到有效 token
-（`userinfo` 200、`loadCodeAssist` 200），但返回的 `ineligibleTiers` 里
-`free-tier` 是 `UNSUPPORTED_CLIENT`——Google 已关闭个人版免费 Code Assist，
-只剩 `standard-tier` 且要求绑自己的 GCP project。`project_id` 填默认的
-`aicode-consumers` 会触发 `403 VALIDATION_REQUIRED`。
+**与前面四例的关键差异**：① 价格无公开源，必须在代码里登记，缺价即整条消失；
+② 上游对高需求模型直接 503，探测窗口要挑时段；③ 它是唯一走 `gem:` 显式前缀的渠道
+（`GM` 不在 `cn:` / `qoder:` 这些天然前缀里），命名规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md)。
 
 ---
 
@@ -655,6 +637,11 @@ OC 有个特例：四字段原生 body 被拒的型号（`needs_no_thinking`）�
 ——目录没有该字段（QN/QW），或该型号必须整包禁发思考字段（messages/responses 协议、
 muse 系）。同步日志会分别打印「未声明档位」和「声明了但写不进去」的型号清单，出现第三种
 理由就是回归。
+
+**流式 / 思考准入不用手工测**：档位写进 `values` 后，模型进入
+`~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 表即被
+`tools/model_stream_check.py` 自动纳入；每日同步链尾只测新增 / 档位变更 / 待复查模型。
+判定口径、豁免自动复通与离线接线守卫见 [MODEL-STREAM.md](MODEL-STREAM.md)。
 
 ---
 

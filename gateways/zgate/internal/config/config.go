@@ -40,20 +40,72 @@ type Child struct {
 	Windows []string `json:"windows"`
 }
 
+// ReasoningGuard controls transparent re-drawing of chat SSE streams whose
+// upstream backend returned only encrypted reasoning (reasoning_details with
+// type "reasoning.encrypted") and no plaintext reasoning_content. The GUI
+// cannot render an opaque replay blob, so those turns show an empty thinking
+// block. The guard inspects the first SSE deltas before any byte reaches the
+// client; when they look like an encrypted-only response it discards the
+// buffer and retries the same hop until a plaintext-thinking stream arrives.
+// Zero value = disabled, so existing configs are byte-for-byte unchanged.
+// Mode 决定守卫圈哪些模型：
+//   - "models"：只守 Models 白名单（老行为，配置里显式列模型名才生效）；
+//   - "auto"  ：凡是客户端声明要思考（reasoning_effort / thinking=enabled）的流式
+//     请求一律探针。新增同类模型不需要改配置——这正是「以后再有模型只回加密
+//     思考」时不用二次排障的关键。
+//
+// 缺省且 Models 非空时按 "models" 走，保持老配置逐字节等效。
+type ReasoningGuard struct {
+	Enabled       bool     `json:"enabled"`
+	Mode          string   `json:"mode"`
+	Models        []string `json:"models"`
+	MaxRetries    int      `json:"maxRetries"`
+	MaxProbeBytes int      `json:"maxProbeBytes"`
+	// InjectNotice：达上限放行加密流时，在流首注入一条可读的 reasoning delta，
+	// 让宿主至少渲染出「思考被上游加密」而不是一个空块。
+	InjectNotice bool `json:"injectNotice"`
+	// GiveUpAfter / GiveUpForSeconds：某个模型连续 N 轮「重抽到上限仍是纯加密」
+	// 且从未见过明文，就在内存里把它记进跳过表，一段时间内不再白等重抽
+	// （上游会切回明文，过期后自动重新探路）。0 = 默认 2 次 / 600 秒。
+	GiveUpAfter      int `json:"giveUpAfter"`
+	GiveUpForSeconds int `json:"giveUpForSeconds"`
+	// ForceEffort / ForceEffortModels：客户端没声明思考档位时，由网关替它补上
+	// reasoning_effort（例如 "high"）。2026-11-10 实测：DSH 的模型选择器没有逐模型
+	// 默认档位（catalog 里 reasoning.defaultEffort 为空 → 选中的是 "Default" 伪档位），
+	// 请求体里根本不带 reasoning_effort，上游于是只下发加密思考；而守卫的触发条件
+	// 正是「客户端声明要思考」，于是连重抽都不会发生，思考永远空白。
+	// 放在网关补档比反复给前端 minified 代码打补丁稳：profile 重建（实测 11-10 12:35）
+	// 会把前端补丁冲掉，网关配置不会。
+	// ForceEffortModels 为空时回落到 Models 白名单；两者都空则一律不注入。
+	ForceEffort       string   `json:"forceEffort"`
+	ForceEffortModels []string `json:"forceEffortModels"`
+	// ProbeSeconds：单次尝试里「最多等多久拿到可判定信号」。加密分流那一路上游
+	// 在思考阶段整段静默（不给明文 reasoning_content，也不给正文），只有思考结束
+	// 吐第一个正文块时才判得出来 —— 实测要等 11 s / 61 s。设上限后到点就换连接
+	// 重抽，把「等满一整段思考」压到固定几百毫秒到十几秒。重抽预算花完的最后一发
+	// 不再探测，直接放行上游原始流（探测只会再白等一个上限）。0/缺省 = 12 秒；负数 = 不设上限。
+	ProbeSeconds int `json:"probeSeconds"`
+}
+
 // Config is the whole file.
 type Config struct {
-	Listen          string              `json:"listen"`
-	AliasMap        string              `json:"aliasMap"`
-	ProviderConfig  string              `json:"providerConfig"`
-	WBGatewayConfig string              `json:"wbGatewayConfig"`
-	QoderEnvFile    string              `json:"qoderEnvFile"`
-	QwenEnvFile     string              `json:"qwenEnvFile"`
-	QiniuEnvFile    string              `json:"qiniuEnvFile"`
-	CliproxyEnvFile string              `json:"cliproxyEnvFile"`
-	Session         string              `json:"session"`
-	Log             Log                 `json:"log"`
-	Upstreams       map[string]Upstream `json:"upstreams"`
-	Children        map[string]Child    `json:"children"`
+	Listen          string         `json:"listen"`
+	AliasMap        string         `json:"aliasMap"`
+	ProviderConfig  string         `json:"providerConfig"`
+	WBGatewayConfig string         `json:"wbGatewayConfig"`
+	QoderEnvFile    string         `json:"qoderEnvFile"`
+	QwenEnvFile     string         `json:"qwenEnvFile"`
+	QiniuEnvFile    string         `json:"qiniuEnvFile"`
+	GeminiEnvFile   string         `json:"geminiEnvFile"`
+	Session         string         `json:"session"`
+	ReasoningGuard  ReasoningGuard `json:"reasoningGuard"`
+	// StreamIdleHeartbeatSeconds：SSE 转发空闲多久补一条注释心跳（": zgate keepalive"）。
+	// 上游思考阶段常静默 30-60 秒（实测 iceman 断 51.9 秒），中间层与客户端都会判空闲。
+	// 0/缺省 = 15 秒；负数 = 关闭。
+	StreamIdleHeartbeatSeconds int                 `json:"streamIdleHeartbeatSec"`
+	Log                        Log                 `json:"log"`
+	Upstreams                  map[string]Upstream `json:"upstreams"`
+	Children                   map[string]Child    `json:"children"`
 
 	Path string `json:"-"`
 	Dir  string `json:"-"`
@@ -125,14 +177,43 @@ func (c *Config) applyDefaults() {
 	if c.QiniuEnvFile == "" {
 		c.QiniuEnvFile = "../../providers/qiniu/.env.local"
 	}
-	if c.CliproxyEnvFile == "" {
-		c.CliproxyEnvFile = "../../third-party/cliproxyapi/cliproxy.env"
+	if c.GeminiEnvFile == "" {
+		c.GeminiEnvFile = "../../providers/gemini/.env.local"
 	}
 	if c.Session == "" {
 		c.Session = os.Getenv("OPENCODE_SESSION")
 	}
 	if c.Session == "" {
 		c.Session = "unified-router"
+	}
+	if c.ReasoningGuard.MaxRetries <= 0 {
+		// 3 次不够：2026-11-10 12:01 实测连续 4 次（1 次首发 + 3 次重抽）全落
+		// 同一路加密后端，达上限后放行的仍是加密流，用户白等 49 秒还没思考。
+		// 默认给到 5，配合「换连接 + 每跳换会话头」才真正能脱身。
+		c.ReasoningGuard.MaxRetries = 5
+	}
+	if c.ReasoningGuard.MaxProbeBytes <= 0 {
+		c.ReasoningGuard.MaxProbeBytes = 32 * 1024
+	}
+	if c.ReasoningGuard.Mode == "" {
+		if len(c.ReasoningGuard.Models) > 0 {
+			c.ReasoningGuard.Mode = "models"
+		} else {
+			c.ReasoningGuard.Mode = "auto"
+		}
+	}
+	c.ReasoningGuard.Mode = strings.ToLower(c.ReasoningGuard.Mode)
+	if c.ReasoningGuard.GiveUpAfter <= 0 {
+		c.ReasoningGuard.GiveUpAfter = 2
+	}
+	if c.ReasoningGuard.GiveUpForSeconds <= 0 {
+		c.ReasoningGuard.GiveUpForSeconds = 600
+	}
+	if c.ReasoningGuard.ProbeSeconds == 0 {
+		c.ReasoningGuard.ProbeSeconds = 12
+	}
+	if c.StreamIdleHeartbeatSeconds == 0 {
+		c.StreamIdleHeartbeatSeconds = 15
 	}
 	if c.Log.Dir == "" {
 		c.Log.Dir = filepath.Join(os.Getenv("LOCALAPPDATA"), "ZCodeGateway")
@@ -171,17 +252,6 @@ func (c *Config) applyDefaults() {
 		u.KeyEnv = "QWEN_API_KEY"
 		c.Upstreams["QW"] = u
 	}
-	// CLIProxyAPI（本机 8317）：Gemini / Antigravity / Vertex 统一出口，OpenAI 兼容。
-	if u, ok := c.Upstreams["CP"]; !ok {
-		c.Upstreams["CP"] = Upstream{
-			Base:   "http://127.0.0.1:8317/v1",
-			Child:  "cliproxyapi",
-			KeyEnv: "CLIPROXY_API_KEY",
-		}
-	} else if u.KeyEnv == "" {
-		u.KeyEnv = "CLIPROXY_API_KEY"
-		c.Upstreams["CP"] = u
-	}
 	// 七牛云 AI 网关（api.qnaigc.com）同样只提供 Anthropic Messages。
 	if u, ok := c.Upstreams["QN"]; !ok {
 		c.Upstreams["QN"] = Upstream{
@@ -191,6 +261,16 @@ func (c *Config) applyDefaults() {
 	} else if u.KeyEnv == "" {
 		u.KeyEnv = "QINIU_API_KEY"
 		c.Upstreams["QN"] = u
+	}
+	// 谷歌 Gemini 经 catiecli 中转，OpenAI 兼容直连；无本地进程、无孪生跳。
+	if u, ok := c.Upstreams["GM"]; !ok {
+		c.Upstreams["GM"] = Upstream{
+			Base:   "https://catiecli.sukaka.top/v1",
+			KeyEnv: "GEMINI_API_KEY",
+		}
+	} else if u.KeyEnv == "" {
+		u.KeyEnv = "GEMINI_API_KEY"
+		c.Upstreams["GM"] = u
 	}
 	for name, child := range c.Children {
 		if child.Policy == "" {
@@ -240,7 +320,7 @@ func (c *Config) resolvePaths() error {
 	c.QoderEnvFile = c.resolve(c.QoderEnvFile)
 	c.QwenEnvFile = c.resolve(c.QwenEnvFile)
 	c.QiniuEnvFile = c.resolve(c.QiniuEnvFile)
-	c.CliproxyEnvFile = c.resolve(c.CliproxyEnvFile)
+	c.GeminiEnvFile = c.resolve(c.GeminiEnvFile)
 	c.Log.Dir = c.resolve(c.Log.Dir)
 	return nil
 }
