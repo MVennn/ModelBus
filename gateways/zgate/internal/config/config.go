@@ -145,6 +145,12 @@ type Config struct {
 	// 上游思考阶段常静默 30-60 秒（实测 iceman 断 51.9 秒），中间层与客户端都会判空闲。
 	// 0/缺省 = 15 秒；负数 = 关闭。
 	StreamIdleHeartbeatSeconds int `json:"streamIdleHeartbeatSec"`
+	// EarlyCommitMs：流式请求等上游响应头超过这么久，就先对客户端交卷 200 + text/event-stream，
+	// 之后按 EarlyKeepaliveSec 补 SSE 注释心跳；上游最终失败时改写成流内 error 事件，
+	// 而不是回一个客户端早就放弃的 502。0/缺省 = 8000 毫秒；负数 = 关闭。
+	EarlyCommitMs int `json:"earlyCommitMs"`
+	// EarlyKeepaliveSec：提前交卷后的心跳间隔（秒），0/缺省 = 10。
+	EarlyKeepaliveSec int `json:"earlyKeepaliveSec"`
 	// UpstreamHeaderTimeoutSec：流式请求「已经连上上游、却连响应头都不给」的忍耐上限（秒）。
 	// 到点判这一跳沉默（errUpstreamSilent）并让位给下一跳。0/缺省 = 12 秒，
 	// 负数 = 关掉这个看门狗（老 behavior：谁不回就一直挂着）。
@@ -267,6 +273,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.StreamIdleHeartbeatSeconds == 0 {
 		c.StreamIdleHeartbeatSeconds = 15
+	}
+	if c.EarlyCommitMs == 0 {
+		c.EarlyCommitMs = 8000
+	}
+	if c.EarlyKeepaliveSec == 0 {
+		c.EarlyKeepaliveSec = 10
 	}
 	if c.UpstreamHeaderTimeoutSec == 0 {
 		c.UpstreamHeaderTimeoutSec = 12

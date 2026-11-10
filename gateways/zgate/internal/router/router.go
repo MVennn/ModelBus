@@ -66,6 +66,10 @@ type Server struct {
 	// upstreamHeaderTimeoutSec 解析、再缺省按 upstreamHeaderTimeout 常量。单列成
 	// 字段是为了让测试把它压到毫秒级，不必真等十几秒。
 	headerWait time.Duration
+	// earlyCommit / earlyPing 覆盖「提前交卷窗口」与「心跳间隔」，0 = 按配置。
+	// 单列成字段是为了让测试压到毫秒级，不必真等 8 秒 / 10 秒。
+	earlyCommit time.Duration
+	earlyPing   time.Duration
 	// serialMu/serialAt 给「本可对冲却退回串行」的提醒做去重（每链条签名 10 分钟一条）。
 	serialMu sync.Mutex
 	serialAt map[string]time.Time
@@ -327,6 +331,29 @@ func (s *Server) headerTimeout(channel string) time.Duration {
 	return upstreamHeaderTimeout
 }
 
+// earlyCommitWindow 是「流式请求等上游响应头多久就先交卷 200」的窗口（毫秒）。
+// 0 = 关闭，回到「等头等到超时再报错」的老行为；负数在 config 层已经当成关闭。
+func (s *Server) earlyCommitWindow() time.Duration {
+	if s.earlyCommit > 0 {
+		return s.earlyCommit
+	}
+	if cfg := s.Config(); cfg != nil && cfg.EarlyCommitMs > 0 {
+		return time.Duration(cfg.EarlyCommitMs) * time.Millisecond
+	}
+	return 0
+}
+
+// earlyKeepalive 是提前交卷后的心跳间隔：0/缺省 10 秒。
+func (s *Server) earlyKeepalive() time.Duration {
+	if s.earlyPing > 0 {
+		return s.earlyPing
+	}
+	if cfg := s.Config(); cfg != nil && cfg.EarlyKeepaliveSec > 0 {
+		return time.Duration(cfg.EarlyKeepaliveSec) * time.Second
+	}
+	return 10 * time.Second
+}
+
 // hopKey 是冷却表的主键。出口也算进去：同一条链里「直连」和「经机场」是同一个
 // upstream 的两跳，共用一个 key 会让直连那跳被地区受限的 403 冷却掉，
 // 紧接着的机场跳就被当成「冷却中，跳过」—— 恰好把兜底吃掉。
@@ -492,9 +519,14 @@ func (s *Server) keyset() keys.Set {
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	var early *earlySSEWriter
 	defer func() {
 		if rec := recover(); rec != nil {
 			s.log.Errorf("panic on %s %s: %v", r.Method, r.URL.Path, rec)
+			if early != nil {
+				early.fail(502, "unified-router error: panic")
+				return
+			}
 			writeJSON(w, 500, errorBody("unified-router error: panic", "proxy_error"))
 		}
 	}()
@@ -534,6 +566,18 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	if !isChat && (isQoder(model) || isWorkBuddy(model) || isQwen(model) || isQiniu(model)) {
 		writeJSON(w, 400, errorBody("WorkBuddy/Qoder/Qwen models only support chat/completions", "invalid_request_error"))
 		return
+	}
+
+	// 流式请求先交卷：等上游响应头的空窗里就给客户端 200 + text/event-stream 和心跳，
+	// 免得它自己判死重试（判死权归上游，见 docs/TROUBLESHOOTING.md 18.4）。
+	// 窗口内上游就回话的走老路径，状态码原样透出；非流式请求不适用（它要确定的 JSON + 状态码）。
+	if isChat && wantsStream(body) {
+		if window := s.earlyCommitWindow(); window > 0 {
+			early = newEarlySSEWriter(w)
+			defer early.finish()
+			early.start(window, s.earlyKeepalive())
+			w = early
+		}
 	}
 
 	s.aliases.Reload()

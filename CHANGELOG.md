@@ -17,6 +17,16 @@
 
 ## [未发布]
 
+### 流式请求提前交卷：等上游响应头期间先回 200 + SSE 心跳（2026-11-10 22:00，需换二进制）
+
+> 判死权归上游之后还剩一个洞：上游要 60 秒才给响应头时，这 60 秒里客户端一个字节都收不到，自己就会判死重试 —— 本地不判死了，不代表客户端不判。
+
+- **新增（`gateways/zgate/internal/router/early_sse.go`）**：`earlySSEWriter` 包一层 `ResponseWriter`，窗口内没人 `WriteHeader` 就自己交 200 + `text/event-stream`（删 `Content-Length`），之后按间隔写 `: zgate keepalive`；下游此后再想写 >=300 的状态码，body 被扣下（≤4KB 留作提取 message），收尾时改写为 `data: {"error":{...,"type":"upstream_error"}}` + `data: [DONE]`。
+- **接入（`router.go` 的 `serveHTTP`）**：仅 `isChat && wantsStream(body)` 生效；窗口内上游就回话的走老路径（状态码原样），非流式请求不受影响；panic 兜底也改走 `early.fail`，避免往已提交的流里写 JSON。
+- **配置**：`earlyCommitMs`（缺省 8000，负数 = 关闭）、`earlyKeepaliveSec`（缺省 10）。为什么窗口给 8 秒：窗口内到达的 429/503 仍能原样透出，而实测合法首头 2.5-10.2 秒，8 秒兼顾两侧。
+- **验收**：`go build ./...` / `go vet` exit 0；新增 6 个用例全 PASS（writer 三条 + 网关级「慢上游先交卷再出正文」「慢失败改写成事件」「非流式保真状态码」）。
+- **文档**：[docs/MODEL-PROVIDERS.md](docs/MODEL-PROVIDERS.md) §4.11.3 第 8 条 + 参数表；[docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) §18.4 追加「第二件：让这条流有话说」。
+- **回退**：`"earlyCommitMs": -1` 后 `POST /admin/reload`（需新二进制）；旧二进制忽略这两个键，配置可先留着。
 ### 判死权归上游：HJ / GM 关掉本地看门狗，全局兜底 12s → 45s（2026-11-10 21:30）
 
 > 当晚 GM 被判死 125 次（沉默 79 + 首块 46），上游真说过 `503 high demand` 的只有 7 次（5.3%）；HJ 判死 32 次，一大半与 502 同秒返回，而同一时段上游一直在正常吐 token。502 是本地造的 —— DSH 的 `retryPolicy` 把 `SERVER` 当可重试，判死一次就换来「一次 502 + 一次客户端重试 + 一次上游重跑」，用户看到的就是「后台在跑 token、本地断开又跑一遍」。

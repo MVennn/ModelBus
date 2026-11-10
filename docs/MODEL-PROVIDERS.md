@@ -629,6 +629,26 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
    只兜「真的挂了」的渠道。要回旧行为：`headerTimeoutSec` 给正数、`firstBlockMs` 给 4000，
    `/admin/reload` 即生效，不用重编译。
 
+8. **提前交卷 + 空窗心跳**（2026-11-10 22:00，`early_sse.go`）：判死权交回上游之后还剩一个洞 ——
+   上游要 60 秒才给响应头时，这 60 秒里客户端一个字节都收不到，仍然会自己判死重试。
+   现在流式请求在等上游响应头的空窗里先对客户端交卷：超过 `earlyCommitMs`（缺省 8000 毫秒，
+   `zgate.json` 可改，负数 = 关闭）还没人 `WriteHeader`，就先写 `200 + Content-Type: text/event-stream`，
+   之后每 `earlyKeepaliveSec`（缺省 10 秒）写一行 SSE 注释 `: zgate keepalive`。
+   等上游真给出结果：成功就照常往这条已打开的流里写正文（首字时间不受影响）；
+   失败则把错误改写成一条流内 `data: {"error":{... "type":"upstream_error"}}` 事件 + `data: [DONE]`，
+   **不再回一个客户端早就放弃的 502**。窗口内上游就回话的（绝大多数情况）完全走老路径，
+   状态码原样透出；非流式请求一律不受影响。
+
+   | 参数 | 缺省 | 语义 |
+   |---|---|---|
+   | `earlyCommitMs` | 8000 | 等上游响应头超过这么久就先交卷 200 + SSE；负数 = 关闭 |
+   | `earlyKeepaliveSec` | 10 | 交卷后补注释心跳的间隔（秒） |
+
+   窗口为什么给 8 秒：窗口内到达的 429/503 仍能原样透出（客户端该退避就退避），
+   而今天观测到的合法首头是 2.5-10.2 秒，8 秒既盖住慢的一侧、又把「真 429」留在窗口内。
+   代码在 [gateways/zgate/internal/router/early_sse.go](../gateways/zgate/internal/router/early_sse.go)，
+   用例 `TestGatewayCommitsEarlyThenStreams` / `TestGatewayRewritesSlowFailureIntoEvent` 钉住两条路径。
+
 ### 4.11.4 调参教训（用实测换来的）
 
 | 现象 | 根因 | 处置 |
