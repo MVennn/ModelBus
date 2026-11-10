@@ -7,8 +7,10 @@
   "qwenEnvFile": "../../providers/qwen/.env.local",
   "qiniuEnvFile": "../../providers/qiniu/.env.local",
   "geminiEnvFile": "../../providers/gemini/.env.local",
+  "hajimiEnvFile": "../../providers/hajimi/.env.local",
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
+  "upstreamHeaderTimeoutSec": 12,
   "channelPolicy": {
     "GM": {
       "softCooldownSeconds": 90,
@@ -17,7 +19,18 @@
       "firstBlockMs": 4000,
       "hedgeAfterMs": 500,
       "maxParallel": 2,
-      "authFailCooldownHours": 24
+      "authFailCooldownHours": 24,
+      "headerTimeoutSec": 12
+    },
+    "HJ": {
+      "softCooldownSeconds": 90,
+      "silenceCooldownSeconds": 20,
+      "rateLimitBackoffMs": -1,
+      "firstBlockMs": 4000,
+      "hedgeAfterMs": 500,
+      "maxParallel": 2,
+      "authFailCooldownHours": 24,
+      "headerTimeoutSec": 25
     }
   },
   "reasoningGuard": {
@@ -27,7 +40,7 @@
     "maxRetries": 1,
     "maxProbeBytes": 32768,
     "probeSeconds": 15,
-    "injectNotice": true,
+    "injectNotice": false,
     "giveUpAfter": 1,
     "giveUpForSeconds": 600,
     "forceEffort": "high",
@@ -40,7 +53,8 @@
     "QD": { "base": "http://127.0.0.1:8790/v1", "child": "qoder" },
     "QW": { "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1", "keyEnv": "QWEN_API_KEY" },
     "QN": { "base": "https://api.qnaigc.com/v1", "keyEnv": "QINIU_API_KEY" },
-    "GM": { "base": "https://catiecli.sukaka.top/v1", "keyEnv": "GEMINI_API_KEY" }
+    "GM": { "base": "https://catiecli.sukaka.top/v1", "keyEnv": "GEMINI_API_KEY" },
+    "HJ": { "base": "https://api.gemai.cc/v1", "keyEnv": "HJM_API_KEY" }
   },
   "children": {
     "workbuddy": {

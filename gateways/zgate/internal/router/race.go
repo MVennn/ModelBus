@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -330,6 +331,57 @@ func (s *Server) racePolicyFor(t alias.Target, body []byte) (config.ChannelPolic
 		return config.ChannelPolicy{}, false
 	}
 	return pol, true
+}
+
+// noteSerialFallback 在「链首渠道明明配了对冲，整条链却退回串行」时留一条现场线索。
+// 触发它只有两种可能：链上有渠道没写进 channelPolicy，或者客户端要的是非流式。
+// 为什么要记：racePolicyFor 是静默返回 false 的，2026-11-10 的故障就是——zgate.json
+// 已加了 HJ，但运行中的进程还是旧配置，链上 HJ 不在内存里的 channelPolicy 中，
+// 于是 Gemini-AIS 从「4 秒没首块就让位」悄悄退化成串行链，上游沉默时直接挂死，
+// 日志里只剩一行派发，看不出是「对冲没开」还是「上游没回」。
+// 同一链条签名 10 分钟只提醒一次，避免把日志刷满。
+func (s *Server) noteSerialFallback(t alias.Target, body []byte) {
+	if !wantsStream(body) {
+		return
+	}
+	pol := s.channelPolicy(t.Chain[0].Channel)
+	if pol.HedgeAfterMs <= 0 && pol.FirstBlockMs <= 0 {
+		return
+	}
+	var missing []string
+	for _, hop := range t.Chain {
+		if _, ok := s.Config().ChannelPolicy[hop.Channel]; !ok {
+			missing = append(missing, hop.Channel)
+		}
+	}
+	if len(missing) == 0 {
+		return
+	}
+	key := t.Chain[0].Channel + "|" + strings.Join(uniqueStrings(missing), ",")
+	s.serialMu.Lock()
+	if at, seen := s.serialAt[key]; seen && time.Since(at) < 10*time.Minute {
+		s.serialMu.Unlock()
+		return
+	}
+	s.serialAt[key] = time.Now()
+	s.serialMu.Unlock()
+	s.log.Warnf("[race] 链上有渠道不在 channelPolicy 里（%s），整条链退回串行、取消首块对冲：%s；"+
+		"改 zgate.json 后记得让进程重新加载配置",
+		strings.Join(uniqueStrings(missing), ","), chainNames(t.Chain))
+}
+
+// uniqueStrings 保序去重，只用于上面的告警文案。
+func uniqueStrings(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := make([]string, 0, len(in))
+	for _, v := range in {
+		if seen[v] {
+			continue
+		}
+		seen[v] = true
+		out = append(out, v)
+	}
+	return out
 }
 
 // rankedChain 决定竞速的**发车顺序**（不是降级链本身的顺序）。

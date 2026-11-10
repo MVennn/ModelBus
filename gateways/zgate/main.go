@@ -132,7 +132,7 @@ func loadConfig() (*config.Config, keys.Set, error) {
 	if err != nil {
 		return nil, keys.Set{}, err
 	}
-	ks := keys.Load(cfg.ProviderConfig, cfg.WBGatewayConfig, cfg.QoderEnvFile, cfg.QwenEnvFile, cfg.QiniuEnvFile, cfg.GeminiEnvFile)
+	ks := keys.Load(cfg.ProviderConfig, cfg.WBGatewayConfig, cfg.QoderEnvFile, cfg.QwenEnvFile, cfg.QiniuEnvFile, cfg.GeminiEnvFile, cfg.HajimiEnvFile)
 	return cfg, ks, nil
 }
 

@@ -1,4 +1,4 @@
-// Package keys finds the five upstream credentials without ever writing them
+// Package keys finds the upstream credentials without ever writing them
 // to a log or to the health endpoint.
 //
 // Order per channel (same as the old Node router):
@@ -8,6 +8,8 @@
 //	QD: env QD_API_KEY       -> qoder .env.local -> provider_config.json (8790 / providerId qoder)
 //	QW: env QWEN_API_KEY     -> qwen .env.local  -> provider_config.json (qianwenaiapi / providerId)
 //	QN: env QINIU_API_KEY    -> qiniu .env.local -> provider_config.json (qnaigc base)
+//	GM: env GEMINI_API_KEY   -> gemini .env.local -> provider_config.json (catiecli base)
+//	HJ: env HJM_API_KEY      -> hajimi .env.local -> provider_config.json (gemai.cc base)
 package keys
 
 import (
@@ -17,9 +19,9 @@ import (
 	"strings"
 )
 
-// Set is the six credentials; empty means "not configured".
+// Set is the credentials of every channel; empty means "not configured".
 type Set struct {
-	OC, WB, QD, QW, QN, GM string
+	OC, WB, QD, QW, QN, GM, HJ string
 }
 
 // Channels 是全部上游渠道的规范名，也是新增渠道的唯一登记点。
@@ -27,7 +29,7 @@ type Set struct {
 // /health 的段表（router.healthSegmentName）直接遍历这份清单，测试也遍历它，
 // 因此加渠道只要在这里加一行 + Set 加一个字段，不会出现「源码加了段、测试
 // 还断言旧段名」的 CI 红（2026-11-10 的 cliproxyapi 残留就是这么红的）。
-var Channels = []string{"OC", "WB", "QD", "QW", "QN", "GM"}
+var Channels = []string{"OC", "WB", "QD", "QW", "QN", "GM", "HJ"}
 
 func env(name string) string { return strings.TrimSpace(os.Getenv(name)) }
 
@@ -115,10 +117,11 @@ var (
 	reQWBase = regexp.MustCompile(`(?i)(qianwenaiapi|qianwenai)\.com`)
 	reQNBase = regexp.MustCompile(`(?i)qnaigc\.com`)
 	reGMBase = regexp.MustCompile(`(?i)catiecli\.sukaka\.top`)
+	reHJBase = regexp.MustCompile(`(?i)gemai\.cc`)
 )
 
-// Load resolves all five, falling back to the files the repo already keeps.
-func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFile, geminiEnvFile string) Set {
+// Load resolves every channel, falling back to the files the repo already keeps.
+func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFile, geminiEnvFile, hajimiEnvFile string) Set {
 	rules := readProviderRules(providerConfig)
 	var s Set
 	s.OC = env("OPENCODE_GO_KEY")
@@ -168,10 +171,19 @@ func Load(providerConfig, wbGatewayConfig, qoderEnvFile, qwenEnvFile, qiniuEnvFi
 	if s.GM == "" {
 		s.GM = find(rules, reGMBase, nil)
 	}
+	s.HJ = env("HJM_API_KEY")
+	if s.HJ == "" {
+		if v := readEnvFile(hajimiEnvFile)["HJM_API_KEY"]; v != "" {
+			s.HJ = v
+		}
+	}
+	if s.HJ == "" {
+		s.HJ = find(rules, reHJBase, nil)
+	}
 	return s
 }
 
-// For returns the key for a channel name (OC / WB / QD / QW / QN).
+// For returns the key for a channel name (OC / WB / QD / QW / QN / GM / HJ).
 func (s Set) For(channel string) string {
 	switch channel {
 	case "OC":
@@ -186,6 +198,8 @@ func (s Set) For(channel string) string {
 		return s.QN
 	case "GM":
 		return s.GM
+	case "HJ":
+		return s.HJ
 	}
 	return ""
 }

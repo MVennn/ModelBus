@@ -64,6 +64,9 @@ func TestReasoningGuardDefaults(t *testing.T) {
 	if c.StreamIdleHeartbeatSeconds != 15 {
 		t.Fatalf("缺省心跳应为 15 秒，got %d", c.StreamIdleHeartbeatSeconds)
 	}
+	if c.UpstreamHeaderTimeoutSec != 12 {
+		t.Fatalf("缺省响应头容忍应为 12 秒，got %d", c.UpstreamHeaderTimeoutSec)
+	}
 
 	var off Config
 	if err := json.Unmarshal([]byte(`{"streamIdleHeartbeatSec":-1}`), &off); err != nil {
@@ -72,5 +75,17 @@ func TestReasoningGuardDefaults(t *testing.T) {
 	off.applyDefaults()
 	if off.StreamIdleHeartbeatSeconds != -1 {
 		t.Fatalf("负数心跳应保持关闭，got %d", off.StreamIdleHeartbeatSeconds)
+	}
+	if off.UpstreamHeaderTimeoutSec != 12 {
+		t.Fatalf("没写 upstreamHeaderTimeoutSec 时应补 12，got %d", off.UpstreamHeaderTimeoutSec)
+	}
+
+	var hdrConfig Config
+	if err := json.Unmarshal([]byte(`{"upstreamHeaderTimeoutSec":-1}`), &hdrConfig); err != nil {
+		t.Fatalf("解析失败：%v", err)
+	}
+	hdrConfig.applyDefaults()
+	if hdrConfig.UpstreamHeaderTimeoutSec != -1 {
+		t.Fatalf("负数响应头容忍应保持关闭，got %d", hdrConfig.UpstreamHeaderTimeoutSec)
 	}
 }

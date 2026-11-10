@@ -8,9 +8,11 @@ package router
 
 import (
 	"bytes"
+	"context"
 	crand "crypto/rand"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -60,6 +62,13 @@ type Server struct {
 	// 重启进程即清空，不落盘。
 	guardMu  sync.Mutex
 	guardMem map[string]*guardModelStat
+	// headerWait 是流式请求「等上游响应头」的容忍上限；0 = 按配置
+	// upstreamHeaderTimeoutSec 解析、再缺省按 upstreamHeaderTimeout 常量。单列成
+	// 字段是为了让测试把它压到毫秒级，不必真等十几秒。
+	headerWait time.Duration
+	// serialMu/serialAt 给「本可对冲却退回串行」的提醒做去重（每链条签名 10 分钟一条）。
+	serialMu sync.Mutex
+	serialAt map[string]time.Time
 }
 
 // hopCooldown 是死跳的默认冷却时长；与额度窗口同一量级的短周期，够跨过一轮使用。
@@ -78,6 +87,29 @@ const rateLimitBackoff = 700 * time.Millisecond
 // 这类失败（EOF / TLS 握手超时 / 连接被重置）说明请求多半没被上游受理，
 // 换一次同一条腿往往就过了；等待只是给链路一个喘息窗口。
 const transportRetryDelay = 300 * time.Millisecond
+
+// upstreamHeaderTimeout 是「请求已经交给上游，但连响应头都不给」的忍耐上限。
+// 只作用于流式请求：非流式上游往往要等整段生成完才发头，用同一档会误杀长回答。
+// 2026-11-10 18:51 实测：catiecli 的 ais-gemini-3.8-flash 收下请求后 60 秒零字节，
+// 客户端看到的就是「一分钟没有任何输出」，反代面板也没有记录（上游那边同样在等）。
+// 串行链原本没有首块看门狗（那个只在竞速模式生效），整个请求会无限期挂住；
+// 有了这个上限，沉默跳到点就被判死、立刻让位给下一跳。
+//
+// 2026-11-10 19:45 实测（同一天第二次收敛）：同一跳 ais-gemini-3.8-flash 每次都要
+// 等满 60.241 秒才回 503 high demand，而哈基米 [福利]gemini-3.8-flash 直连 2.5-3.1 秒
+// 就出首块。45 秒一档等于「每轮白等 45 秒」：8 跳按 maxParallel=2 轮转，
+// 单次请求 3-4.5 分钟才有结果（用户实测 4 分 31 秒），期间 DSH 无首字节自动重试，
+// 反代后台就出现两条「请求中」。降到 12 秒后同样的链最坏 4 轮 × 12 秒 ≈ 48 秒见分晓，
+// 正常情况对冲到第二跳就 3 秒出字。12 秒仍有 4 倍余量（观测到的合法首头 2.5-3.1 秒），
+// 也能被 zgate.json 的 upstreamHeaderTimeoutSec 覆盖，不用重新编译。
+//
+// 2026-11-10 20:05 实测（第三次收敛）：哈基米的同一个 [福利]gemini-3.8-flash 首头从
+// 白天的 2.5-3.1 秒漂到 7.5-10.2 秒（同一 key、60KB 与 200KB 系统提示都试过）。
+// 12 秒对它是 1.2-1.6 倍余量，赶上抖动就会把唯一能用的兜底跳切掉；而 catiecli 的
+// 3.8 是「60 秒后才回 503」，窗口给多长都只是白等。一个全局值必然牺牲其中一边，
+// 所以加了按渠道覆盖（channelPolicy[<渠道>].headerTimeoutSec）：GM 用 12 秒，
+// HJ 用 25 秒。
+const upstreamHeaderTimeout = 12 * time.Second
 
 // timeoutCooldown 是桥接上游「连上但不说话」超时后的冷却时长。
 // 实测 Conatus 会静默到总超时，不冷却就会每个请求都再等一次。
@@ -256,7 +288,36 @@ func (s *Server) raceSnapshot() map[string]hopStatSnap {
 func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervisor, client *http.Client, log *logx.Logger) *Server {
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
 		started: time.Now(), cool: map[string]time.Time{}, silence: map[string]time.Time{},
-		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{}}
+		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{},
+		serialAt: map[string]time.Time{}}
+}
+
+// headerTimeout 解析「等上游响应头」的实际容忍上限，优先级：测试/显式字段 >
+// 该渠道的 channelPolicy[..].headerTimeoutSec > zgate.json 的 upstreamHeaderTimeoutSec
+// > 常量缺省。每次都现读配置，所以 /admin/reload 换了值不必重启进程。
+//
+// 按渠道分开给的理由见 upstreamHeaderTimeout 注释末段：同一个窗口套在「60 秒才回 503
+// 的中转」和「抖动到 10 秒才出首块的兜底站」上，必然有一边是错的。channel 为空
+// （桥接路径拿不到渠道）时只看全局。
+func (s *Server) headerTimeout(channel string) time.Duration {
+	if s.headerWait > 0 {
+		return s.headerWait
+	}
+	if cfg := s.Config(); cfg != nil {
+		if pol, ok := cfg.ChannelPolicy[channel]; ok && pol.HeaderTimeoutSec != 0 {
+			if pol.HeaderTimeoutSec < 0 {
+				return 0 // 这一渠道不要看门狗
+			}
+			return time.Duration(pol.HeaderTimeoutSec) * time.Second
+		}
+		if cfg.UpstreamHeaderTimeoutSec < 0 {
+			return 0 // 负数 = 关掉看门狗，回到「谁不回就一直挂着」的老行为
+		}
+		if cfg.UpstreamHeaderTimeoutSec > 0 {
+			return time.Duration(cfg.UpstreamHeaderTimeoutSec) * time.Second
+		}
+	}
+	return upstreamHeaderTimeout
 }
 
 // hopKey 是冷却表的主键。出口也算进去：同一条链里「直连」和「经机场」是同一个
@@ -663,10 +724,10 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 		h.Set("User-Agent", "unified-router/1.0")
 	}
 	switch channel {
-	case "WB", "QD", "QW", "QN", "GM":
+	case "WB", "QD", "QW", "QN", "GM", "HJ":
 		// 这些通道一律用 zgate 自己的 key 覆盖 Authorization：
-		// QN 是七牛云网关、GM 是 catiecli 中转；漏掉任一通道都会把客户端原始
-		// Bearer（或空）透传上去被回 401「未提供API Key」。
+		// QN 是七牛云网关、GM 是 catiecli 中转、HJ 是哈基米（gemai.cc）；
+		// 漏掉任一通道都会把客户端原始 Bearer（或空）透传上去被回 401「未提供API Key」。
 		h.Set("Authorization", "Bearer "+key)
 	case "OC":
 		h.Set("Authorization", "Bearer "+key)
@@ -679,7 +740,7 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 }
 
 func (s *Server) forward(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header) {
-	s.doForwardWith(w, r, body, base, path, search, headers, nil, nil, nil, nil)
+	s.doForwardWith(w, r, body, base, path, search, "", headers, nil, nil, nil, nil, nil)
 }
 
 func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header, chain []string, index int) {
@@ -700,11 +761,71 @@ func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		writeJSON(w, 502, errorBody("unified-router upstream error: "+reason, "proxy_error"))
 	}
-	s.doForwardWith(w, r, rewritten, base, path, search, headers, chainAccept, retry, nil, nil)
+	s.doForwardWith(w, r, rewritten, base, path, search, "", headers, chainAccept, retry, nil, nil, nil)
 }
 
-func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header,
-	accept func(status int, head []byte) bool, retry func(reason string), onThrottled func(), at *attemptCtl) {
+// errUpstreamSilent 表示「连上了上游，但它在 s.headerTimeout() 内一个响应头都没给」。
+// 与传输层失败（EOF / 连接重置）区分开：那类失败重试同一跳往往就过，
+// 而沉默的上游重试只会再白等一个完整窗口，必须直接换跳。
+var errUpstreamSilent = errors.New("upstream silent: no response header")
+
+// cancelOnClose 把「上下文生命周期」绑在上游响应体上：正文读完/关闭时才取消，
+// 既不让派发 goroutine 泄漏，又不会在流式传输中途把连接掐掉。
+type cancelOnClose struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (c *cancelOnClose) Close() error {
+	err := c.ReadCloser.Close()
+	c.cancel()
+	return err
+}
+
+// doForward 派发一次上游请求。流式请求额外挂「响应头看门狗」：上游接了连接却
+// 迟迟不发头时，到点取消并把这一跳判成沉默（errUpstreamSilent），由调用方换跳。
+// 非流式请求保持原样 —— 有的上游要等整段生成完才发头，给它设上限会误杀长回答。
+func (s *Server) doForward(req *http.Request, body []byte, channel string) (*http.Response, error) {
+	wait := s.headerTimeout(channel)
+	if wait <= 0 || !wantsStream(body) {
+		return s.client.Do(req)
+	}
+	ctx, cancel := context.WithCancel(req.Context())
+	type outcome struct {
+		resp *http.Response
+		err  error
+	}
+	// 缓冲 1：超时分支取消后也要把 goroutine 的结局收回来，否则它永远阻塞在发送上。
+	ch := make(chan outcome, 1)
+	req = req.WithContext(ctx)
+	go func() {
+		resp, err := s.client.Do(req)
+		ch <- outcome{resp: resp, err: err}
+	}()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case out := <-ch:
+		if out.resp != nil && out.resp.Body != nil {
+			out.resp.Body = &cancelOnClose{ReadCloser: out.resp.Body, cancel: cancel}
+			return out.resp, nil
+		}
+		cancel()
+		return out.resp, out.err
+	case <-timer.C:
+		cancel()
+		// 取消后 Do 立刻返回；收掉它的结果并把可能已经拿到的响应体关掉。
+		out := <-ch
+		if out.resp != nil {
+			_, _ = io.Copy(io.Discard, io.LimitReader(out.resp.Body, 1<<20))
+			_ = out.resp.Body.Close()
+		}
+		return nil, fmt.Errorf("%w within %v", errUpstreamSilent, wait)
+	}
+}
+
+func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []byte, base, path, search, channel string, headers http.Header,
+	accept func(status int, head []byte) bool, retry func(reason string), onThrottled func(), at *attemptCtl, hop *alias.Hop) {
 
 	target := strings.TrimRight(base, "/") + path + search
 	// 客户端没声明思考档位时由网关补一档（config.ReasoningGuard.ForceEffort）。
@@ -755,13 +876,36 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		if len(body) > 0 {
 			req.ContentLength = int64(len(body))
 		}
-		resp, err := s.client.Do(req)
+		resp, err := s.doForward(req, body, channel)
 		if err != nil {
 			// 客户端已经走了（用户中断 / 切模型 / 页面关掉）：这次请求作废，直接收工。
 			// 下面 select 的 Done 分支本来也会返回，但那样得先打出「300ms 后重试同一跳」
 			// —— 2026-11-02 实测一次取消风暴里刷了 8 条永远不会发生的重试行，误导排查。
 			// 提前判掉还有一个作用：把「不重试」写成显式契约，而不是依赖 select 的副作用。
 			if r.Context().Err() != nil {
+				return
+			}
+			if errors.Is(err, errUpstreamSilent) {
+				// 上游收下请求却不给头：重试同一跳只会再白等一个窗口，直接换跳。
+				// 带上 model：同一个 base 下不同模型表现能差一个量级（2026-11-10 19:45
+				// 实测 gemai 的 [福利]gemini-3.8-flash 直连 3 秒出首块，网关内却整段挂住），
+				// 只打 base 根本分不清是哪个模型被上游晾着。
+				s.log.Warnf("[router] %s（channel=%s model=%s）上游 %v 内没给响应头，判这一跳沉默并换跳",
+					base, channel, requestModel(body), s.headerTimeout(channel))
+				// 沉默也要埋这一跳：catiecli 的 3.8/3.7 现在是「收下请求、几十秒不发头」，
+				// 只换跳不冷却的话，下一个请求又从死跳起手，每个请求都白付一个窗口。
+				// 冷却时长按渠道的 silenceCooldownSeconds（GM/HJ = 20s），到期自动回链。
+				if hop != nil {
+					if d := s.silenceCooldownFor(hop.Channel); d > 0 {
+						s.markSilence(*hop, d)
+						s.log.Infof("[router] %s 沉默，静默冷却 %v 后再试这一跳", hopKeyForLog(*hop), d)
+					}
+				}
+				if retry != nil {
+					retry("上游沉默（无响应头）")
+					return
+				}
+				writeJSON(w, 502, errorBody("unified-router upstream error: "+err.Error(), "proxy_error"))
 				return
 			}
 			// 传输层失败（EOF / TLS 握手超时 / 连接被重置）说明请求大概率没被上游
@@ -1059,6 +1203,7 @@ var healthSegments = map[string]string{
 	"QW": "qwen",
 	"QN": "qiniu",
 	"GM": "gemini",
+	"HJ": "hajimi",
 }
 
 // healthSegmentName 返回渠道在 /health 里的段名。
@@ -1148,12 +1293,13 @@ func (s *Server) routeChain(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	// 每跳按自己的协议派发（chat 直转 / messages·responses 过桥），
 	// 所以一条链里可以既有原生 chat 跳也有桥接跳。
-	// 配了 channelPolicy 的渠道（当前只有 GM）走「首块对冲」：前几跳同时在路上，
+	// 配了 channelPolicy 的渠道（GM / HJ）走「首块对冲」：前几跳同时在路上，
 	// 谁先给出真实内容首块谁赢。没配的渠道一行都不改，仍然是原来的串行链。
 	if pol, ok := s.racePolicyFor(t, body); ok {
 		s.raceChain(w, r, body, model, t, path, search, pol)
 		return
 	}
+	s.noteSerialFallback(t, body)
 	s.attemptChain(w, r, body, model, t, path, search, 0, nil)
 }
 
@@ -1321,7 +1467,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 		}
 		return chainAccept(status, head)
 	}
-	s.doForwardWith(w, r, rewritten, hop.Base, path, search, headers, accept, func(reason string) {
+	s.doForwardWith(w, r, rewritten, hop.Base, path, search, hop.Channel, headers, accept, func(reason string) {
 		s.log.Infof("[router] %s -> %s, fallback %s", hop.Upstream, reason, nextHopName(t.Chain, index))
 		if at != nil {
 			s.noteRaceHop(at.hopTag, 0, reason)
@@ -1332,7 +1478,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	}, func() {
 		s.log.Infof("[router] %s 退避后仍 429，冷却 %v", hopKeyForLog(hop), rateLimitCooldown)
 		s.markCoolingFor(hop, rateLimitCooldown)
-	}, at)
+	}, at, &hop)
 }
 
 // authFatal 判断 401/403 是不是「这个 key 本身不能用了」：key 无效 / 被撤销 /
@@ -1531,7 +1677,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorBody("配置读取失败: "+err.Error(), "configuration_error"))
 		return
 	}
-	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile)
+	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile, next.HajimiEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)
 	s.aliases.Reload()

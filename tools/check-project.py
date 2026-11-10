@@ -63,11 +63,10 @@ STALE = [
     (r"3\s*个\s*provider", "旧口径：3 个 provider"),
     (r"四个常驻进程", "旧口径：四个常驻进程"),
     (r"293\s*MB", "旧口径：293 MB"),
-    # 6 个 upstreams 在 GM（Gemini 中转）恢复后就是现行数，不能再按数量判旧；
-    # 真正退役的是 CP（CLIProxyAPI）这一跳，所以只认带 CP 的写法。
-    # 2026-11-10 起 upstreams 重新回到 6 个（新增 GM = catiecli Gemini 中转），
-    # 这条数字旧口径作废；真正退役的是 Gemini 反代那套（见下方 8317 / CLIPROXY_API_KEY）。
-    (r"6\\s*个\\s*upstreams?[^\\n]{0,40}CP", "旧口径：6 个 upstreams 含 CP（CLIProxyAPI 已移除）"),
+    # upstreams 数量跟着 zgate.json 真值走：2026-11-10 加入 HJ（哈基米 gemai.cc）后
+    # 是 7 个（OC/WB/QD/QW/QN/GM/HJ）。数字口径已最后一次变动，再写 6 就是漏渠道；
+    # 当年「6 个含 CP」的写法也一并被这条抓住（CP = 已退役的 CLIProxyAPI）。
+    (r"6\s*个\s*upstreams?", "旧口径：6 个 upstreams（HJ 哈基米加入后应为 7 个）"),
     (r"3\s*个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：3 个 child（Gemini 反代已移除）"),
     (r"三个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：三个 child（Gemini 反代已移除）"),
     (r"8317", "旧口径：CLIProxyAPI 端口 8317（Gemini 反代已移除）"),
@@ -113,7 +112,7 @@ def check_gateway(results: list) -> None:
         return
     checks = [
         ('func (s *Server) models(', 'GET /v1/models 聚合 catalog handler'),
-        ('case "WB", "QD", "QW", "QN"', 'QN/GM 原生 chat 跳的 Bearer 覆盖'),
+        ('case "WB", "QD", "QW", "QN", "GM", "HJ"', 'QN/GM/HJ 原生 chat 跳的 Bearer 覆盖'),
     ]
     for needle, why in checks:
         if needle not in router:
@@ -134,8 +133,34 @@ def check_gateway(results: list) -> None:
         results.append(('FAIL', 'router.go: 缺 healthSegmentName()，渠道到段名的映射丢失'))
     if 'func (m *Map) Catalog(' not in alias:
         results.append(('FAIL', 'alias.go: 缺 func (m *Map) Catalog(...)：聚合视图退回 OC 透传'))
+    # 渠道有四个登记点：zgate.json 的 upstreams / channelPolicy、keys.go 的
+    # Channels / Set 字段。2026-11-10 加 HJ（哈基米）时四处都得改，漏一处症状
+    # 是「/health 少一段」或「跳到这一跳永远缺 key」——静态比对比跑起来才发现便宜。
+    try:
+        with open(ZGATE_JSON, encoding='utf-8') as f:
+            gw = json.load(f)
+    except OSError as e:
+        gw = {}
+        results.append(('FAIL', 'zgate.json 读取失败: ' + repr(e)))
+    if gw:
+        ups = set((gw.get('upstreams') or {}).keys())
+        pol = set((gw.get('channelPolicy') or {}).keys())
+        m_ch = re.search(r'var Channels = \[\]string\{([^}]*)\}', keyfile)
+        if not m_ch:
+            results.append(('FAIL', 'keys.go: 解析不出 var Channels 的渠道清单'))
+        else:
+            ch = set(re.findall(r'"([^"]+)"', m_ch.group(1)))
+            for name, got, want in (
+                    ('zgate.json upstreams', ups, ch),
+                    ('keys.go Channels', ch, ups)):
+                extra, miss = sorted(got - want), sorted(want - got)
+                if extra or miss:
+                    results.append(('FAIL', name + ' 与另一处不一致 多=' + str(extra) + ' 缺=' + str(miss)))
+            unknown_pol = sorted(pol - ch)
+            if unknown_pol:
+                results.append(('FAIL', 'zgate.json channelPolicy 指向未登记渠道: ' + str(unknown_pol)))
     if len(results) == before:
-        results.append(('OK', '网关实现: /v1/models 聚合 + /health 段表由 keys.Channels 驱动 + QN/GM Bearer 在位'))
+        results.append(('OK', '网关实现: /v1/models 聚合 + /health 段表由 keys.Channels 驱动 + QN/GM/HJ Bearer 在位'))
 
 
 def check_semantic(results: list) -> None:

@@ -1,7 +1,9 @@
 package router
 
 import (
+	"bytes"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"zgate/internal/alias"
 	"zgate/internal/config"
@@ -818,6 +821,157 @@ func TestModelsIsAggregatedCatalog(t *testing.T) {
 	}
 	if count != 1 {
 		t.Fatalf("Alpha duplicated %d times: %s", count, v1)
+	}
+}
+
+// 上游收下请求却一个响应头都不给时，流式转发必须到点判沉默、把机会让给下一跳，
+// 不能像 2026-11-10 18:51 那样把请求无限期挂住（客户端看到「一分钟没有输出」）。
+func TestStreamingHeaderWatchdogGivesUp(t *testing.T) {
+	unblock := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-unblock
+	}))
+	defer up.Close()
+	defer close(unblock)
+
+	srv, _ := newServer(t, "{\"models\":{},\"legacy\":{}}", up.URL)
+	srv.headerWait = 150 * time.Millisecond
+	body := []byte("{\"model\":\"m\",\"stream\":true}")
+	req, err := http.NewRequest("POST", up.URL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	resp, err := srv.doForward(req, body, "")
+	if resp != nil {
+		resp.Body.Close()
+		t.Fatalf("沉默上游不该拿到响应，却拿到 HTTP %d", resp.StatusCode)
+	}
+	if !errors.Is(err, errUpstreamSilent) {
+		t.Fatalf("want errUpstreamSilent, got %v", err)
+	}
+	if d := time.Since(start); d > 5*time.Second {
+		t.Fatalf("看门狗没按时收手：%v", d)
+	}
+}
+
+// 沉默换跳之后必须把这一跳埋一小会儿（silenceCooldownSeconds）。catiecli 的 3.8/3.7
+// 现在是「收下请求、几十秒不发头」，只换跳不冷却等于每个新请求都先白等一个窗口，
+// 用户看到的是「两分钟没输出」。冷却后 cooling() 必须立刻为 true，下一次直接跳过它。
+func TestSilentHopGetsShortCooldown(t *testing.T) {
+	unblock := make(chan struct{})
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-unblock
+	}))
+	defer up.Close()
+	defer close(unblock)
+
+	srv, _ := newServer(t, "{\"models\":{},\"legacy\":{}}", up.URL)
+	srv.headerWait = 120 * time.Millisecond
+	srv.cfg.ChannelPolicy = map[string]config.ChannelPolicy{"GM": {SilenceCooldownSeconds: 20}}
+	hop := alias.Hop{Channel: "GM", Upstream: "ais-gemini-3.8-flash", Base: up.URL}
+	body := []byte("{\"model\":\"m\",\"stream\":true}")
+	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
+
+	var reasons []string
+	srv.doForwardWith(httptest.NewRecorder(), req, body, up.URL, "/chat/completions", "", "GM", http.Header{},
+		func(int, []byte) bool { return true },
+		func(reason string) { reasons = append(reasons, reason) },
+		nil, nil, &hop)
+
+	if len(reasons) == 0 {
+		t.Fatal("沉默后必须换跳，retry 一次都没调用")
+	}
+	if !srv.cooling(hop) {
+		t.Fatal("沉默跳没有进静默冷却，下一个请求还会从它起手白等一个窗口")
+	}
+}
+
+// 容忍上限必须能被 zgate.json 的 upstreamHeaderTimeoutSec 改，且显式字段（测试用）
+// 优先，负数 = 关掉看门狗。2026-11-10 的教训：这个值写死在 const 里时，
+// 「上游 60 秒才回 503」只能靠重新编译才能收敛，而用户等的是分钟级延迟。
+func TestHeaderTimeoutFollowsConfig(t *testing.T) {
+	srv := &Server{cfg: &config.Config{UpstreamHeaderTimeoutSec: 3}}
+	if got := srv.headerTimeout(""); got != 3*time.Second {
+		t.Fatalf("配置 3 秒没生效：%v", got)
+	}
+	srv.cfg = &config.Config{}
+	if got := srv.headerTimeout(""); got != upstreamHeaderTimeout {
+		t.Fatalf("缺省应回落到常量 %v，got %v", upstreamHeaderTimeout, got)
+	}
+	srv.cfg = &config.Config{UpstreamHeaderTimeoutSec: -1}
+	if got := srv.headerTimeout(""); got != 0 {
+		t.Fatalf("负数应关掉看门狗（0），got %v", got)
+	}
+	srv.headerWait = 40 * time.Millisecond
+	if got := srv.headerTimeout(""); got != 40*time.Millisecond {
+		t.Fatalf("显式字段应最优先，got %v", got)
+	}
+}
+
+// 按渠道覆盖：GM 12 秒、HJ 25 秒 —— 同一个全局窗口套在「60 秒才认输的中转」和
+// 「会漂到 10 秒的兜底站」上，必然有一边是错的，所以这个值要能分开给。
+func TestHeaderTimeoutPerChannel(t *testing.T) {
+	srv := &Server{cfg: &config.Config{
+		UpstreamHeaderTimeoutSec: 12,
+		ChannelPolicy: map[string]config.ChannelPolicy{
+			"GM": {HeaderTimeoutSec: 12},
+			"HJ": {HeaderTimeoutSec: 25},
+			"XX": {HeaderTimeoutSec: -1},
+			"YY": {},
+		},
+	}}
+	if got := srv.headerTimeout("HJ"); got != 25*time.Second {
+		t.Fatalf("HJ 应按渠道给 25s，got %v", got)
+	}
+	if got := srv.headerTimeout("GM"); got != 12*time.Second {
+		t.Fatalf("GM 应按渠道给 12s，got %v", got)
+	}
+	if got := srv.headerTimeout("XX"); got != 0 {
+		t.Fatalf("渠道负数应关掉看门狗，got %v", got)
+	}
+	if got := srv.headerTimeout("YY"); got != 12*time.Second {
+		t.Fatalf("渠道没配（0）应回落全局 12s，got %v", got)
+	}
+	if got := srv.headerTimeout("ZZ"); got != 12*time.Second {
+		t.Fatalf("渠道不在表里应回落全局 12s，got %v", got)
+	}
+	// 测试用显式字段仍然最优先，否则看门狗用例会被真实配置带偏。
+	srv.headerWait = 30 * time.Millisecond
+	if got := srv.headerTimeout("HJ"); got != 30*time.Millisecond {
+		t.Fatalf("显式字段应最优先，got %v", got)
+	}
+}
+
+// 看门狗不能伤到正常流：头到得快时正文必须原样透出，取消只挂在 Body 关闭上。
+func TestStreamingHeaderWatchdogPassesThrough(t *testing.T) {
+	up := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		_, _ = io.WriteString(w, "data: hi\n\n")
+	}))
+	defer up.Close()
+
+	srv, _ := newServer(t, "{\"models\":{},\"legacy\":{}}", up.URL)
+	srv.headerWait = 2 * time.Second
+	body := []byte("{\"model\":\"m\",\"stream\":true}")
+	req, err := http.NewRequest("POST", up.URL+"/chat/completions", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := srv.doForward(req, body, "")
+	if err != nil {
+		t.Fatalf("正常流不该被判失败：%v", err)
+	}
+	raw, readErr := io.ReadAll(resp.Body)
+	if closeErr := resp.Body.Close(); closeErr != nil {
+		t.Fatalf("关闭正文失败：%v", closeErr)
+	}
+	if readErr != nil {
+		t.Fatalf("读正文失败：%v", readErr)
+	}
+	if !strings.Contains(string(raw), "data: hi") {
+		t.Fatalf("正文被吃掉：%q", string(raw))
 	}
 }
 

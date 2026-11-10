@@ -97,9 +97,11 @@ type ChannelPolicy struct {
 	// 后跳过多久。0 = 老行为（只有 504 冷却 5 分钟）。上游 503 high demand 是
 	// 分钟级窗口，90 秒足够跨过去，又不会让恢复的跳被长期埋掉。
 	SoftCooldownSeconds int `json:"softCooldownSeconds"`
-	// SilenceCooldownSeconds：2xx 但首块超时（上游 200 却十几秒不说话）之后
-	// 把这跳跳过多久。**故意比 SoftCooldownSeconds 短**：静默不等于死，3.6/3.5
-	// 常态 9-14 秒才出正文，判它「死了」会把自己的链饿空。0 = 首块超时不冷却。
+	// SilenceCooldownSeconds：这一跳「不说话」之后跳过多久。两种情况共用：
+	// ① 2xx 但首块超时（上游 200 却十几秒不吐正文）；② 连响应头都不给
+	// （errUpstreamSilent，catiecli 的 3.8/3.7 现在就是收下请求、几十秒不发头）。
+	// **故意比 SoftCooldownSeconds 短**：静默不等于死，3.6/3.5 常态 9-14 秒
+	// 才出正文，判它「死了」会把自己的链饿空。0 = 静默不冷却（老行为）。
 	SilenceCooldownSeconds int `json:"silenceCooldownSeconds"`
 	// RateLimitBackoffMs：收到 429 后就地退避再重试同一跳的时长。
 	// 0/缺省 = 老行为 700ms；负数 = 不就地重试，直接换下一跳（省一次白等）。
@@ -117,6 +119,13 @@ type ChannelPolicy struct {
 	// AuthFailCooldownHours：403 若是「key 无效 / 被封 / 无权限」类错误，整渠道禁用多久。
 	// 0 = 老行为（403 原样回给客户端）。这是「403 自动禁用」的落点。
 	AuthFailCooldownHours int `json:"authFailCooldownHours"`
+	// HeaderTimeoutSec：这一渠道「等上游响应头」的容忍上限（秒），覆盖全局
+	// upstreamHeaderTimeoutSec。0 = 用全局的那一档；负数 = 这一渠道不设看门狗。
+	// 为什么按渠道给：2026-11-10 20:05 实测，catiecli 的 ais-gemini-3.8-flash 要
+	// 60.241 秒才回 503（窗口多长都是白等），而哈基米的 [福利]gemini-3.8-flash
+	// 同一天从 2.5 秒漂到 7.5-10.2 秒（窗口太短会把唯一能用的兜底跳切掉）。
+	// 一个全局值必然牺牲一边，所以 GM 12 秒、HJ 25 秒分开给。
+	HeaderTimeoutSec int `json:"headerTimeoutSec"`
 }
 
 // Config is the whole file.
@@ -129,16 +138,24 @@ type Config struct {
 	QwenEnvFile     string         `json:"qwenEnvFile"`
 	QiniuEnvFile    string         `json:"qiniuEnvFile"`
 	GeminiEnvFile   string         `json:"geminiEnvFile"`
+	HajimiEnvFile   string         `json:"hajimiEnvFile"`
 	Session         string         `json:"session"`
 	ReasoningGuard  ReasoningGuard `json:"reasoningGuard"`
 	// StreamIdleHeartbeatSeconds：SSE 转发空闲多久补一条注释心跳（": zgate keepalive"）。
 	// 上游思考阶段常静默 30-60 秒（实测 iceman 断 51.9 秒），中间层与客户端都会判空闲。
 	// 0/缺省 = 15 秒；负数 = 关闭。
-	StreamIdleHeartbeatSeconds int                      `json:"streamIdleHeartbeatSec"`
-	ChannelPolicy              map[string]ChannelPolicy `json:"channelPolicy"`
-	Log                        Log                      `json:"log"`
-	Upstreams                  map[string]Upstream      `json:"upstreams"`
-	Children                   map[string]Child         `json:"children"`
+	StreamIdleHeartbeatSeconds int `json:"streamIdleHeartbeatSec"`
+	// UpstreamHeaderTimeoutSec：流式请求「已经连上上游、却连响应头都不给」的忍耐上限（秒）。
+	// 到点判这一跳沉默（errUpstreamSilent）并让位给下一跳。0/缺省 = 12 秒，
+	// 负数 = 关掉这个看门狗（老 behavior：谁不回就一直挂着）。
+	// 为什么要可配：2026-11-10 实测同一跳 catiecli ais-gemini-3.8-flash 要 60.2 秒才回
+	// 503，而哈基米福利跳 3 秒就能出字；一档 45 秒时 8 跳链轮转要 3-4 分钟，
+	// 降到 12 秒后 4 轮 ≈ 48 秒见分晓，且不用重新编译就能再调。
+	UpstreamHeaderTimeoutSec int                      `json:"upstreamHeaderTimeoutSec"`
+	ChannelPolicy            map[string]ChannelPolicy `json:"channelPolicy"`
+	Log                      Log                      `json:"log"`
+	Upstreams                map[string]Upstream      `json:"upstreams"`
+	Children                 map[string]Child         `json:"children"`
 
 	Path string `json:"-"`
 	Dir  string `json:"-"`
@@ -213,6 +230,9 @@ func (c *Config) applyDefaults() {
 	if c.GeminiEnvFile == "" {
 		c.GeminiEnvFile = "../../providers/gemini/.env.local"
 	}
+	if c.HajimiEnvFile == "" {
+		c.HajimiEnvFile = "../../providers/hajimi/.env.local"
+	}
 	if c.Session == "" {
 		c.Session = os.Getenv("OPENCODE_SESSION")
 	}
@@ -247,6 +267,9 @@ func (c *Config) applyDefaults() {
 	}
 	if c.StreamIdleHeartbeatSeconds == 0 {
 		c.StreamIdleHeartbeatSeconds = 15
+	}
+	if c.UpstreamHeaderTimeoutSec == 0 {
+		c.UpstreamHeaderTimeoutSec = 12
 	}
 	if c.Log.Dir == "" {
 		c.Log.Dir = filepath.Join(os.Getenv("LOCALAPPDATA"), "ZCodeGateway")
@@ -305,6 +328,18 @@ func (c *Config) applyDefaults() {
 		u.KeyEnv = "GEMINI_API_KEY"
 		c.Upstreams["GM"] = u
 	}
+	// 哈基米（gemai.cc）是另一家 Gemini 转售站，OpenAI 兼容直连；
+	// 无本地进程。它只承载 Gemini-AIS 链里「同代福利档」那一跳（见
+	// tools/model_alias.py 的 HOP_PRIORITY），不单独出现在模型目录里。
+	if u, ok := c.Upstreams["HJ"]; !ok {
+		c.Upstreams["HJ"] = Upstream{
+			Base:   "https://api.gemai.cc/v1",
+			KeyEnv: "HJM_API_KEY",
+		}
+	} else if u.KeyEnv == "" {
+		u.KeyEnv = "HJM_API_KEY"
+		c.Upstreams["HJ"] = u
+	}
 	for name, child := range c.Children {
 		if child.Policy == "" {
 			child.Policy = "ondemand"
@@ -354,6 +389,7 @@ func (c *Config) resolvePaths() error {
 	c.QwenEnvFile = c.resolve(c.QwenEnvFile)
 	c.QiniuEnvFile = c.resolve(c.QiniuEnvFile)
 	c.GeminiEnvFile = c.resolve(c.GeminiEnvFile)
+	c.HajimiEnvFile = c.resolve(c.HajimiEnvFile)
 	c.Log.Dir = c.resolve(c.Log.Dir)
 	return nil
 }
