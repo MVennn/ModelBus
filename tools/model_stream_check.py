@@ -16,7 +16,7 @@
   * 默认并发 2；429 / 5xx / 超时 / 网络错误自动退避重试；
   * 分块判据只在正文 >= 24 字时生效（超短答案 1-2 块属正常）；
   * tps = 端到端观测字符速率（正文字符 / 总耗时），不用首末块间隔；
-  * 首选档思考占满预算时，保持同一官方档位把预算提到 2048 补测正文，不误判为故障。
+  * 首选档思考占满预算时，保持同一官方档位把预算提到 4096 补测正文，不误判为故障。
 
 豁免与自动恢复：
   tools/model_stream_exemptions.json 记录上游真故障模型。探针仍会实测它们：
@@ -72,7 +72,10 @@ DEFAULT_BASE = os.environ.get("MODEL_GATEWAY_BASE", "http://127.0.0.1:7871/v1")
 LEVEL_ORDER = ["off", "minimal", "low", "medium", "high", "xhigh", "max"]
 PROMPT = "请写一段约 100 字的短文，介绍春天的景象，要求连续叙述、不要分点、不要标题。"
 MAX_TOKENS = 768
-RECOVER_TOKENS = 2048     # 思考占满预算时的同档位补测预算（Iceman high-2048 实测 fin=stop）
+RECOVER_TOKENS = 8192     # 思考占满预算时的同档位补测预算
+# 预算要够长：2026-11-10 实测 Iceman high-2048 思考 1899 字仍 contentChars=0 / fin=length，
+# high-4096 也没拿到正文；high-8192 两次都出（549 块 / 思考 2322 字 / 正文 100 字 / fin=stop，
+# 裸别名同参数 666 块 / 2726 字 / 100 字）。该模型思考长度随机 1400–2700+ 字，预算给小必被吃满。
 
 # 阈值（软/硬分离；上游额度与网络抖动归 SKIP，不算 FAIL）
 MIN_CHUNKS = 4
@@ -262,6 +265,12 @@ def _request(m: dict[str, Any], timeout: int, effort: str | None, max_tokens: in
                     obj = json.loads(payload)
                 except (ValueError, TypeError):
                     continue
+                # 网关会把「上游排队 / 额度」包成 HTTP 200 + {"error":{...}} 的 SSE 首帧，
+                # 不识别就会被判成「上游空 completion」＝模型坏，误伤准入结论。
+                if isinstance(obj.get("error"), dict):
+                    msg = str((obj.get("error") or {}).get("message") or "")
+                    err = "上游限流：" + msg[:160]
+                    break
                 usage = obj.get("usage") or {}
                 if isinstance(usage, dict) and isinstance(usage.get("completion_tokens"), (int, float)):
                     completion_tokens = usage["completion_tokens"]
@@ -361,6 +370,8 @@ def judge(m: dict[str, Any], r: dict[str, Any],
         return "SKIP", [r["err"] or ("HTTP " + str(http))]
     if http != 200:
         return "FAIL", ["HTTP " + str(http) + " " + r["err"]]
+    if r["err"]:
+        return "SKIP", [r["err"]]
     if r["contentChars"] == 0 and r["reasoningChars"] == 0:
         return "FAIL", ["无正文输出（上游空 completion）"]
     if r["contentChars"] == 0:
@@ -440,7 +451,10 @@ def select_models(args, all_models):
             return all_models
         try:
             prev = json.loads(LATEST.read_text(encoding="utf-8"))
-            old = {x.get("fingerprint") for x in prev.get("contract", prev.get("models", []))}
+            # 基准取「已有实测结果」的模型，不能取 contract：契约里有、models 里没结果的
+            # 模型（补档后新进契约）会永远选不中，latest.json 恒少于 contractCount，门禁报结构损坏。
+            old = {x.get("fingerprint") for x in prev.get("models", [])
+                   if isinstance(x, dict) and x.get("fingerprint")}
             # 上次瞬态失败 / 边缘 / 豁免的模型次日必须复测；EXEMPT 借此自动复通，
             # PASS / RECOVERED 不再重复打，避免每天全量白发推理请求。
             stale = {x.get("id") for x in prev.get("models", [])
@@ -468,7 +482,16 @@ def merge_results(prev: dict[str, Any] | None, new: list[dict[str, Any]],
             by_id[x["id"]] = x
     for x in new:
         by_id[x["id"]] = x
-    return [by_id[k] for k in sorted(by_id)]
+    out = [by_id[k] for k in sorted(by_id)]
+    # 契约里新进、但本次增量没轮到实测的模型补占位行：门禁要求 models 条数等于
+    # contractCount，缺行会被判「结构损坏」。占位行故意不带 fingerprint，
+    # 次日 --changed 仍会把它选中补测。
+    for k in sorted(contract_ids - set(by_id)):
+        out.append({"id": k, "state": "SKIP", "reasons": ["增量模式未实测（无基线结果）"],
+                    "http": 0, "chunks": 0, "reasoningChars": 0, "contentChars": 0,
+                    "encryptedReasoning": 0, "maxDelta": 0, "tps": 0.0,
+                    "firstMs": 0, "totalMs": 0, "finishReason": ""})
+    return out
 
 
 def main(argv: list[str] | None = None) -> int:

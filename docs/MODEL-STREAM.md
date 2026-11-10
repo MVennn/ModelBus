@@ -58,7 +58,10 @@ provider 以 `zcode-` 开头的模型表。`tools/dsh_sync.py --apply` 从 ZCode
 合并回全量视图，`latest.json` 恒为契约条数，手动单测不会破坏次日基线。
 
 思考占满首选预算（`max_tokens=768`）时，**保持同一官方档位**把预算提到
-`RECOVER_TOKENS=2048` 补测正文（Iceman `high-2048` 实测 `fin=stop`）。
+`RECOVER_TOKENS=8192` 补测正文。预算给小必被思考吃满：2026-11-10 实测 Iceman
+`high-2048` 思考 1899 字仍 `contentChars=0` / `fin=length`，`high-4096` 也没拿到正文；
+`high-8192` 两次都出（549 块 / 思考 2322 字 / 正文 100 字 / `fin=stop`）。该模型思考长度
+随机 1400–2700+ 字，补测预算按最坏情况给。
 不退回省略 effort —— 那正是 `Default` 伪档位 bug 的根源；也不用
 `off / wire=disabled` 关思考 —— 上游实测回 `HTTP 422`。
 
@@ -120,7 +123,9 @@ Windows 计划任务 `\ModelBus 模型同步` 是唯一自动驱动，daily 12:0
 | 分块 | 正文 >= 24 字且（`chunks < 4` 或 `maxDelta > max(48, 正文*0.6)`）判大块聚合 → `WARN` |
 | 速率 | `tps = 正文字符 / 总耗时`；低于 1.0 标 `WARN` 而非 `FAIL`（跨供应商波动可达 6 倍） |
 | 瞬态 | 429 / 5xx / 超时 / 网络错误退避重试 2 次后仍失败 → `SKIP`，不算故障 |
-| 空正文 | 首选档思考占满预算 → 同档位 2048 补测；补测拿到正文且无其它问题 → `PASS` |
+| 上游限流 | 网关把排队 / 额度包成 `HTTP 200` + `{"error":{...}}` 的 SSE 首帧（如 10605 / RESOURCE_LIMIT）；探针识别后记 `SKIP`，不能判成「上游空 completion」 |
+| 未实测 | 增量模式（`--changed` / `--model`）下契约里没轮到实测的模型补 `SKIP` 占位行，保证 `models` 条数恒等于 `contractCount`；占位行不带 `fingerprint`，次日仍会被选中补测 |
+| 空正文 | 首选档思考占满预算 → 同档位 8192 补测；补测拿到正文且无其它问题 → `PASS` |
 | 思考 | 仅 `reasoning_deepseek` 强制要求思考字数 > 0 |
 | 加密分流 | `THINK=0` 且 `ENC>0` → `WARN`，理由写明「上游加密思考分流」；离线守卫复核该标注没丢 |
 | 并发 | 默认 2（实测 6 会把网关打出假阴性） |

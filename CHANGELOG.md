@@ -17,6 +17,15 @@
 
 ## [未发布]
 
+### 推理档位补齐 + 探针误判修复 + Iceman 展示层复位（2026-11-10 下午）
+
+- **档位投影**：`python tools/dsh_sync.py --apply` 给 5 个缺口模型补上 `{off: disabled, high: high}`（Gemini-3.8-Flash / Iceman / Qwen-3.8-Flash / MiMo-2.6-Flash / MiMo-2.6-Pro），其余 14 个档位零变化，复跑 `--check` 报「模型表: 无变化」。根因是 `tools/dsh_sync.py:161-191` 的 WARN 回落分支 + `:206-218` 只读模型自身 `optionSpecs`，缺声明时 `_reasoning()` 返回 `{}`。上游仍有 5 个模型（Beam / Conatus / Claude-Haiku-5.5 / GPT-6-Luna / Muse-Spark1.3）因 `providers/opencode-go/ops/go_model_sync.py:577-581` 在 `needs_no_thinking` 时整段跳过 values 而拿不到档位，属源头待修；实测 Beam 无档位却回 818 字思考，门禁把它当 `no_reasoning` 属口径缺口。
+- **展示层复位**：`cordis.patch.yml:20-26` 被 14:25 的「自动采集」回退成 `compact / completion / final`（回退源 `cordis.patch.yml.bak-autocapture-20261110142500`），已改回 `verbose / next-input / all`；`reasoningDisplay: continuous` 不动。`dsh_sync.py` 只重写 `llm-pi-ai` 段，14:52 的 `--apply` 未吃回该段。
+- **探针四修**（`tools/model_stream_check.py`）：① `RECOVER_TOKENS` 2048→8192，实测 Iceman `high-2048` 思考 1899 字正文 0、`high-4096` 仍 0、`high-8192` 出 549 块 / 2322 字思考 / 100 字正文 / `fin=stop`；② `--changed` 的基准由 `prev.contract` 改 `prev.models` 的 fingerprint，否则契约里新进、results 里没结果的模型永远选不中，`latest.json` 恒少于 `contractCount`，门禁判「结构损坏」；③ 识别网关包成 `HTTP 200 + {"error":{...}}` 的上游排队帧（10605 / RESOURCE_LIMIT），归 `SKIP` 而不是「空 completion」；④ 增量模式给未轮到实测的契约模型补 `SKIP` 占位行（不带 fingerprint），保证 `models` 条数恒等于 `contractCount`。
+- **守卫作用域**：`zgate.json` 的 `reasoningGuard.mode` 为 `models`（Iceman / iceman-contributor-free）。上一条里「`zgate.json` 已切 auto」是 12:59 换版当时的状态，此后已收回 `models` —— `auto` 会把 `cn:deepseek-v4.1-flash` 一并纳入探针并打进 600 秒跳过表（`zgate.log` 实见 358 条「跳过期内直接放行」），现状以 `models` 为准。
+- **验收**：`check-project.py` 8 项 exit 0；`latest.json` 19 条全量视图 PASS 14 / SKIP 3 / EXEMPT 1 / RECOVERED 1、FAIL 0；Qwen-3.8-Flash 带与不带 `reasoning_effort` 均回 10605 排队（各 184 s），确认非档位适配问题。
+- **未做**：探测期心跳 —— `router.go:879-951` 的 `streamIdleHeartbeatSec` 只在上游流已开始后生效，守卫重抽期间客户端零字节（`probeSeconds` 15 × `maxRetries` 1 ≈ 30 s）；Iceman 已降为备用不押注。
+
 ### Gemini 3.8 Flash 并入主力组：新增 `GM` 渠道与 `gem:` 前缀（2026-11-10）
 
 - **为什么必须改 Go**：`zgate.json` 的 `keyEnv` 是死字段（`internal/config/config.go` 只赋值、无读取方），上游 key 只能来自 `internal/keys` 的 `Set.For(channel)`，而它硬编码 OC/WB/QD/QW/QN。不新增渠道，`key` 恒为空，`router.attemptChain` 会在 `router.go` 直接跳过该跳，表现为单跳 502。
@@ -1371,5 +1380,3 @@ WorkBuddy2API 三个 provider 的模型顺序改为「主力置顶 → CN 优先
   TROUBLESHOOTING §11 / §12、PITFALLS §12、SECRETS、docs/README
 - 说明 —— 统一路由是本地进程；ZCode 不开时由守护器停掉。回退：恢复
   `.bak-unified-*`，或 `workbuddy_zcode_sync.py --separate --apply` 重建四档
-
-
