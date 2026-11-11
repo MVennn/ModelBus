@@ -116,10 +116,14 @@ GEMINI_HOPS = [
     "ais-gemini-3-flash-preview",
 ]
 
-# 哈基米（HJ，gemai.cc）的同代福利档。2026-11-10 用户口径改成「ais 全档排队不可用时
-# 直接用它」，于是它从 Gemini-AIS 链里摘出来，独立成单跳模型 Gemini-3.8-Flash
+# 哈基米（HJ，gemai.cc）的同代档。2026-11-10 用户口径改成「ais 全档排队不可用时
+# 直接用它」，于是它从 Gemini-AIS 链里摘出来，独立成模型 Gemini-3.8-Flash
 # （主力组里排在 Gemini-AIS 之前）。
-HJ_HOP = "[福利]gemini-3.8-flash"
+# 2026-11-11：「福利」档在 gemai 上已经 model_not_found 全线断供（实测 3.8/3.7/3.6
+# 全回「No available channel」），「满血A/B/C/F」与「官逆B」的 3.8-flash 都 200，
+# 所以这一族改成 [满血A] 的同站三跳 3.8 → 3.7 → 3.6，名字仍由链首 3.8 持有。
+HJ_HOP = "[满血A]gemini-3.8-flash"
+HJ_HOPS = ["[满血A]gemini-3.8-flash", "[满血A]gemini-3.7-flash", "[满血A]gemini-3.6-flash"]
 HJ_MODEL = "Gemini-3.8-Flash"
 
 
@@ -129,7 +133,7 @@ def _gemini_entries() -> list[dict]:
         _hop("GM", upstream, ma.GM_PRICES[upstream], base_model=upstream)
         for upstream in reversed(GEMINI_HOPS)
     ]
-    items.append(_hop("HJ", HJ_HOP, ma.HJ_PRICES[HJ_HOP], base_model=HJ_HOP))
+    items.extend(_hop("HJ", h, ma.HJ_PRICES[h], base_model=h) for h in reversed(HJ_HOPS))
     return ma.family_entries(items, {}, {}, "auto")
 
 
@@ -164,13 +168,13 @@ class GeminiHopOrderTest(unittest.TestCase):
             "裁掉的跳仍要留在 legacy_ids：老会话点名 ais-gemini-3.5-flash 不能 404",
         )
 
-    def test_hajimi_is_standalone_single_hop_model(self) -> None:
+    def test_hajimi_is_standalone_same_site_chain(self) -> None:
         entry = _entry_by_abbr(HJ_MODEL)
         self.assertEqual(entry["name"], HJ_MODEL)
-        self.assertEqual(len(entry["chain"]), 1, "哈基米福利档是单跳模型，不再参与降级链")
-        hop = entry["chain"][0]
-        self.assertEqual((hop["channel"], hop["upstream"]), ("HJ", HJ_HOP))
-        self.assertEqual(hop["price"], 0.05)
+        # 单站三跳：3.8 领头，3.7 / 3.6 同站降级；链里不掺别的渠道。
+        self.assertEqual([h["upstream"] for h in entry["chain"]], HJ_HOPS)
+        self.assertEqual({h["channel"] for h in entry["chain"]}, {"HJ"})
+        self.assertEqual({h["price"] for h in entry["chain"]}, {0.05})
 
     def test_hop_priority_covers_every_ais_hop(self) -> None:
         # 漏一个就回落到默认 99，会被 3.5 之类的字符串序顶到前面。
@@ -178,11 +182,18 @@ class GeminiHopOrderTest(unittest.TestCase):
             {upstream for upstream in ma.HOP_PRIORITY if upstream.startswith("ais-gemini")},
             set(GEMINI_HOPS),
         )
-        self.assertNotIn(HJ_HOP, ma.HOP_PRIORITY, "单跳模型不进「链内跳序」表")
+        # HJ 三跳同样要显式排：不写就都取默认 99，并列时按 upstream 字符串序，
+        # 链首会变成 3.6（2026-11-11 实测过这个坑）。
         self.assertEqual(
-            sorted(ma.HOP_PRIORITY, key=lambda u: ma.HOP_PRIORITY[u]),
+            [u for u in HJ_HOPS if u in ma.HOP_PRIORITY],
+            HJ_HOPS,
+            "HJ 三跳都要写进 HOP_PRIORITY",
+        )
+        ordered = sorted(ma.HOP_PRIORITY, key=lambda u: ma.HOP_PRIORITY[u])
+        self.assertEqual(
+            [u for u in ordered if u.startswith("ais-gemini")],
             GEMINI_HOPS,
-            "HOP_PRIORITY 从小到大必须正好是 AIS 这条链",
+            "AIS 这条链的跳序",
         )
         self.assertGreater(
             ma.HOP_PRIORITY_DEFAULT,
@@ -192,7 +203,8 @@ class GeminiHopOrderTest(unittest.TestCase):
 
     def test_main_order_puts_hajimi_before_ais(self) -> None:
         order = list(ma.MAIN_ORDER)
-        self.assertIn("chat:hjm:" + HJ_HOP, order, "主力名单必须点名哈基米福利档")
+        for hop in HJ_HOPS:
+            self.assertIn("chat:hjm:" + hop, order, "主力名单必须点名哈基米三跳")
         self.assertLess(
             order.index("chat:hjm:" + HJ_HOP),
             order.index("chat:gem:ais-gemini-3.8-flash"),
@@ -217,8 +229,8 @@ class GeminiHopOrderTest(unittest.TestCase):
         )
         self.assertEqual(
             [h.get("channel") for h in hj.get("chain") or []],
-            ["HJ"],
-            "磁盘上 Gemini-3.8-Flash 必须是单跳 HJ",
+            ["HJ"] * 3,
+            "磁盘上 Gemini-3.8-Flash 是 HJ 同站三跳（3.8 → 3.7 → 3.6）",
         )
         self.assertEqual(hj.get("group"), ais.get("group"), "两个模型要同属主力组")
 

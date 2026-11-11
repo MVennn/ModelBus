@@ -366,6 +366,15 @@ def judge(m: dict[str, Any], r: dict[str, Any],
             return "EXEMPT", ["上游真故障（豁免中）：" + ex["reason"]]
         return "RECOVERED", ["上游已恢复，可删除豁免条目：" + m["id"]]
     http = r["http"]
+    # 200 但正文与思考都空：上游把整段生成环节吞了（空 completion）。
+    # 这类结果不是「答案不好」，而是「模型此刻根本不出字」，判 WARN 就等于
+    # 把一次真实的链路故障折成一条备注，没人会看 —— 每天都在同一批模型上复发。
+    # 2026-11-11 实测 Muse-Spark1.3 就是这样被长期豁免的（HTTP 200 仅 role +
+    # finish_reason=stop）。归 SKIP（待复查），和 429/5xx 同一档：不计 FAIL，
+    # 但次日 --changed 会点名复测。
+    if http == 200 and r["contentChars"] == 0 and r["reasoningChars"] == 0:
+        return "SKIP", ["上游空 completion（HTTP 200 仅 role / finish_reason="
+                        + str(r.get("finishReason") or "-") + "）"]
     if http == 429 or http >= 500 or (http == 0 and r["err"]):
         return "SKIP", [r["err"] or ("HTTP " + str(http))]
     if http != 200:

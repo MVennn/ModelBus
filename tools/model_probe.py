@@ -212,7 +212,10 @@ def main() -> int:
     parser.add_argument("--out", default=str(DEFAULT_OUT))
     parser.add_argument("--group", help="只探测某组（provider id 或显示名：主力/免费/低耗/高耗）")
     parser.add_argument("--only", help="只探测这些模型（逗号分隔，精确匹配）")
-    parser.add_argument("--max-tokens", type=int, default=32)
+    # 默认值给 256：32 在「先思考再出字」的模型（Gemini / Doubao 档）上会被思考预算
+    # 吃光，上游回 400 max output tokens were exhausted，探活把它记成死型号，
+    # 再被 --probe-file 从配置里摘掉（2026-11-11 Gemini-AIS 消失的同一路径）。
+    parser.add_argument("--max-tokens", type=int, default=256)
     parser.add_argument("--timeout", type=int, default=75)
     parser.add_argument("--sleep", type=float, default=1.5)
     args = parser.parse_args()

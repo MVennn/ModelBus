@@ -69,6 +69,8 @@ DSH_PROFILE = os.environ.get("DSH_PROFILE", "desktop")
 API_KEY_ENV = "ZCODE_GATEWAY_KEY"
 DEFAULT_BASE = "http://127.0.0.1:7871/v1"
 DSH_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+# 上一轮投影到 DSH 的型号清单（只用来报「这次少了谁」，不是配置来源）
+DSH_LEDGER = DSH_HOME / "profiles" / DSH_PROFILE / "zcode-model-ledger.json"
 # 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
 _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 KNOWN_PROVIDER_IDS = {
@@ -125,6 +127,28 @@ def _read_json(path: Path) -> dict[str, Any]:
         raise DshSyncError(f"ZCode 配置不是合法 JSON：{path}（{exc}）") from exc
 
 
+def _previous_model_ids(provider_id: str) -> list[str]:
+    """上一次投影到 DSH 的该 provider 型号清单（用于报「这次少了谁」）。"""
+    path = DSH_LEDGER
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return []
+    entry = (data.get("providers") or {}).get(provider_id) or {}
+    return [str(mid) for mid in entry.get("modelIds") or []]
+
+
+def _remember_model_ids(snapshot: list[dict[str, Any]]) -> None:
+    """把本次投影结果记下来，供下一轮算差值。"""
+    payload = {"providers": {p["providerId"]: {"modelIds": p["modelIds"]} for p in snapshot}}
+    try:
+        DSH_LEDGER.parent.mkdir(parents=True, exist_ok=True)
+        DSH_LEDGER.write_text(
+            json.dumps(payload, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    except OSError as exc:
+        print(f"WARN: 投影账本写入失败：{exc}", file=sys.stderr)
+
+
 def _zcode_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     try:
         config = cfg["config"]
@@ -144,6 +168,18 @@ def _zcode_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         pcfg = rule.get("config") or {}
         ids = pcfg.get("modelOrder") or pcfg.get("personalModelIds") or []
         ids = [str(mid) for mid in ids if str(mid).strip()]
+        # 2026-11-11：上一版投影出去、这一版配置里已经消失的型号必须显式报出来。
+        # 用户侧看到的是模型选择器里少了一条，或者（更糟）DSH 会话直接硬失败
+        # 「provider "zcode-main" has no configured model "Gemini-AIS"」——
+        # 清单是这份配置投影的，缺型号不会降级。静默少一条是这个故障最难查的地方，
+        # 所以投影到 DSH 的这条路径上必须留一行字。
+        dropped = [mid for mid in _previous_model_ids(provider_id) if mid not in ids]
+        if dropped:
+            print(
+                f"WARN: {provider_id} 投影到 DSH 时移除了 {len(dropped)} 个上次还在的型号："
+                + "、".join(dropped),
+                file=sys.stderr,
+            )
         if not ids:
             continue
         providers.append(
@@ -560,6 +596,10 @@ def _main(argv: list[str] | None = None) -> int:
     print(f"DSH 路由   : {_route_summary(routes)}")
     print(f"patch      : {patch_path}")
     print(f"模型表     : {'有变化' if changed else '无变化'}；凭据引用：{'有变化' if key_changed else '无变化'}")
+
+    if args.apply:
+        # 只有真正写进去才更新账本；dry-run/--check 不能把「计划」记成「已投影」。
+        _remember_model_ids(providers)
 
     lost = _efforts_lost(rules, routes)
     if lost:

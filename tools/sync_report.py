@@ -424,6 +424,12 @@ def main() -> int:
     else:
         print(f"新增 {len(changes['added'])}：{', '.join(changes['added']) or '无'}")
         print(f"移除 {len(changes['removed'])}：{', '.join(changes['removed']) or '无'}")
+        # 「消失」是这个流水线上最贵的一类变化：DSH 的型号表由配置直接投影，
+        # 少一条不是降级而是整场会话硬失败。JSON 报告、索引表都只有计数，
+        # 所以控制台必须把名字念出来，否则当日日志里查不到是谁没了。
+        if changes["removed"]:
+            print(f"WARN: 本轮有 {len(changes['removed'])} 个模型从清单消失（不是新增的镜像）："
+                  + "、".join(changes["removed"]), file=sys.stderr)
         for name, before, after in changes["group_changed"]:
             print(f"分组变化：{name} {before} → {after}")
         print(f"链路变化 {len(changes['chain_changed'])}：{', '.join(n for n, _, _ in changes['chain_changed']) or '无'}")

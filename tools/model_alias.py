@@ -100,11 +100,17 @@ GM_BASE = "https://catiecli.sukaka.top/v1"
 # Gemini-AIS 链里的一跳，而是独立模型 Gemini-3.8-Flash（见 ABBR 与 MAIN_ORDER）。
 HJ_BASE = "https://api.gemai.cc/v1"
 HJ_PRICES = {
-    # 「福利」档没有公开价目表，按比 catiecli 3.8（0.11）更便宜的估算值记账。
+    # 2026-11-11 现网实测：gemai.cc 的「福利」档 3.8 / 3.7 / 3.6 全部
+    # model_not_found（「No available channel for model」），售卖站的价目在，
+    # 分销通道已经停了。「满血 A/B/C/F」与「官逆 B」四档的 3.8-flash 实测可用
+    # （200 / 4.6–8.4s，与「福利」同代同款），所以主力档换 [满血A]，
+    # 同型号 3.8 → 3.7 → 3.6 逐跳降级（实测三档都 200，5.4–6.2s）。
+    # 价目没有公开表，沿用原来的估算口径（比 catiecli 3.8 的 0.11 便宜）。
     # 不能写 0.0 冒充免费：family_entries 见同一族里同时存在 <=0 与 >0 的跳时，
-    # 会把这条链拆成「付费 + -Free」两条（见 MERGE_FREE_GB 注释）。它现在是单跳族，
-    # 但仍按付费档记账 —— 0.0 会被省钱组的免费档位逻辑收走。
-    "[福利]gemini-3.8-flash": 0.05,
+    # 会把这条链拆成「付费 + -Free」两条（见 MERGE_FREE_GB 注释）。
+    "[满血A]gemini-3.8-flash": 0.05,
+    "[满血A]gemini-3.7-flash": 0.05,
+    "[满血A]gemini-3.6-flash": 0.05,
 }
 GM_PRICES = {
     # 上游没有公开价目表，7 个跳一律沿用同一个估算值（0.11 = DeepSeek 标准档）。
@@ -145,10 +151,14 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 哈基米福利档（HJ 渠道）2026-11-10 拆成独立模型 Gemini-3.8-Flash，单跳、不并链。
+    # 哈基米档（HJ 渠道）2026-11-10 拆成独立模型 Gemini-3.8-Flash。
     # 位置压在 Gemini-AIS 之前：ais 全档排队不可用时用户直接点它，主力组列表里
     # 先给「能用的 3.8」再给「会降级的 3.8」，点名候选也按这个先后。
-    "chat:hjm:[福利]gemini-3.8-flash",
+    # 2026-11-11 起 HJ 这段变成同站 3.8 → 3.7 → 3.6 三跳（「福利」档已断供），
+    # 三个 id 都得点名，否则 3.7 / 3.6 只能等配置里先出现才进链。
+    "chat:hjm:[满血A]gemini-3.8-flash",
+    "chat:hjm:[满血A]gemini-3.7-flash",
+    "chat:hjm:[满血A]gemini-3.6-flash",
     # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
     # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链**（默认 7 跳，CHAIN_CAP 可截短）。
     # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
@@ -250,7 +260,13 @@ CHANNEL_RANK_DEFAULT = 4
 # → 同价时的相对顺序与加这张表之前完全一致（行为不变）。
 # 2026-11-10 哈基米福利档拆成独立模型后已从表里移除：单跳族没有链内顺序，
 # 留在表里反而会让这张表的语义（「链内跳序」）和实际链对不上。
+# 同族但不同站的跳（哈基米 HJ）也在这里排：键是 upstream，值小的在前。
+# 2026-11-11 起 Gemini-3.8-Flash 是 HJ 同站三跳，必须显式写 0/1/2，
+# 否则三跳都取默认 99、并列时按 upstream 字符串序，链首会变成 3.6。
 HOP_PRIORITY = {
+    "[满血A]gemini-3.8-flash": 0,
+    "[满血A]gemini-3.7-flash": 1,
+    "[满血A]gemini-3.6-flash": 2,
     "ais-gemini-3.8-flash": 0,
     "ais-gemini-3.7-flash": 1,
     "ais-gemini-3.6-flash": 2,
@@ -391,10 +407,15 @@ ABBR = {
     # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
     # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。
     "ais-gemini-3.8-flash": "Gemini-AIS",
-    # 哈基米福利档 2026-11-10 拆成独立族：显示名 Gemini-3.8-Flash（单跳 HJ 渠道）。
+    # 哈基米档 2026-11-10 拆成独立族：显示名 Gemini-3.8-Flash（HJ 渠道）。
     # 以前它和 ais 同名、混在一条链里当兜底；用户口径改成「ais 不可用时直接用它」，
     # 于是从 Gemini-AIS 链里摘出来，不再参与那条链的降级。
-    "[福利]gemini-3.8-flash": "Gemini-3.8-Flash",
+    # 2026-11-11：「福利」档断供后这一族改成 [满血A] 的 3.8/3.7/3.6 三跳，
+    # 显示名仍是 Gemini-3.8-Flash（链首 3.8 持有名字，跳序 3.8 → 3.7 → 3.6）。
+    # 显示名去掉渠道档位前缀：上游 id 只认 [满血A]，用户侧只该看到一个 Gemini 名字。
+    "gemini-3.8-flash": "Gemini-3.8-Flash",
+    "gemini-3.7-flash": "Gemini-3.8-Flash",
+    "gemini-3.6-flash": "Gemini-3.8-Flash",
     "ais-gemini-3.7-flash": "Gemini-AIS",
     "ais-gemini-3.6-flash": "Gemini-AIS",
     "ais-gemini-3.5-flash": "Gemini-AIS",
@@ -653,7 +674,14 @@ def _blank_effort_global(cfg: dict) -> bool:
 
 # 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
-EMPTY_ALLOWED: set = set()
+EMPTY_ALLOWED: set = {
+    # 两家谷歌中转（GM: catiecli / HJ: gemai）的 /v1/models 只有 id，不回 reasoning
+    # 能力位，本脚本也无从继承 —— 这两条注定是空档位。2026-11-11 之前它一直被报成
+    # 「本轮同步补不回来」的漂移，每天让 sync-models.ps1 的漂移复查判失败一次，
+    # 用户看到的是「复查仍有漂移，需要人工看」，实际什么都没坏。
+    "Gemini-AIS",
+    "Gemini-3.8-Flash",
+}
 
 def drifted_efforts(cfg: dict) -> list:
     """上一轮有档位、这一轮算出来却没有的模型 —— 每日同步的回归守门。
@@ -1123,6 +1151,12 @@ def abbreviate(model: str) -> str:
     key = model.lower()
     if key in ABBR:
         return ABBR[key]
+    # 兜底再比一次「去掉渠道档位前缀」的形式：ABBR 的键按小写存，
+    # 而 `[满血A]gemini-3.8-flash` 这种 id 里的大写 A 在 .lower() 之后
+    # 会变成 `[满血a]…`，键根本对不上。只靠键名精确匹配会静默漏掉整族。
+    stripped_key = re.sub(r"^\[[^\]]*\]", "", key)
+    if stripped_key != key and stripped_key in ABBR:
+        return ABBR[stripped_key]
     # hy4-preview 的多个入口（-f / -ctrl / -exp1..3 / -x）是同一上游的不同档位，
     # 回包 model 都是 hy4-preview。同一型号只给一个显示名，档位尾缀一律不带
     # （用户 2026-11-06 口径：没有真正不同的模型就不要尾缀）。
@@ -1130,7 +1164,10 @@ def abbreviate(model: str) -> str:
         return "HY4-Preview"
     # 厂商前缀（`qiniu/` `moonshotai/`）与 `-free` / `-f` 标记都不进显示名：
     # 「免费」由分组表达，只有同型号同时存在免费与付费档时才加 `-Free`。
-    text = re.sub(r"^[a-z0-9_-]+/", "", model, flags=re.IGNORECASE)
+    # 哈基米售卖站的档位前缀（[满血A] / [官逆B] …）是渠道标，不属于型号：
+    # 不去掉的话显示名会变成 "A-gemini-3.8-Flash"，同一型号被拆成一堆名字。
+    text = re.sub(r"^\[[^\]]*\]", "", model)
+    text = re.sub(r"^[a-z0-9_-]+/", "", text, flags=re.IGNORECASE)
     text = re.sub(r"(?i)[-_]free$", "", text)
     text = re.sub(r"^[Vv](?=\d)", "", text)
     # 不缩写：-Fs / -Pre 这类尾缀读者分不清是档位还是版本，一律写全。
@@ -1328,7 +1365,7 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
         }
     if model.startswith("hjm:"):
         # 显式 HJ 渠道（哈基米 gemai.cc）：白名单写
-        # chat:hjm:[福利]gemini-3.8-flash 走到这里。不写前缀会落到末尾 OC 兜底，
+        # chat:hjm:[满血A]gemini-3.8-flash 走到这里。不写前缀会落到末尾 OC 兜底，
         # 那条会把 [福利] 前缀当成型号名发给 opencode.
         upstream = model[len("hjm:"):]
         return {
@@ -1911,6 +1948,11 @@ def drift_report(grouped: dict[str, list[dict]], existing_models: dict) -> dict[
     缓存时，一个稳定存在的偏差永远不会显示成变化。这里比的是「现有产物」和
     「按当前价格源重算的结果」，是唯一能抓到价格冻结这类 bug 的检查。
     """
+    # `main` 里的盘前收窄 / 摘要模式（--only-summary 之类）在 grouped 不外泄时
+    # 直接返空：差集算法在空新表上会把整张表判成「消失」，那是最贵的一种误报。
+    if not grouped:
+        print("WARN: 重算结果为空，漂移检查跳过（不代表没有漂移）", file=sys.stderr)
+        return {"added": [], "removed": [], "group_changed": [], "price_changed": [], "chain_changed": []}
     proposed = proposed_signature(grouped)
     current = {name: _entry_signature(entry) for name, entry in (existing_models or {}).items()}
     added = sorted(set(proposed) - set(current))
@@ -2038,6 +2080,83 @@ def sync_deepseek_harness(config_path: Path) -> None:
         return
     lines = [line for line in proc.stdout.splitlines() if line.strip()]
     print("DeepSeekHarness: " + (lines[-1] if lines else "已同步"))
+
+
+def _probe_entry(row: dict, probe: dict, legacy: dict) -> dict:
+    """按 display id / 上游 id / legacy id 找出该条目对应的探测记录。
+
+    顺序与 --probe-file 过滤块一致：新 ID → raw → 每一跳的 upstream/original →
+    反查 legacy。返回空 dict 表示这一轮没探到它。
+    """
+    candidates = [row.get("new_id"), row.get("raw")]
+    for hop in row.get("chain") or []:
+        candidates += [hop.get("upstream"), hop.get("original")]
+    reverse: list[str] = []
+    for old_id, new_id in (legacy or {}).items():
+        if new_id == row.get("new_id"):
+            reverse.append(old_id)
+    candidates += reverse
+    return next((probe[c] for c in candidates if c in probe), {})
+
+
+def apply_probe_filter(grouped: dict[str, list[dict]], probe: dict,
+                       existing_models: dict, legacy: dict,
+                       skipped: list[str]) -> tuple[list[str], list[str]]:
+    """按探测结果摘掉确认死掉的型号，主力组只报不删。
+
+    只有「上游明确说没有这个型号」（unavailable，404）才摘。其余非 ok 状态
+    都是这一次请求的运气问题，不是型号死活的证据：
+      · queued / rate_limited / timeout —— 本来就该留；
+      · blocked —— 地区/权限拒绝，通常是这条出口进不去（机场孪生跳就是为它存在的）；
+      · error —— 连 HTTP 码都没拿到（WinError 10054 / 连接重置），最没有资格判定型号。
+    2026-11-10 12:00 的部署重启 (zgate.exe.bak-deploy-20261110-120031) 打断了在途
+    探测：beam-free / qiniu/conatus-free 记成 error，claude-haiku-5-5 的 403 地区
+    拒绝被写成 unavailable，三条 ever_ok=true 的型号就这样从配置里消失，
+    用户侧看到的是「Beam 直连连不上」。
+
+    2026-11-11 再补一条：**主力组成员不许当场删**。主力是用户在模型选择器里
+    点名的对象，DSH 侧 zcode-main 的清单由这份配置投影而来，缺了型号不会降级
+    而是硬失败（pi-ai: provider "zcode-main" has no configured model
+    "Gemini-AIS"）。那天 AIS 一次 45s 超时 + ever_ok 为空就被摘掉，用户整场
+    会话卡死在报错上。主力组改为「保留 + 记一条待核实」，真下架的型号上游会
+    回 unavailable/404，那条分支仍然照删。
+
+    返回 (transient_kept, suspect_main)。
+    """
+    transient = {"queued", "timeout", "rate_limited", "blocked"}
+    transient_kept: list[str] = []
+    suspect_main: list[str] = []
+    for group, rows in grouped.items():
+        kept = []
+        for row in rows:
+            entry = _probe_entry(row, probe, legacy)
+            status = entry.get("status")
+            # 旧版探活把 403 写成 unavailable（2026-11-10 12:02 的账本正是如此：
+            # claude-haiku-5-5 http=403 status=unavailable），历史账本不能拿
+            # 来判型号死刑，按地区/权限拒绝处理。
+            if status == "unavailable" and entry.get("http") == 403:
+                status = "blocked"
+            # error 不看 ever_ok：网络层失败连响应都没有，不能当「型号不存在」用。
+            if status in ("ok", "error") or (status in transient and entry.get("ever_ok")):
+                kept.append(row)
+            elif group == "main":
+                # 主力组只报不删，理由见 docstring。
+                kept.append(row)
+                if entry:
+                    suspect_main.append(f"{row.get('new_id')} (probe {status or 'not probed'})")
+                else:
+                    transient_kept.append(
+                        f"{row.get('new_id')} (no probe entry, kept: existing model)")
+            elif not entry and row.get("new_id") in existing_models:
+                # Renamed since the last probe: the model was already in
+                # the working config, so keep it until the next probe.
+                kept.append(row)
+                transient_kept.append(
+                    f"{row.get('new_id')} (no probe entry, kept: existing model)")
+            else:
+                skipped.append(f"{row.get('new_id')} (probe {status or 'not probed'})")
+        grouped[group] = kept
+    return transient_kept, suspect_main
 
 
 def main() -> int:
@@ -2247,44 +2366,22 @@ def main() -> int:
                 + (" …" if len(stale_probe) > 5 else ""),
                 file=sys.stderr,
             )
-        # 只有「上游明确说没有这个型号」（unavailable，404）才摘。其余非 ok 状态
-        # 都是这一次请求的运气问题，不是型号死活的证据：
-        #   · queued / rate_limited / timeout —— 本来就该留；
-        #   · blocked —— 地区/权限拒绝，通常是这条出口进不去（机场孪生跳就是为它存在的）；
-        #   · error —— 连 HTTP 码都没拿到（WinError 10054 / 连接重置），最没有资格判定型号。
-        # 2026-11-10 12:00 的部署重启 (zgate.exe.bak-deploy-20261110-120031) 打断了在途
-        # 探测：beam-free / qiniu/conatus-free 记成 error，claude-haiku-5-5 的 403 地区
-        # 拒绝被写成 unavailable，三条 ever_ok=true 的型号就这样从配置里消失，
-        # 用户侧看到的是「Beam 直连连不上」。
-        transient = {"queued", "timeout", "rate_limited", "blocked"}
-        reverse_legacy: dict[str, list[str]] = {}
-        for old_id, new_id in legacy.items():
-            reverse_legacy.setdefault(new_id, []).append(old_id)
-        for group, rows in grouped.items():
-            kept = []
-            for row in rows:
-                candidates = [row["new_id"], row.get("raw")]
-                for hop in row["chain"]:
-                    candidates += [hop["upstream"], hop["original"]]
-                candidates += reverse_legacy.get(row["new_id"], [])
-                entry = next((probe[c] for c in candidates if c in probe), {})
-                status = entry.get("status")
-                # 旧版探活把 403 写成 unavailable（2026-11-10 12:02 的账本正是如此：
-                # claude-haiku-5-5 http=403 status=unavailable），历史账本不能拿
-                # 来判型号死刑，按地区/权限拒绝处理。
-                if status == "unavailable" and entry.get("http") == 403:
-                    status = "blocked"
-                # error 不看 ever_ok：网络层失败连响应都没有，不能当「型号不存在」用。
-                if status in ("ok", "error") or (status in transient and entry.get("ever_ok")):
-                    kept.append(row)
-                elif not entry and row["new_id"] in existing_models:
-                    # Renamed since the last probe: the model was already in
-                    # the working config, so keep it until the next probe.
-                    kept.append(row)
-                    transient_kept.append(f"{row['new_id']} (no probe entry, kept: existing model)")
-                else:
-                    skipped.append(f"{row['new_id']} (probe {status or 'not probed'})")
-            grouped[group] = kept
+        transient_kept, suspect_main = apply_probe_filter(
+            grouped, probe, existing_models, legacy, skipped)
+        if transient_kept:
+            print(
+                "INFO: 无探测记录但上一版配置已有，保留待下轮复探："
+                + "；".join(transient_kept),
+                file=sys.stderr,
+            )
+        if suspect_main:
+            # 主力组只降不删：写盘时仍保留，但每日日志必须点名，否则用户永远
+            # 不知道选择器里那条「还能点但总超时」的模型正在被上游拖死。
+            print(
+                "WARN: 主力组成员本轮探测不健康，已按「只报不删」保留，"
+                "若下一轮仍非 ok 请人工核实上游：" + "；".join(suspect_main),
+                file=sys.stderr,
+            )
 
     print("分组 / 新 ID / 原模型 / 协议 / 积分")
     for group in GROUPS:
