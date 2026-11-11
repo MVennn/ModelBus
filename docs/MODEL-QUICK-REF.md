@@ -99,6 +99,6 @@ ZCode 侧已给 `beam-free`、`minimax-m3.1-flash-free`、`minimax-m3` 配了空
 
 ## 自动收录（每天 10:00）
 
-`scripts/go_model_sync.py --apply` 每天自动跑：拉 `/zen/go/v1/models` + 官方定价/弃用日期表 → 探测新模型的三种协议与思考参数兼容性 → 按成本档写进 `provider_config.json`（写前备份）→ 报告落到 `audit/go-model-sync-*.md`。
+`providers/opencode-go/ops/go_model_sync.py --apply` 每天自动跑：拉 `/zen/go/v1/models` + 官方定价/弃用日期表 → 探测新模型的三种协议与思考参数兼容性 → 按成本档写进 `provider_config.json`（写前备份）→ 报告落到 `audit/go-model-sync-*.md`。
 
 收录门槛：上游未弃用、三协议至少一个 200、输出单价 ≤ $1.60（现有配置里最贵的 qwen3.7-plus）。主力组是人工精选，不自动进；价格查不到的模型只列候选不自动收录。

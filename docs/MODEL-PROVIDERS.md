@@ -297,6 +297,28 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
   `cn:auto`、`global:auto-chat`、`global:default-model`、`global:primary-model`、
   `global:deep-model`、`global:fast-model`、`global:balanced-model`、`global:enhance-1.0`。
 
+### 4.1.1 面板目录的可见性口径（**查不到 ≠ 下架**）
+
+`/panel/api/models` 的条目**不是上游全量**，而是「客户端可见性」口径的子集：
+
+- `gateways/upstream/workbuddy/internal/upstream/client.go` 的 `fetchEnterpriseModels` 注释写明
+  「`agents[cli].models` 过滤 + `nonChatModel` 剔除 + `disabled` 剔除」，`dynMap` 在过滤之后才收字段 ——
+  补全模型、短输出模型、出图出视频模型本来就不进对话列表。
+- 出图模型在面板里另行单列（条目带 `image_generation` 标记），所以「对话列表里没有」不等于模型被删。
+- 面板结果有 `modelsCacheTTL`（`internal/panel/panel.go`，默认 60s）短缓存：改了白名单或上游配置后
+  立刻去读会拿到旧结果，等缓存过期再取证。
+- `global` 目录可能降级到企业端点，响应里的 `global_source` 会标出来源；那种目录条目明显少于桌面版 ——
+  看到「少了模型」先读 `global_source`，别当成下架。
+- 与 7871 的 `/v1/models` **不是同一份口径**：后者是 alias 聚合目录（`?scope=` 分 canonical / legacy / all，
+  每条带 `group`）。判定「模型还在不在」要交叉价目表（`providers/*/cache/*.json`）与
+  `~/.zcode/v2/provider_config.json` 的 `providerRules[].config.modelOrder`；面板查不到但有另一条源命中，
+  就是被口径筛掉。
+
+判定优先级：**口径筛掉 > 配额与冷却 > 真下架**。只有上游明确回 404 / `model_unavailable` /
+`service info not found` 才写下架，排错流程见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)，
+日配额被误当「不可用」的机制见 [PITFALLS.md](PITFALLS.md) §6。
+
+---
 ### 4.2 分离模式：倍率与四档（`--separate`）
 
 > 以下四档只在 `workbuddy_zcode_sync.py --separate --apply` 时出现；默认统一模式
@@ -501,15 +523,15 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 ## 4.11 谷歌 Gemini（catiecli 中转，本次实例五）
 
-> **一句话**：`Gemini-AIS` 显示名背后是 `ais-gemini-3.8-flash` 领头的一条 **7 跳同站降级链**
-> （3.8 → 3.7 → 3.6 → 3.5 → 3.5-lite → 3.1-lite → 3-flash-preview），
+> **一句话**：`Gemini-AIS` 显示名背后是 `ais-gemini-3.8-flash` 领头的一条同站降级链
+> （**2026-11-11 11:03 起链上只留 3 跳**：3.8 → 3.7 → 3.6；后四跳质量低一档、按次计费还白付额度，故裁掉 —— 见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8.3），
 > 靠 zgate 的「首块对冲」在几秒内出首字，失败逐级降档，不会卡在某一跳上死循环。
 > 跨站兜底（哈基米福利 3.8）已于 2026-11-10 拆成**独立模型 `Gemini-3.8-Flash`**、排在它前面，见 §4.11.5。
 
 网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
 2026-11-10 实测返回 7 个 id：`ais-gemini-3.5-flash-lite` / `ais-gemini-3.1-flash-lite` /
 `ais-gemini-3-flash-preview` / `ais-gemini-3.5-flash` / `ais-gemini-3.6-flash` /
-`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`，**七个全部收录进同一条链**。
+`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`，七个都曾收录进同一条链；**2026-11-11 11:03 起链上只留前三个**（3.8 / 3.7 / 3.6），后四个改记在该条目的 `dropped_hops` 里、仍留在 `legacy_ids`，老会话点名照样解析到 Gemini-AIS。
 
 | 项 | 值（2026-11-10） |
 |---|---|
@@ -520,7 +542,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
 | 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七个 GM 跳同族合并成一条链；哈基米福利 3.8 已拆成独立模型 `Gemini-3.8-Flash`，同为 `zcode-main`、排在它之前） |
 | 思考参数 | **未定论**。3.8/3.7 常态 503，拿不到稳定样本；3.6 上 `{"thinking":{"type":"disabled"}}` 单次首字 2.27s（对照 `reasoning_effort:minimal` 12.67s），样本不足，暂不配 `optionSpecs.reasoningLevel` |
-| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，七跳全 GM、价格同为 0.11，顺序由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定；跨站同代已拆成独立模型（见 §4.11.5） |
+| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，**11-11 11:03 起只保留前 3 跳**（全 GM、价格同为 0.11），顺序由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定；跨站同代已拆成独立模型（见 §4.11.5） |
 
 **与前面四例的关键差异**：① 价格无公开源，必须在代码里登记，缺价即整条消失；
 ② 上游对高需求模型直接 503，探测窗口要挑时段；③ 它是唯一走 `gem:` 显式前缀的渠道
@@ -546,7 +568,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 ### 4.11.2 降级链怎么来的
 
 - `tools/model_alias.py` 的 `ABBR` 把 7 个 `ais-gemini-*` 映射成显示名 **`Gemini-AIS`**，
-  `family_entries()` 因此把它们合并成**一条 7 跳链**（`GM_PRICES` 全 0.11）；
+  `family_entries()` 因此把它们合并成一条链（`GM_PRICES` 全 0.11），长度由 `CHAIN_CAP = {'Gemini-AIS': 3}` 截到 3 跳（2026-11-11 11:03）；
   哈基米的 `[福利]gemini-3.8-flash` 单独映射成 **`Gemini-3.8-Flash`**，自成一条单跳族。
 - 链内顺序由 `HOP_PRIORITY` 固定（3.8=0、3.7=1、3.6=2、3.5=3、3.5-lite=4、3.1-lite=5、
   3-preview=6），不加这张表就会退化成按 upstream 字符串排序（3.5 反而排最前）。
@@ -575,14 +597,14 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | `rateLimitBackoffMs` | -1 | 0 | 关掉 429 就地 700ms 白等，直接换下一跳 |
 | `authFailCooldownHours` | 24 | 0 | key 无效/被封类 403 → 整渠道禁用一天 |
 
-两个渠道**不再共用一套参数**：`GM` 是 7 跳降级链的链首，需要的只是「慢一点也先让下一跳并排跑」。
+两个渠道**不再共用一套参数**：`GM` 是降级链的链首（当时 7 跳，11-11 11:03 起 3 跳），需要的只是「慢一点也先让下一跳并排跑」。
 `HJ` 是单跳直连的普通供应商（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
 「一次 502 + 客户端重试 + 上游重跑」，所以它那份收敛到只剩 `headerTimeoutSec: -1`
 （其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数**逐跳取值**（2026-11-10 深夜改）：
 `racePlanFor` 按链上每一跳自己的 `channelPolicy` 聚合 —— `hedgeAfterMs` 取各跳**最小正值**、
 `maxParallel` 取**最大值**、只配 `firstBlockMs` 时用它当发车间隔（兜底 1200ms / 2）；
 `headerTimeoutSec`、两个冷却、`rateLimitBackoffMs`、`authFailCooldownHours` 本来就按被尝试的那一跳查。
-所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上七跳各自那份共同决定；
+所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上各跳（现 3 跳）各自那份共同决定；
 `Gemini-3.8-Flash` 那份仍然只作用于自己。完整口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md)。
 
 四件事必须一起看：
@@ -695,7 +717,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
    决定什么时候切站；主力组里放在 AIS 上面，正好对应「3.8 这条线优先用能用的那家」。
 
 **代价**：模型列表里多一条与 `Gemini-AIS` 同代不同源的选项，只能靠名字区分 ——
-`Gemini-3.8-Flash` 是哈基米单跳（4 秒级出字），`Gemini-AIS` 是 catiecli 七跳链（有降级、也有降级带来的等待）。
+`Gemini-3.8-Flash` 是哈基米单跳（4 秒级出字），`Gemini-AIS` 是 catiecli 降级链（现 3 跳）（有降级、也有降级带来的等待）。
 两者价格不同（0.05 / 0.11），别名表里是两条独立记录，别再把 HJ 写回 AIS 的 `ABBR`。
 
 **加新渠道要动的四处**（这次一次踩全，别再漏）：`zgate.json` 的 `upstreams` 与
@@ -704,6 +726,17 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 静态比对前三处的渠道集合，漏一处门禁直接红。
 
 ---
+
+### 4.11.6 计费纪律：按调用次数扣费，失败也扣
+
+| 项 | 口径 |
+| --- | --- |
+| 计费方式 | AIS / 哈基米按**调用次数**计费，不按 token；上游秒回 403 / 429 也照扣一次 |
+| 禁止 | 反复探测同一渠道「看它通不通」；拿真请求当健康检查 |
+| 该怎么做 | 先算预算再发；能用离线证据（配置文件、日志、上一轮实测）回答的，不发真请求 |
+| 对照 | WB（WorkBuddy）按倍率计费，探测量化见 §4.8；两套计价别混用同一套「随便试」的习惯 |
+
+这条纪律此前挂在用户热记忆里，2026-11-11 落到正本；热层只留指针。
 
 ## 5. 关思考参数矩阵
 

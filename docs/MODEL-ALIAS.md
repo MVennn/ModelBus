@@ -197,7 +197,7 @@ L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名�
 
 ## 3. 跨渠道合并（chain）
 
-链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `TAIL_HOPS` 钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：
+链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `CHANNEL_RANK`（rank 2）钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：
 
 ```
 DeepSeek-4.1-Flash
@@ -343,7 +343,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
   messages 两种形态同时存在（千问桥接版），只写型号名会把两条一起吸进主力。
 - **跨协议合并是例外而非默认**：`MERGE_ACROSS_PROTOCOL` 里的型号（目前
   `deepseek-v4.1-flash` 与 `qwen3.8-flash`）把 chat 与 messages 跳并成一条链，
-  每跳自带 `protocol`，路由逐跳派发。`TAIL_HOPS` 再把指定跳钉到链尾，实现「先把月度额度用完，再用
+  每跳自带 `protocol`，路由逐跳派发。`CHANNEL_RANK` 再把指定渠道钉到链尾（QW rank 2、QN rank 3），实现「先把月度额度用完，再用
   一年期预付额度」。
 - **主力豁免价格上限**：白名单点名的条目不受 `LOW_MAX` 价格闸约束（现行主力仅 DeepSeek 0.11；历史上 `Qwen-3.8-Max` 0.17 曾是贵备份，2026-11-09 已下沉省钱组、现价 0.43），名单外超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。
@@ -512,6 +512,82 @@ python tools/model_alias.py --check --arena --scores \
 - 榜单接口不可用时用本地缓存；缓存也没有就跳过扩充，人工 `MAIN_IDS` 仍生效。
 - 同名不同协议的条目靠 `-Msg` / `-Resp` 区分；免费条目默认不加后缀，只有与
   付费条目**真重名且无法合并**时才加 `-Free`。
+
+---
+
+## 9. 维度补遗（2026-11-11 记忆合并落地）
+
+> 本节收录链序、目录条数、档位投影、守门前提、ondemand 唤醒五组判据；每节只写仓内别处没有或已过时的部分。
+
+### 9.1 链序第一维：`CHANNEL_RANK`（`TAIL_HOPS` 已退役）
+
+链序是**三维排序**：渠道 rank → 跳级优先级 → 折算价升序。第一维现值：
+
+| rank | 渠道 | 语义 |
+|---|---|---|
+| 0 | WB | 额度优先消费，固定链首，不看价格；`WB_FIRST_CHANNELS` 另做硬保护 |
+| 1 | OC / QD / GM / HJ | 平价付费档，同档内按价格排 |
+| 2 | QW | 一年期预付额度，排在所有付费跳之后（原 `TAIL_HOPS` 的等价表达） |
+| 3 | QN | 限免渠道排最后；免费不等于优先烧，价值是兜底 |
+| 4 | 未登记渠道 | `CHANNEL_RANK_DEFAULT` |
+
+第二维 `HOP_PRIORITY` 只服务「同价多跳」：GM 的 7 个 Gemini Flash 档同价，靠 (价格, upstream 字符串) 排会把 `3.5` 排到 `3.8` 前面，于是把「新一代先试」写成显式数字表（0…6），表外取 99，行为与此表引入前一致。
+
+`TAIL_HOPS` 常量已从 `tools/model_alias.py` 删除，被 `CHANNEL_RANK` 取代（散落在旧记忆与历史台账里的 `TAIL_HOPS` 一律按 rank 2/3 读）。
+
+**`DEMOTE_HOPS` 不可复活**：把 WB 跳降到 OC 之后躲限流，曾导致整条会话静默跑在 opencode 上计费。限流只许由 zgate 逐跳回落处理，回归由 `tests/test_model_alias_hop_order.py` 守。
+
+### 9.2 目录条数的四个数：20 / 47 / 56 / 73
+
+| 数 | 含义 | 出处 |
+|---|---|---|
+| 20 | alias 聚合后的模型条数，= zgate `canonical` 命名空间条数 | `model-alias-map.json` `models` 键数 |
+| 47 | 20 条名下的跳数总和（一条链 1～4 跳） | 逐条累加 `chain[].length` |
+| 56 | WB 面板对话目录条目（cn 22 + global 34）；网关未重启时只有 34 个 global | `/panel/api/models` |
+| 73 | 历史 id → 现值 id 的映射条数（legacy 命名空间） | `model-alias-map.json` `legacy` |
+
+`canonical` / `legacy` 分段与 93 = 20 + 73 在 [ROUTING-POLICY.md](ROUTING-POLICY.md) §scope 表已有，本节只补「四数并列 + 47 跳 + 56 面板」的对照与判据。
+
+判据：**面板条数属「CLI 菜单口径」，`/v1/models` 条数属「网关承诺口径」，两者不必相等也不该相等。**「面板 56 个、`/v1/models` 20 个」是正常态。查一个名字是否还在，用 `?scope=all` 看它是否只以 legacy 身份存在 —— 只在 legacy 意味着「可以继续用，但新配置不该再用这个名字」。
+
+### 9.3 档位投影到客户端：四层链与 `_efforts_lost` 守门
+
+ZCode `optionSpecs.reasoningLevel.values` 只是第二层，之后还有请求体与客户端投影两层，任一断链都表现为「只剩一个默认档」：
+
+| 层 | 正本 | 断链现象 | 判据 |
+|---|---|---|---|
+| L2 | `values`（末位 = 默认档） | 下拉只有开关 | 读配置 values 是否为空 |
+| L3 | `map` 表达式 | 档位可选但不生效 | `node providers/workbuddy/zcode_effective_body.js <模型id>` |
+| L4 | `tools/dsh_sync.py` `_reasoning()` | 客户端档位消失或只剩 Default | `python tools/dsh_sync.py --check` |
+
+L4 投影规则（顺序不可换）：`map` 为 `"{}"` → 直接给空档位；否则取 `DSH_LEVELS = {off,minimal,low,medium,high,xhigh,max}` 内的项；含 `disabled` 时加 `off → disabled`，若除 `off` 再无档位则补 `high → high`；仅当 `map` 含 `reasoning_effort` 才追加 `compat.thinkingFormat="deepseek"`（Gemini 系与「只有开关」的模型套 deepseek 格式会发上游不认的字段）。不在 `DSH_LEVELS` 又非 `disabled` 的档位名**静默丢弃**。
+
+两种 drift 要分开判：
+
+| 类型 | 判据 | 表现 |
+|---|---|---|
+| alias drift | `model_alias.py --check` 同参数复算与现有 map 不一致 | 退出 1，不写盘 |
+| 投影 drift | `_efforts_lost()`：源头 values 非空、投影为空 | `--check` 失败 / `--apply` WARN |
+
+反方向（源头退化、客户端保留旧档位）由 `_keep_efforts()` 承接，属**刻意保留，不算漂移** —— 把它也报出来会让每日检查长期红，最后没人看。
+
+### 9.4 守门规则的三条生效前提（现网现值）
+
+`reasoningGuard` 只有三条同时成立才真的重抽，缺一条就静默不上场：
+
+| 序 | 条件 | 现值 |
+|---|---|---|
+| ① | mode 覆盖该模型 | `mode="channels"`，`models=["Iceman","iceman-contributor-free"]` |
+| ② | 请求被判为「期望思考」 | `guardApplies` 首行 `!reasoningExpectsThinking` 直放 —— **body 必须真带 `reasoning_effort`** |
+| ③ | 允许再抽 | `maxRetries=1`、`probeSeconds=15`、`maxProbeBytes=32768` |
+
+兜底两条：`forceEffort="high"` + `forceEffortModels` 两项（补回条件②的字段）；`giveUpAfter=1` / `giveUpForSeconds=600` 学习表是**内存态**，重启清零。`injectNotice=false`：那段提示按「跳过窗口」状态显示，与思考块是否明文无关，会让人以为已经跳过而实际仍在等 15 秒；关它不改变等待时长，改动后 `POST /admin/reload` 热加载。
+
+调不动的旋钮：`probeSeconds` / `maxRetries` 调大只会让等待变长；上游双后端随机分流回加密 blob 时，没有任何参数能强制明文。
+
+### 9.5 ondemand 子进程：用一个「别名表里不存在」的名字唤醒
+
+zgate 的 `routeAttempt` 走 `bridge.Forward` 时**不会**调用 `s.prepare()`，只有 `routeFallback` 末尾才会 prepare。所以想唤醒一个 `ondemand` 子进程，必须拿**不在 alias map 里的模型名**发请求：名字一旦在别名表里，请求会被当成正常路由直接转发出去，子进程永远不启，表现为长时间挂住而不是报错。同理，判断端口是否被占要 `dial` 而不是 `bind` —— 同端口 `net.Listen` 能成功，`bind` 判占用必然误判成「没占」。
 
 ---
 

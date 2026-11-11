@@ -71,9 +71,9 @@ WorkBuddy 网关更糟一层：它的出站逻辑**只**重写 `reasoning_effort
    `providers/workbuddy/workbuddy_probe_zcode.py` 就是干这个的（先算真实 body，失败再退
    slim variant）。
 2. 给模型配 `optionSpecs.reasoningLevel.map = "{}"` —— **发空 map 覆盖掉通用规则**，
-   一个思考字段都不发。当前配了 5 个：
-   `beam-free`、`minimax-m3.1-flash-free`、`minimax-m3`、
-   `muse-spark-1.3-contributor`、`muse-spark-1.2-contributor`。
+   一个思考字段都不发。**2026-11-10 实测：现网 20 条规则里 0 条用这种写法**，早先那批
+   （`beam-free`、`minimax-m3` 等）已经并组改名，别照旧清单去找；要复现这个手法，
+   写前先跑 `python tools/model_alias.py --check` 看清现场。
 3. 需要「显式关掉」而不是「不发」时，用 `{"thinking":{"type":"disabled"}}`。
 
 **「curl 能通但 ZCode 400」的根因永远是这一条**，不是配置写错、不是模型下线。
@@ -830,3 +830,44 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   - **改（配置，热加载）**：`channelPolicy.HJ` 收敛为 `{"headerTimeoutSec": -1}`；`channelPolicy.GM` 的 `headerTimeoutSec` → `-1`、`firstBlockMs` → `0`、`silenceCooldownSeconds` → `0`、`hedgeAfterMs` → `18000`、`softCooldownSeconds` → `60`；`upstreamHeaderTimeoutSec` → `45`。
   - **口径**：本地只做两件事 —— 「并排多问一家」（对冲，只多开一路、不取消前一路）与「按上游回话冷却」（429 / 5xx / 403）。**上游没说我死了，就不替他下死亡通知**；慢是常态，阈值给多少都是赌，赌错一次要付一次重试 + 一次重跑。
   - **判据**：`grep -c '没给响应头' zgate.log` 与 `grep -c '503' zgate.log` 放一起看 —— 前者远大于后者就说明判死是本地造的。详见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18.4。
+
+## 43. 上游「忙」被当成渠道故障：一个过载的 3.8 把同渠道能用的 3.6 一起带走 【实例 A】
+
+- **现象**：用户侧两条互相矛盾的反馈 —— ①「跑着跑着就截断了，然后说模型使用人数过多需要重跑」；②「错误码 HTTP_503，此模型当前需求量较大」，`503 都是这样`。直连取证（Bearer `GEMINI_API_KEY` 打 catiecli）：短问四跳全 200（3.8 = 7.2s / 3.7 = 5.2s / 3.6 = 2.6s / 3.5-flash-lite = 10.8s）；同样的 1200 字长提示四跳全 503，耗时 3.4s / 10.3s / 22.4s / 4.3s。**这不是链路坏了，是模型忙**，且 503 来得慢（最长 22 秒），会白占看门狗窗口。
+- **根因**（两层，都在网关侧）：
+  1. `chainAccept` 把 503 当「这一跳死了」，而冷却落在**渠道**上：`markChannelOffFor(hop.Channel, poolCooldown=90s)` → 之后 90 秒里同渠道的 3.6 / 3.5 全部在入口被拒（`渠道 GM 处于禁用窗口，直接回 503`，2026-11-10 23:40 实测连刷）。一跳过载 = 整条链陪葬。
+  2. 流式转发读到 `rr.err` 直接 `return`：既不补 `[DONE]`、也不写日志、也不计数。客户端拿到的是「200 + 几段正文 + 无 `finish_reason` 的断尾」，只能自己判成失败重跑 —— 重跑的 token 上游照算一遍。
+- **改（2026-11-11）**：`internal/router/upstream_semantics.go` 把上游语义拆成三类，各走各的路（详见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §4.1）：忙 → 只跳这一跳 + `busyCooldownSeconds`（GM 现行 10s，现值读 `zgate.json`），不整渠道禁用；400 带 `thinking_level` → 剥参数同跳重发一次；SSE 断尾 → 补 `finish_reason:"error"` + `upstream_truncated` + `[DONE]`。三者在 `/health.upstream` 各有一个计数。
+- **口径**：**「忙」是这一跳此刻的状态，不是这个渠道的品质**。冷却是给「这一跳先别用」，禁渠道是给「key 没了 / 被封了」。把前者写成后者，等于让一个模型的繁忙拖垮整条降级链。
+- **判据**：`curl -s 127.0.0.1:7871/health` 看 `upstream.busy` / `upstream.busy_skipped` 是否在长提示下增长；`busy_skipped > 0` 且 `truncated_streams` 停住 = 忙跳已让位、断流已收口。日志对应行：`上游 503 表示需求高峰，跳过该跳 20s（不在渠道级禁用）`。
+- **验证**：`go build` / `go vet` / `go test ./...` exit 0；新增 8 例（`busyExhausted` 三形态、`invalidThinkingParam`、`stripThinkingParams` 两层嵌套、400 剥参后同跳重发拿到 200、断流补帧、正常流不被改、忙跳跳过而不禁渠道）。
+
+---
+
+## 44. 竞速排序的记忆有保鲜期，`/health.race` 却还在报旧账 【实例 A】
+
+- **现象**：三种误判同一个根 —— ① 看 `/health` 里 `race.hops` 的 `3.8 = {"verdict":"Service Unavailable","at":"21:56"}`，断定「它还被压在队尾」，可下一轮请求其实已经按声明顺序先试它了；② 以为 `POST /admin/reload` 能重置排序，reload 后 `at` 纹丝不动，转头怀疑「配置没生效」；③ 在单发串行的链上盯 `race.hops` 一行都不更新，怀疑观测坏了。
+- **根因**：观测的**保鲜期只作用于发车顺序，不作用于展示**。`rankedChain()` 用 `snap.stale(now)` 把过期条目当「没测过」重新给机会（失败保鲜短、成功保鲜长，常量 `raceFailTTL` / `raceOKTTL`），而 `raceSnapshot()` 原样拷贝全表、`/health.race.hops` 因此永远是「最近一次观测」的原始账本；`/admin/reload` 只做 config / keys / `ApplyConfig` / `aliases.Reload`，不清 `raceStat`；更要紧的是 `rankedChain` 只在 `raceChain`（对冲路径）里调用，串行链走 `attemptChain`，压根不产生这类观测。
+- **处置**：判「为什么又是兜底跳出字」用 `/health.hops` 的逐跳计数（`try` / `ok` / `busy` / `e5xx` / `silent` / `no_first_block`，串行链也有），不要读 `race.hops` 的 `at` 当下结论；要清零观测只能重启进程；怀疑排序固化时先看 `try` 有没有增量 —— 有增量就说明它已经被试过，问题不在排序。
+- **证据**：`internal/router/router.go` 的 `hopStatSnap.Seen` 与 `stale()`、`raceFailTTL` / `raceOKTTL` 常量、`raceSnapshot()` 无过滤、`reload()` 不清 `raceStat`；`internal/router/race.go` 的 `rankedChain` 分支 `case !ok || snap.stale(now)`；`internal/router/race_test.go` 的 `TestRankedChainRetriesStaleObservations`（新鲜 / 过期 / 成功过期三态）；`internal/router/hop_stats.go` 注释「/health.race 只记竞速跳（at != nil）的首块耗时，串行链一行都看不到」。
+
+## 45. 用 md5 核对 zgate 版本，永远对不上 【通用】
+
+- **现象**：重编后 md5 与线上不一致，判成「部署没生效」，于是再编、再换、还是不一致；另一种反向误判 —— md5 一致就以为「源码也是最新的」。
+- **根因**：构建时工作区不干净会把 `vcs.modified=true` 编进 buildid，同一份源码的字节就不可复现；不同 ldflags 组合（`-H windowsgui`、`-s -w`、带与不带 `-trimpath`）也会各出一份哈希。md5 能证明的只有「备份 → 替换 → 校验这一段搬的是同一份字节」，与「是不是最新代码」无关。
+- **处置**：版本只认 `go version -m <exe>` 的 `vcs.revision`；再跑 `git log <vcs.revision>..HEAD -- gateways/zgate` 判欠账，为空才算追平；md5 保留在部署三步里做搬运校验。判据与命令见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) §9.1。
+- **证据**：同一次排查里四种 ldflags 组合全部对不上，当时的 buildinfo 带 `vcs.modified=true`；`git log <该提交>..HEAD -- gateways/zgate` 为空，证明「源码没欠账、只是字节不可复现」。
+
+## 46. 反代面板时间比 zgate 日志晚一百秒出头，对齐前别下结论 【实例 A】
+
+- **现象**：把面板的 `21:56` 与日志的 `21:30` 拼成一条时间线，得出「3.8 失败后十五分钟一次没被碰过」「面板零记录 = 网关没发请求」；同一条请求，两边各自看都很正常，合起来就是错案。
+- **根因**：两个时间基准不同源。面板记的是它自己落账的时刻，实测恒定滞后一百秒出头（104–106 s，非固定偏移的部分来自面板落账延迟），跨源比对不做校正就会把因果方向拼反。
+- **处置**：唯一时间轴用 `zgate.log` 的 `[race] 发出 i/n`、首块、冷却三类行；面板只用来数「上游到底被调用了几次」；确实要跨源对齐时，先取**同一条请求**在两端的时间戳算出偏移，再逐条平移后比对。`/health.race.hops` 里的 `at` 是网关本地时间（`now.Format("15:04:05")`），与面板同样不同源。
+- **证据**：源文档样本 —— 日志 `21:30:21` 发出 1/7、`21:30:36` 503 冷却 1m0s、`21:30:54` 发出 3/7，面板同段恒定晚 104–106 s；`/health` 抓取时刻 `21:59` 而 `race.hops` 内 `at` 已到 `21:58:50`。
+
+## 47. 只改 `zgate.json` 加渠道：请求在 key 覆盖名单外被静默跳过 【通用】
+
+- **现象**：新渠道的别名配好了、`/v1/models` 也能看到，请求却稳定 502 `all upstreams failed: <hop>`，日志里没有任何上游响应；另一种形态是上游回 401「未提供API Key」，像是凭据没配。
+- **根因**：渠道集合在 Go 里枚举（`internal/keys` 的 `Set.For(channel)` 按渠道硬编码），`zgate.json` 里的 `keyEnv` 已是废弃字段、写了也不生效；只加别名不改代码时，请求会在 router 的渠道判定处被静默跳过，表现成「上游从未被调用」的 502；另一处是 key 覆盖名单没补新渠道，空 Bearer 被原样透传，于是拿到 401。
+- **处置**：按 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的六处改动（`internal/keys`、`internal/config` + `main.go`、`internal/router` 的 key 覆盖名单、`tools/model_alias.py` 的渠道常量、`providers/<name>/.env.local`）一次改齐，然后**必须换二进制** —— `/admin/reload` 只能热加载 base 与 key，改不了编译期登记的渠道；换完先看 `/health` 是否出现该渠道的 `{state:"up",key:true}`。
+- **证据**：源文档实测 —— 不改 Go 时请求在 `router.go` 的渠道判定处被静默跳过，最终单跳 502 且日志无上游响应；补上 key 覆盖名单后 401 消失；GM 接入后 `/health` 出现 `gemini:{state:"up",key:true,child:""}`。

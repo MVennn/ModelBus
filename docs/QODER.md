@@ -1,6 +1,6 @@
 # Qoder（qoder2api-hub）
 
-> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入四组（主力/免费/低耗/高耗；2026-10-28 起低耗与高耗
+> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入三组（主力/免费/低耗/高耗；2026-10-28 起低耗与高耗
 > 已并为「省钱」，共三组），经 `127.0.0.1:7871` 的 alias map 分流；WorkBuddy2API 与 OpenCode-Go 不动。
 >
 > **2026-10-23 起**：下文 §4 的 `qoder:` 前缀与独立 provider 是上一版合并模式；
@@ -17,11 +17,11 @@
 | 上游 | 适配器 | 端口 | 在 ZCode 里的形态 |
 |---|---|---|---|
 | OpenCode-Go | 直连 / 统一路由 | — / 7871 | 三组（主力/免费/省钱；旧文档写的四组已并组） |
-| WorkBuddy | WorkBuddy2API Panel | 7863 | 模型并入四组（经 7871） |
-| Qoder | **qoder2api-hub** | **8790** | 并入四组（`Q/积分/型号`，alias map） |
+| WorkBuddy | WorkBuddy2API Panel | 7863 | 模型并入三组（经 7871） |
+| Qoder | **qoder2api-hub** | **8790** | 并入三组（`Q/积分/型号`，alias map） |
 
 Qoder 走 7871：显示名是 `Q/积分/型号`，alias map 还原上游模型并转给 8790；
-旧的 `qoder:` 前缀只作为 legacy 回退。ZCode 的 provider 列表是四组，Qoder 只作为
+旧的 `qoder:` 前缀只作为 legacy 回退。ZCode 的 provider 列表是三组，Qoder 只作为
 模型出现在主力/免费/低耗/高耗里。Agent2API 也评估过（多合一网关，功能更全），但它的
 `/v1/models` 只吐 `credits`、不吐 Qoder 的 `price_factor` / 思考档位，且会把
 组合层吃进一个大项目里，与「加一个上游 = 加一个适配器」的目标相反。
@@ -128,13 +128,13 @@ Qoder 现在由 `gateways/zgate` 以 `always` 策略托管（见 [MAINTENANCE.md
 
 ## 5. 日常维护
 
-> 统一四组的日常维护是 `tools/model_probe.py` → `tools/model_alias.py --probe-file … --apply`
+> 统一三组的日常维护是 `tools/model_probe.py` → `tools/model_alias.py --probe-file … --apply`
 > （见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6）。下面的 Qoder 专用命令只用于采集/兼容。
 
 **每天 12:00 的定时任务已包含 Qoder**（`automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）：
 先跑 `providers/qoder/qoder_probe_zcode.py --timeout 90 --sleep 3` 拉实时目录并逐个探测，再用
 `providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply` 并入 chat 组，
-最后由 `tools/model_alias.py --slot auto --apply` 归一化成 `Q/积分/型号` 并分到四组。
+最后由 `tools/model_alias.py --slot auto --apply` 归一化成 `Q/积分/型号` 并分到三组。
 探测默认经 7871；路由不可用时定时任务会改用 `--direct` 直连 8790 重探。
 完整四段顺序见 [MAINTENANCE.md](MAINTENANCE.md) §6。
 
@@ -153,7 +153,7 @@ python providers/qoder/qoder_probe_zcode.py --only Qwen3.8-Flash --timeout 180
 python providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply
 ```
 
-默认是合并模式：写入现有四组，不建独立 provider；`--separate` 才写
+默认是合并模式：写入现有三组，不建独立 provider；`--separate` 才写
 独立的 `qoder` provider。probe 默认经 7871 + `qoder:` 前缀（与 ZCode 实际路径
 一致），`--direct` 才直连 8790。
 
@@ -188,7 +188,7 @@ git -C gateways/upstream/qoder pull --ff-only
   「目录里出现」当成「可以收录」，一律先过 `qoder_probe_zcode.py`。
 - Qoder 与 WorkBuddy 是两套账号池，不要用同一个 Qoder 账号再起第二个网关；
   也不要把 Qoder 的 token 塞进 WorkBuddy2API。
-- 合并模式下 Qoder 模型在四组里，必须保证 7871 路由在跑；Qoder hub
+- 合并模式下 Qoder 模型在三组里，必须保证 7871 路由在跑；Qoder hub
   常驻、router 随 ZCode 起停（见 [MAINTENANCE.md](MAINTENANCE.md) §8.1）。
 - 本仓不把 `gateways/upstream/qoder/`、`providers/qoder/.env.local`、`providers/qoder/qoder_probe.json`、
   `accounts/` 下的任何文件入库。

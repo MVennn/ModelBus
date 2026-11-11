@@ -188,3 +188,123 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
   清单见 [SECRETS.md](SECRETS.md) §3.5 与仓库根 [AGENTS.md](../AGENTS.md) §2。
 - 本篇只定义生命周期；端口与 upstream 拓扑正本在 [ARCHITECTURE.md](ARCHITECTURE.md)，
   工具与产物正本在 [TOOLS.md](TOOLS.md)，日常命令表在 [MAINTENANCE.md](MAINTENANCE.md) §8。
+
+---
+
+## 9. 版本判定、升级决策与回滚（2026-11-11 补）
+
+> 本节只写「怎么判版本、什么时候才真要换二进制、换了怎么回滚、换完怎么证明真的生效」；九步换版流程、自启父链、存活验证的六步见 §2 / §4 / §6，此处不重述。
+
+### 9.1 版本判定：只认 buildinfo 的 `vcs.revision`
+
+换不换版的前提是「现在跑的是哪份代码」。这件事只有一个可靠证据：二进制内嵌 buildinfo 的提交号。
+
+```cmd
+go version -m gateways\zgate\zgate.exe
+git log <vcs.revision>..HEAD -- gateways/zgate
+python gateways/zgate/build.py --check
+```
+
+| 证据 | 能回答 | 回答不了 |
+|---|---|---|
+| `vcs.revision` | 这份 exe 是哪个提交编的 | 编译时工作区有没有未提交改动（只看得到 `vcs.modified`） |
+| `vcs.modified=true` | 字节不可复现：工作区当时不干净，Git 状态戳记进了 buildid | 具体是哪几个文件没提交 |
+| `git log <rev>..HEAD -- gateways/zgate` | 二进制之后网关代码还欠不欠账（空 = 不欠） | 非网关目录的改动 |
+| md5 / SHA-256 | 备份 → 替换 → 校验这一段搬的是不是同一份字节 | 是不是最新代码 |
+| CHANGELOG 的版本标题 | 仓库发布号（[VERSIONING.md](VERSIONING.md) 口径） | 二进制版本 —— 两者没有绑定关系 |
+
+**为什么 md5 对不上是常态**：构建目录不干净时 `vcs.modified=true` 被编进 buildid，同一份源码、
+不同 ldflags 组合（`-H windowsgui`、`-s -w`、带与不带 `-trimpath`）实测全部对不上；
+工作区干净后重建只能保证**语义一致**，不保证哈希一致。所以 md5 的用途限定在「同一次构建的搬运校验」，
+版本比对一律回到 `vcs.revision`。
+
+**判据**：`vcs.revision` 等于预期提交 **且** `git log <rev>..HEAD -- gateways/zgate` 为空，
+才算「跑的就是 HEAD 的网关代码」。
+
+### 9.2 升级决策树：先给改动分类，再选入口
+
+| 改动落在哪 | 入口 | 依据 |
+|---|---|---|
+| `zgate.json` 的策略 / 空闲 / 窗口 / 上游 base / key | `POST /admin/reload`（或 `zgate.exe reload`） | 热加载覆盖 config、上游 base、凭据、子进程策略（`router.go` 的 `reload`） |
+| alias map（统一名 → 链） | 重新生成后即生效，必要时 reload | alias 按 mtime 热加载 |
+| 监听地址 / 新增子进程 / alias map 路径 | 换版（§4 九步） | 这三项是启动期读死的 |
+| `gateways/zgate/` 下的 Go 代码（含新增渠道、守卫、冷却语义） | 换版（§4 九步） | 渠道集合与进程内快照都是编译期/启动期的 |
+| 只改文档、只改 `tools/` 里的检查脚本 | 都不动 | 不改变运行态 |
+
+**换版前先判版本**：先按 9.1 记下 `vcs.revision` 与 `zgate.exe` 的备份名，再动。
+没有基线的「换版成功」只是「进程起来了」。
+
+**工作区有未提交改动时**：换版会把当时的文件状态编进去，产物带 `vcs.modified=true`，
+事后无法用 revision 反推内容。要么先让工作区干净，要么在换版记录里写清「本次含未提交改动」
+并列明文件 —— 否则下一个人只能靠 diff 考古。
+
+### 9.3 参数随版本变化：读三层真值，不读文档里的表
+
+任何写进文档的参数表都只是**某一刻的快照**。参数现值的读取顺序固定为：
+
+| 顺序 | 真值来源 | 说明 |
+|---|---|---|
+| 1 | `gateways/zgate/zgate.json` | 运行实例真正加载的那份；可被环境变量覆盖时以覆盖为准 |
+| 2 | `internal/config` 的缺省值与常量 | 配置没写时生效的东西（`headerTimeout` 的 0 / 负值语义、TTL 常量、冷却常量） |
+| 3 | `curl http://127.0.0.1:7871/health` 的生效段 | 证明「这一刻」真的在用哪个值，绕过热加载是否生效的争论 |
+| 4 | 文档参数表 | 只用来理解取值理由，不用来抄数字 |
+
+各参数族**变过什么**（只记口径变化，不记数字）：
+
+| 参数族 | 口径变化 | 现行定义在哪 |
+|---|---|---|
+| 响应头等待窗口 | 写死常量 → 全局 `upstreamHeaderTimeoutSec` → 渠道级 `channelPolicy.<CH>.headerTimeoutSec` 覆盖（0 = 继承全局，负数 = 该渠道不设窗口） | [ROUTING-POLICY.md](ROUTING-POLICY.md) §1，值看 `zgate.json` |
+| 判死与冷却 | 本地按阈值判死 → 判死权交还上游 → 上游语义三分类（忙 / 参数不认 / 断流）各走各的路 | [ROUTING-POLICY.md](ROUTING-POLICY.md) §4、§4.1 |
+| 对冲与并发 | 按链首渠道取值 → 按跳聚合（最小正 hedge、最大 maxParallel）→ 单发串行（对冲字段全归零） | [ROUTING-POLICY.md](ROUTING-POLICY.md) §1、§8.1 |
+| 竞速观测 | 只留最近一次且永不过期 → 失败短保鲜 / 成功长保鲜，过期当「没测过」重新给机会 | `internal/router/router.go` 的 `raceFailTTL` / `raceOKTTL` 两个常量 |
+| 观测面 | 五段（early / chain / guard / race / upstream）→ 增 `hops`（逐跳 try / ok / busy / e5xx / silent / no_first_block） | `curl /health`，段义见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §7 |
+| 思考守卫作用域 | `auto`（不看表）→ `models`（白名单）→ `channels`（渠道能力位 + 白名单交集） | [ROUTING-POLICY.md](ROUTING-POLICY.md) §7.1 |
+| 渠道集合 | 5 → 6 → 7（本地子进程仍是 2 个） | `zgate.json` 的 `upstreams` / `children`，由 `tools/check-project.py` 与源码比对 |
+
+**举例（历史值，禁止照抄）**：2026-11-10 白天一度把 GM 的窗口压到十几秒、并发开到 3、对冲提前到百毫秒级，
+当晚因「本地判死 125 次、上游真说忙只有 7 次」全部回退。这组数字只能说明「口径会被推翻」，不能当现值。
+
+**硬规则**：改参数先看 `/health` 的生效值，再决定改哪个键；改完 reload 后**再看一次**，
+确认 `chain.budget_s` / `guard.mode` / `race.hops` / `upstream` 与文件一致 —— 这一步能同时排掉
+「改错键」「配置没被读」「热加载路径没走到」三种情况。
+
+### 9.4 回滚路径：四层，按影响面从小到大
+
+| 层 | 回滚物 | 怎么生效 | 怎么验 |
+|---|---|---|---|
+| 配置 | `gateways/zgate/zgate.json.bak-<purpose>-<ts>` | 覆盖后 `POST /admin/reload` | `/health` 的 chain / guard / upstream 与文件一致 |
+| 别名 | alias map 生成前的备份（生成脚本自带 `.bak-<ts>`） | 重跑生成（必要时 reload） | `/v1/models?scope=canonical` 的 `total` / `catalog_total` |
+| 二进制 | `zgate.exe.bak-<ts>`（`deploy-zgate.ps1` 失败自动回滚） | 暂停 watchdog → 覆盖 → `schtasks /run /tn \ModelBus-zgate-hidden` → 轮询 `/health` → 恢复 watchdog | 9.5 全套 |
+| 代码 | 反向提交后重新走 §4 九步 | 换版 | 同上，并核 `vcs.revision` |
+
+原则三条：
+
+1. **一步一验**：回滚与验证成对做，不要连回两层再一起验 —— 混起来分不清是哪一层救回来的。
+2. **先停 watchdog 再换二进制**：不然停机窗口里会被看门狗按旧 exe 拉起，出现「回滚了但进程还是新的」。
+3. **停机窗口只做一件事**：回滚失败就承认失败并把旧二进制放回原位，别在窗口里现场改代码。
+
+### 9.5 验证：存活不等于生效
+
+§6 的六步回答的是「进程会不会被会话树带走」。换版/改参之后还要回答「新的东西到底有没有在工作」：
+
+| 检查 | 命令 | 它证明什么 |
+|---|---|---|
+| 产物形态 | `python gateways/zgate/build.py --check` | PE 子系统是 GUI（无窗），不是控制台 |
+| 版本 | `go version -m gateways\zgate\zgate.exe` | 跑的是预期提交（见 9.1） |
+| 配置生效 | `curl -s http://127.0.0.1:7871/health` | `ok:true`；`chain.budget_s` 与文件一致；`guard.mode` 是预期档位 |
+| 观测接上 | 同上，看 `hops` 段 | 真实请求后该跳 `try` 有增量；`silent` / `no_first_block` / `busy` 能看到失败形态 |
+| 目录对外 | `curl -s "http://127.0.0.1:7871/v1/models?scope=canonical"` | `total` 与 `catalog_total` 是两回事，别混读 |
+| 自启状态 | `schtasks /query /tn \ModelBus-zgate-hidden /v`、`...watchdog...` | 两个任务 Ready，上次运行时间对得上 |
+| 父链 | `Get-CimInstance Win32_Process -Filter "Name='zgate.exe'"` | 父进程在 Task Scheduler 侧，不是某个终端 |
+| 日志 | `type "%LOCALAPPDATA%\ZCodeGateway\zgate.log"` | 有换版/加载行；没有反复的 `port already up` 或绑定冲突 |
+| 实请求 | 发一条真实流式请求，看日志 `(i/n)` 与首块 | 路由到预期跳，不是每次都落在兜底跳 |
+
+**换版后 5 分钟观察窗**：只做三件事 —— 发一次请求、看 `hops` 增量、看日志有没有 `silent` / `no_first_block` 连片。
+这三件事都正常就收工；异常按「先回滚再查」走 9.4。
+
+### 9.6 本节边界
+
+- 换版九步、两个计划任务、`install-lifecycle.ps1` 的动作校正：§2、§4、§5。
+- 参数为什么这么取值、逐跳怎么聚合、上游语义三分类： [ROUTING-POLICY.md](ROUTING-POLICY.md)。
+- 已知故障形态与现场处置： [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16、§18；坑的机制见 [PITFALLS.md](PITFALLS.md) §20、§41–§47。
+- 加渠道要改哪六处： [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0。

@@ -202,10 +202,10 @@ DeepSeek-4.1-Flash
   1. WB  cn:deepseek-v4.1-flash   chat      0.11   ← WB 固定链首（额度优先消费）
   2. OC  deepseek-v4.1-flash      chat      0.11   ← WB 挂了 / 限流时
   3. OC@机场 deepseek-v4.1-flash  chat      0.11   ← 直连 403 才走它
-  4. QW  deepseek-v4.1-flash      messages  0.00   ← ¥300 预付额度，`TAIL_HOPS` 钉在所有付费跳之后
+  4. QW  deepseek-v4.1-flash      messages  0.00   ← ¥300 预付额度，`CHANNEL_RANK` rank 2 钉在所有付费跳之后
 ```
 
-- 第 4 跳（QW）排在**所有付费跳之后**：`TAIL_HOPS` 显式指定，机场孪生跳排在第 3 位。因为 OC 的额度
+- 第 4 跳（QW）排在**所有付费跳之后**：`CHANNEL_RANK` 显式指定（rank 2），机场孪生跳排在第 3 位。因为 OC 的额度
   每月重置（不用就浪费），而 ¥300 是一年期，所以顺序是「先把 OC 用完，再动 300」。
 - 链里**允许混协议**：路由按每跳自己的 `protocol` 派发，chat 跳直转、messages 跳过桥。
   这是 2026-10-28 新加的能力，之前一条链只能是同一种协议。

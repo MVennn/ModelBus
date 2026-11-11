@@ -84,11 +84,25 @@
 
 | 表 | 装什么 | TTL | 谁能清 |
 |---|---|---|---|
-| cool | 429 45s、5xx 软冷却（按渠道）、死跳 30min、超时 5min、额度 24h | 见左 | 到期自然过期；`clearCooling` |
+| cool | 429 45s、5xx 软冷却（按渠道）、需求高峰 `busyCooldownSeconds`、死跳 30min、超时 5min、额度 24h | 见左 | 到期自然过期；`clearCooling` |
 | silence | 只有「沉默」一种 | 20s（按渠道） | 到期；**全链沉默兜底会整体清掉** |
 
 必须分开：混成一张会变成「清冷却 → 再撞 429 → 再清」的死循环。键是 `Channel|Upstream|Proxy`，
 日志里的键把 proxy 脱敏（`hopKeyForLog`）。
+
+### 4.1 上游语义分类：忙 / 参数不认 / 中途截断（2026-11-11 加）
+
+上游回错不能一律当「这一跳死了」处理 —— 死在渠道上会连坐同渠道其他模型。三种要分开：
+
+| 现象 | 判定 | 处理 | /health.upstream |
+|---|---|---|---|
+| 503 / 529 且正文含 high demand / 需求量较大 / spikes in demand / 请稍后再试 | `busyExhausted` | 只跳这一跳、短冷却 `busyCooldownSeconds`（GM=10s），**不整渠道禁用**，换下一跳而不是直接 502 | `busy` / `busy_skipped` |
+| 400 且正文含 thinking_level / thinking_config | `invalidThinkingParam` | 剥掉 `reasoning_effort` / `thinking` / `thinking_budget` / `thinking_level` 与 `extra_body.google.thinking_config`，**同跳重发一次** | `thinking_strip` |
+| SSE 流结束，却没见到非 null 的 `finish_reason` 或 `[DONE]` | `streamTracker.finished` | 补一帧 `finish_reason:"error"` + `error.type=upstream_truncated` + `data: [DONE]`，让客户端知道是断了而不是说完了 | `truncated_streams` |
+
+为什么 503 不能沿用整渠道冷却：catiecli 上 3.8 常态化过载，几十秒内能连撞三次，按渠道停 90 秒会把同渠道能用的 3.6 一起躺下（2026-11-10 23:40 就是这么封的）。
+为什么 400 要重发而不是直接换跳：`thinking_level` 是 Gemini 原生枚举，中转的 chat 协议不校验它（实测 `reasoning_effort=bogus` 照样 200），
+这类 400 与「模型不可用」无关，换个模型是白丢一次机会。
 
 ---
 
@@ -128,7 +142,7 @@
 
 ---
 
-## 7. 观测面：`/health` 的四段
+## 7. 观测面：`/health` 的六段
 
 | 段 | 字段 | 读它干什么 |
 |---|---|---|
@@ -136,6 +150,8 @@
 | chain | budget_s | 链预算实际生效值 |
 | guard | enabled / mode / channels / skipping | 思考守卫当前档位、哪些渠道算「会思考」、哪些模型正在被跳过 |
 | race | hops / disabled | 每跳的首块观测（`rankedChain` 发车顺序的依据） |
+| hops | 每个 `渠道 · 上游 · 代理` 一条：try / ok / busy / e5xx / silent / no_first_block | 「3.8 最近到底行不行」的唯一直接答案：`ok/try` 是成功率，`silent` 高=上游不回头（本地超时），`e5xx` 高=上游在报错。自进程启动累计，不因冷却清零 |
+| upstream | busy / busy_skipped / thinking_strip / truncated_streams | 上面 §4.1 三种上游语义实际各命中多少次；**全 0 = 这条链没遇到麻烦，不是没生效**（计数自进程启动累计） |
 
 没有这些字段之前，「提前交卷有没有用」「守卫对谁生效」只能靠推理；现在一条 `curl` 就能回答。
 
@@ -160,11 +176,49 @@
 | WB | 0 | 0 | 0 | 0 | 18000 | 2 | 0 | 有 4 个单跳模型 → 软冷却必须 0；18s 只造福多跳链 |
 | OC | 60 | 20 | -1 | 0 | 0 | 2 | 0 | 唯一从不单跳的渠道（11 条多跳），可以放心冷却 |
 | QD | 0 | 20 | -1 | 0 | 0 | 2 | 0 | 有 Qwen-3.8-Max 单跳 → 软冷却必须 0 |
-| GM | 60 | 0 | -1 | 0 | 18000 | 2 | -1 | 判死权归上游（见 MODEL-PROVIDERS §4.11.3 第四次收敛） |
+| GM | 15 | 0 | -1 | 0 | 0 | 1 | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次） |
 | HJ | — | — | — | — | — | — | -1 | 单跳直连，只关看门狗 |
 | QW / QN | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | QW 只当链尾且协议不同 → 永不走竞速；QN 只有 Conatus 单跳 |
 
-全局：`upstreamHeaderTimeoutSec` 45、`chainBudgetSec` 90、`earlyCommitMs` 未写（生效 8000ms / 10s）。
+全局：`upstreamHeaderTimeoutSec` 45、`chainBudgetSec` **-1（不限）**、`earlyCommitMs` 未写（生效 8000ms / 10s）。
+
+### 8.1 单发串行模式（GM 现在的形态）
+
+`hedgeAfterMs`、`firstBlockMs` 都写 0 → `racePlanFor` 返回 false → 走 `attemptChain` 串行链：
+按声明顺序一跳一跳试，**只有这一跳明确失败（4xx/5xx/网络错/缺 key/冷却中）才换下一跳**，任何时刻只有一路在路上。
+
+配套三处必须同时成立，否则「等」会被本地掐断：
+
+| 处 | 值 | 作用 |
+|---|---|---|
+| `channelPolicy.GM.headerTimeoutSec` | -1 | 等响应头不设上限 |
+| `chainBudgetSec` | -1 | 整条链不设总预算（原来 90s 会在上游还在思考时回 504） |
+| `earlyCommitMs` | 8000（缺省） | 客户端 8s 先拿到 200 + SSE 头，之后 10s 一条 `: zgate keepalive` |
+
+代价（已知且接受）：上游若真的挂死，请求会一直挂着直到客户端自己断开；`/health.race.hops` 不记录串行跳的首字耗时（该计数只在竞速路径里埋），想量 3.8 的分布要看日志的 `(1/7)` 到首帧时间。
+
+### 8.2 3.8 优先的冷却账（2026-11-11 10:47）
+
+用户口径：AIS 按**次**计费（不是 token）、优先 3.8、兜底只是兜底。在这个口径下「冷却」就是
+**强制降级期** —— 冷却表命中时 `attemptChain` 直接 `fail("冷却中")` 换下一跳，这几秒到几分钟里
+每个请求都不会再碰 3.8，用户拿到的是 3.7/3.6 的结果，额度还照付一次。
+
+| 触发 | 时长 | 期间 3.8 的状态 |
+|---|---|---|
+| 503 / 529 忙 | **10s**（`busyCooldownSeconds`） | 不试，直接用 3.7 |
+| 其他 5xx | **15s**（`softCooldownSeconds`） | 不试，直接用 3.7 |
+| 429 | 45s（常量 `rateLimitCooldown`） | 先就地退避 700ms 重试同跳一次，仍 429 才冷藏并换跳 |
+| 504 | **20s**（`timeoutCooldownSeconds`，GM 已配；不配时仍是常量 5min 兜底） | 20 秒后自动重试 3.8，不再是「一次 504 → 五分钟降级」 |
+| 池空 / 认证失效 | 90s / 24h（渠道级） | 整个 GM 都不试，此时 3.7 一起挂 |
+
+**串行路径的 429 不要记反**：`inPlace429 := !(at != nil && at.policy.RateLimitBackoffMs < 0)`，
+串行链的 `at` 是 nil，短路后恒为 true —— 所以 `rateLimitBackoffMs = -1` **不影响**串行链，
+429 永远先原地重试一次。2026-11-11 上午一度按「-1 会直接换跳」理解，以此处为准。
+
+**500 现在会先同跳重试一次**（2026-11-11 加，`channelPolicy.retry500Once`，GM 已开）：
+`chainAccept(500)` 本身仍是 default → true（不换跳），但 accept 判定之前先拦一道 —— 状态 500
+且本跳还没重试过 → 等 `statusRetryDelay`(800ms) 在同跳再发一次；第二次仍是 500 才原样透给客户端
+（soft 冷却同时生效）。理由：按次计费下换跳等于白付一次额度，而 500 多半是上游瞬时抖动。
 
 **零值语义**（配之前先看清，不然会以为「填了 0 就是关掉冷却」，其实是什么都没配）：
 softCooldownSeconds / silenceCooldownSeconds = 0 → 冷却函数直接返回 0（等于关）；
@@ -173,12 +227,33 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 
 ---
 
+### 8.3 链长上限：Gemini-AIS 7 跳 → 3 跳（2026-11-11 11:03）
+
+按次计费下「多一跳」不等于「多一层保险」，而是「多付一次额度、还可能拿到更差的答案」。
+GM 下 7 个 Gemini Flash 档同价 0.11/次，但质量差三档：
+
+| 档 | 跳 | 现在的位置 |
+|---|---|---|
+| 新一代 | `ais-gemini-3.8-flash` | 第 1 跳 |
+| 够用 | `ais-gemini-3.7-flash` / `ais-gemini-3.6-flash` | 第 2、3 跳 |
+| 上一代 / 小模型 | 3.5 / 3.5-flash-lite / 3.1-flash-lite / 3-flash-preview | **已从链上裁掉** |
+
+改动位置**不在** `zgate.json`，也不要手改 `~/.zcode/v2/model-alias-map.json`（下次生成会被覆盖）：
+`tools/model_alias.py` 里的 `CHAIN_CAP = {"Gemini-AIS": 3}` 在 `family_entries` 组链时截断，
+被裁掉的跳写进该条目的 `dropped_hops` 并仍留在 `legacy_ids` 里 —— 老会话点名
+`ais-gemini-3.5-flash` 照样解析到 Gemini-AIS（不会 404），只是链不再真去打它。
+其余 19 个模型的 chain 逐条比对确认未变。
+
+改的是**生成器**不是产物：以后重跑 `python -B tools/model_alias.py --apply` 仍然只出 3 跳；
+要恢复 7 跳，删掉这行常量再重跑。
+
 ## 9. 验收与回退
 
 1. 代码层：`go build ./...`、`go vet ./...`、`go test ./...` 全 0；
    策略用例在 `internal/router/policy_test.go`（逐跳聚合、单跳不冷却、预算回 504、自检两档、守卫档位）。
 2. 配置层：改 `zgate.json` 后 `POST /admin/reload` 即可，不必重启进程。
-3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard 三段
+3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard / upstream / hops 五段
+   （`hops` 里 `GM|ais-gemini-3.8-flash` 的 `ok/try` 就是「3.8 最近到底行不行」）
    （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
    `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=20 / catalog_total=93`、`?scope=legacy` 应 `total=73`、`?scope=bad` 应 400。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。
@@ -194,6 +269,8 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 | `internal/router/race.go` | `racePlanFor` / `hopProtocol` / `raceChain` / `rankedChain` / `noteSerialChain` |
 | `internal/router/router.go` | `routeChain` / `attemptChain` / `doForward` / 冷却表 / `/health` / `/models` |
 | `internal/router/early_sse.go` | 提前交卷 writer + `earlyStats` |
+| `internal/router/upstream_semantics.go` | `busyExhausted` / `invalidThinkingParam` / `stripThinkingParams` / `streamTracker` / `closeTruncated` + `/health.upstream` 计数 |
+| `internal/router/hop_stats.go` | 逐跳计数 `hopTry/hopOK/hopBusy/hopE5xx/hopSilent/hopNoFirstBlock` + `/health.hops` |
 | `internal/config/config.go` | `ChannelPolicy` 字段、`ChainBudgetSec`、`GuardReasoning`、`applyDefaults` |
 | `internal/alias/alias.go` | `ChainView` / `Chains()`（给启动自检用） |
 
