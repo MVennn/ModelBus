@@ -1,0 +1,438 @@
+{
+  "schema": "caps_upstream/v1",
+  "generated_by": "tools/caps_upstream.py",
+  "generated_at": "2026-11-11T00:10:17+08:00",
+  "note": "上游接口原样采集的能力字段；接口取不到的渠道按 catalog/upstream_caps_evidence.json 的取证结论补齐（field_sources 以 evidence: 开头）；null = 没有来源，禁止推算补值。",
+  "sources": {
+    "wb": {
+      "url": "http://127.0.0.1:7863/panel/api/models",
+      "count": 20,
+      "error": null
+    },
+    "oc": {
+      "url": "https://opencode.ai/zen/go/v1/models",
+      "count": 30,
+      "error": null
+    },
+    "qn": {
+      "url": "https://api.qnaigc.com/v1/models",
+      "count": 89,
+      "error": null
+    }
+  },
+  "models": [
+    {
+      "display": "DeepSeek-4.1-Flash",
+      "channel": "WB",
+      "base": "deepseek-v4.1-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:deepseek-v4.1-flash",
+        "max_output_tokens": "WB:cn:deepseek-v4.1-flash",
+        "supports_tool_call": "WB:cn:deepseek-v4.1-flash",
+        "supports_image": "WB:cn:deepseek-v4.1-flash"
+      },
+      "conflicts": [
+        {
+          "field": "max_output_tokens",
+          "values": {
+            "WB/cn:deepseek-v4.1-flash": 128000,
+            "OC/deepseek-v4.1-flash": 384000
+          },
+          "picked": "WB:cn:deepseek-v4.1-flash"
+        }
+      ],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Gemini-3.8-Flash",
+      "channel": "HJ",
+      "base": "[福利]gemini-3.8-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "evidence:vendor-doc-gemini-3.8-flash-limits",
+        "max_output_tokens": "evidence:vendor-doc-gemini-3.8-flash-limits",
+        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
+        "supports_image": "evidence:vendor-doc+inline-png-probe"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": "HJ 端点 /v1/models 需鉴权且未见能力字段；HJ /v1beta/models 的 input/outputTokenLimit 全为 null、/api/pricing 无 context 字段，本渠道没有 API 级能力元数据；值取自官方 3.8 Flash Token limits 与 Modalities 页，图像能力另用内联 2x2 PNG 实测（返回 \"Pink\"）。取证：evidence/agent-gemini-truth.md"
+    },
+    {
+      "display": "Gemini-AIS",
+      "channel": "GM",
+      "base": "ais-gemini-3.8-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "evidence:GM-v1beta-models-selfreport",
+        "max_output_tokens": "evidence:GM-v1beta-models+vendor-doc",
+        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
+        "supports_image": "evidence:vendor-doc-gemini-3.8-flash-modalities"
+      },
+      "conflicts": [
+        {
+          "field": "context_window",
+          "values": {
+            "GM:v1beta-models": 1000000,
+            "vendor-doc": 1048576
+          },
+          "picked": "evidence:GM-v1beta-models-selfreport"
+        }
+      ],
+      "cross": [],
+      "notes": "GM 端点 /v1/models 只返回 id/object/owned_by，无能力字段；GM /v1beta/models 自报 7 跳全部 inputTokenLimit=1000000、outputTokenLimit=65536，与厂商文档只有 ctx 差 4.8%，取中继自报值；图像能力 GM 侧未实测成功（3.8 全 503），按厂商文档判可用。取证：evidence/agent-gemini-truth.md"
+    },
+    {
+      "display": "HY3",
+      "channel": "WB",
+      "base": "hy3",
+      "context_window": 192000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:hy3",
+        "max_output_tokens": "WB:cn:hy3",
+        "supports_tool_call": "WB:cn:hy3",
+        "supports_image": "WB:cn:hy3"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "HY4-Free",
+      "channel": "WB",
+      "base": "hy4free",
+      "context_window": 960000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:hy4free",
+        "max_output_tokens": "WB:cn:hy4free",
+        "supports_tool_call": "WB:cn:hy4free",
+        "supports_image": "WB:cn:hy4free"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Beam",
+      "channel": "OC",
+      "base": "beam-free",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": false,
+      "field_sources": {
+        "context_window": "OC:beam-free",
+        "max_output_tokens": "OC:beam-free",
+        "supports_tool_call": "OC:beam-free",
+        "supports_image": "OC:beam-free"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Conatus",
+      "channel": "QN",
+      "base": "qiniu/conatus-free",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": null,
+      "supports_image": null,
+      "field_sources": {
+        "context_window": "QN:qiniu/conatus-free",
+        "max_output_tokens": "QN:qiniu/conatus-free",
+        "supports_tool_call": null,
+        "supports_image": null
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Iceman",
+      "channel": "OC",
+      "base": "iceman-contributor-free",
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": false,
+      "field_sources": {
+        "context_window": "OC:iceman-contributor-free",
+        "max_output_tokens": "OC:iceman-contributor-free",
+        "supports_tool_call": "OC:iceman-contributor-free",
+        "supports_image": "OC:iceman-contributor-free"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "HY4",
+      "channel": "WB",
+      "base": "hy4std",
+      "context_window": 960000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:hy4std",
+        "max_output_tokens": "WB:cn:hy4std",
+        "supports_tool_call": "WB:cn:hy4std",
+        "supports_image": "WB:cn:hy4std"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Qwen-3.8-Max",
+      "channel": "QD",
+      "base": "Qwen3.8-Max",
+      "context_window": null,
+      "max_output_tokens": null,
+      "supports_tool_call": null,
+      "supports_image": null,
+      "field_sources": {
+        "context_window": null,
+        "max_output_tokens": null,
+        "supports_tool_call": null,
+        "supports_image": null
+      },
+      "conflicts": [],
+      "cross": [
+        {
+          "source": "OC:qwen3.8-max",
+          "channel": "QD",
+          "context_window": 1000000,
+          "max_output_tokens": 131072,
+          "supports_tool_call": true,
+          "supports_image": true
+        }
+      ],
+      "notes": "Qoder 端点（127.0.0.1:8790）未暴露 context/limit 元数据"
+    },
+    {
+      "display": "Qwen-3.8-Flash",
+      "channel": "QD",
+      "base": "Qwen3.8-Flash",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "OC:qwen3.8-flash",
+        "max_output_tokens": "OC:qwen3.8-flash",
+        "supports_tool_call": "OC:qwen3.8-flash",
+        "supports_image": "OC:qwen3.8-flash"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": "Qoder 端点（127.0.0.1:8790）未暴露 context/limit 元数据；context_window 取自非主用跳 OC；max_output_tokens 取自非主用跳 OC；supports_tool_call 取自非主用跳 OC；supports_image 取自非主用跳 OC"
+    },
+    {
+      "display": "GLM-5.3-Flash",
+      "channel": "WB",
+      "base": "glm-5.3-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:glm-5.3-flash",
+        "max_output_tokens": "WB:cn:glm-5.3-flash",
+        "supports_tool_call": "WB:cn:glm-5.3-flash",
+        "supports_image": "WB:cn:glm-5.3-flash"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "MiniMax-M3.1-Flash",
+      "channel": "WB",
+      "base": "minimax-m3.1-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:minimax-m3.1-flash",
+        "max_output_tokens": "WB:cn:minimax-m3.1-flash",
+        "supports_tool_call": "WB:cn:minimax-m3.1-flash",
+        "supports_image": "WB:cn:minimax-m3.1-flash"
+      },
+      "conflicts": [
+        {
+          "field": "max_output_tokens",
+          "values": {
+            "WB/cn:minimax-m3.1-flash": 128000,
+            "OC/minimax-m3.1-flash": 512000
+          },
+          "picked": "WB:cn:minimax-m3.1-flash"
+        }
+      ],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "MiMo-2.6-Flash",
+      "channel": "OC",
+      "base": "mimo-v2.6-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "OC:mimo-v2.6-flash",
+        "max_output_tokens": "OC:mimo-v2.6-flash",
+        "supports_tool_call": "OC:mimo-v2.6-flash",
+        "supports_image": "OC:mimo-v2.6-flash"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "MiMo-2.6-Pro",
+      "channel": "WB",
+      "base": "mimo-v2.6-pro",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:mimo-v2.6-pro",
+        "max_output_tokens": "WB:cn:mimo-v2.6-pro",
+        "supports_tool_call": "WB:cn:mimo-v2.6-pro",
+        "supports_image": "WB:cn:mimo-v2.6-pro"
+      },
+      "conflicts": [
+        {
+          "field": "context_window",
+          "values": {
+            "WB/cn:mimo-v2.6-pro": 1000000,
+            "OC/mimo-v2.6-pro": 1048576
+          },
+          "picked": "WB:cn:mimo-v2.6-pro"
+        },
+        {
+          "field": "max_output_tokens",
+          "values": {
+            "WB/cn:mimo-v2.6-pro": 128000,
+            "OC/mimo-v2.6-pro": 131072
+          },
+          "picked": "WB:cn:mimo-v2.6-pro"
+        }
+      ],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "HY3-X",
+      "channel": "WB",
+      "base": "hy3-x",
+      "context_window": null,
+      "max_output_tokens": null,
+      "supports_tool_call": null,
+      "supports_image": null,
+      "field_sources": {
+        "context_window": null,
+        "max_output_tokens": null,
+        "supports_tool_call": null,
+        "supports_image": null
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": "WB 上游未列出 http://127.0.0.1:7863/v1"
+    },
+    {
+      "display": "Claude-Haiku-5.5",
+      "channel": "OC",
+      "base": "claude-haiku-5-5",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "OC:claude-haiku-5-5",
+        "max_output_tokens": "OC:claude-haiku-5-5",
+        "supports_tool_call": "OC:claude-haiku-5-5",
+        "supports_image": "OC:claude-haiku-5-5"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Muse-Spark1.3",
+      "channel": "OC",
+      "base": "muse-spark-1.3-contributor",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "OC:muse-spark-1.3-contributor",
+        "max_output_tokens": "OC:muse-spark-1.3-contributor",
+        "supports_tool_call": "OC:muse-spark-1.3-contributor",
+        "supports_image": "OC:muse-spark-1.3-contributor"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "GPT-6-Luna",
+      "channel": "OC",
+      "base": "gpt-6-luna",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "OC:gpt-6-luna",
+        "max_output_tokens": "OC:gpt-6-luna",
+        "supports_tool_call": "OC:gpt-6-luna",
+        "supports_image": "OC:gpt-6-luna"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    },
+    {
+      "display": "Space-Bunny",
+      "channel": "WB",
+      "base": "space-bunny",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "WB:cn:space-bunny",
+        "max_output_tokens": "WB:cn:space-bunny",
+        "supports_tool_call": "WB:cn:space-bunny",
+        "supports_image": "WB:cn:space-bunny"
+      },
+      "conflicts": [],
+      "cross": [],
+      "notes": ""
+    }
+  ]
+}

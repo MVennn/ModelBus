@@ -1,0 +1,1290 @@
+{
+  "schema": "model_caps/v1",
+  "generated_by": "tools/model_caps.py",
+  "note": "单一真源：display 对齐现网 providerModelRules 的 modelId；source/confidence 标明证据强度，source=none 时能力字段一律 null。",
+  "models": [
+    {
+      "display": "DeepSeek-4.1-Flash",
+      "base_model": "deepseek-v4.1-flash",
+      "channel": "OC",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
+      "source": "upstream-api",
+      "confidence": "high",
+      "notes": "命中 providerSiteRules[7]（deepseek-v4\\.1-flash | openai-chat-completions | https://opencode\\.ai/zen/go/v1/?）于第 1 跳 OC https://opencode.ai/zen/go/v1；上游接口真值 WB:cn:deepseek-v4.1-flash",
+      "provenance": {
+        "field_sources": {
+          "context_window": "providerSiteRules[7]",
+          "max_output_tokens": "providerSiteRules[7]",
+          "supports_tool_call": "current",
+          "supports_image": "providerSiteRules[7]",
+          "reasoning_values": "providerSiteRules[7]",
+          "reasoning_map": "providerSiteRules[7]"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [
+              7
+            ],
+            "evidence": [
+              {
+                "index": 7,
+                "modelMatch": "deepseek-v4\\.1-flash",
+                "apiTypeMatch": "openai-chat-completions",
+                "baseUrlMatch": "https://opencode\\.ai/zen/go/v1/?",
+                "carries_values": true
+              }
+            ]
+          },
+          {
+            "priority": 2,
+            "main": false,
+            "channel": "QW",
+            "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "display": "Gemini-3.8-Flash",
+      "base_model": "[福利]gemini-3.8-flash",
+      "channel": "HJ",
+      "api_type": "openai-chat-completions",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 evidence:vendor-doc+inline-png-probe",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "HJ",
+            "base": "https://api.gemai.cc/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1048576,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 65536,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}"
+        }
+      }
+    },
+    {
+      "display": "Gemini-AIS",
+      "base_model": "ais-gemini-3-flash-preview",
+      "channel": "GM",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "low",
+        "medium",
+        "high"
+      ],
+      "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 evidence:GM-v1beta-models+vendor-doc",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 2,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 3,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 4,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 5,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 6,
+            "main": false,
+            "channel": "GM",
+            "base": "https://catiecli.sukaka.top/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 65536,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "medium",
+            "high"
+          ],
+          "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}"
+        }
+      }
+    },
+    {
+      "display": "HY3",
+      "base_model": "hy3",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 192000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "high"
+      ],
+      "reasoning_map": null,
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；建议参考：templateRules[opencode-go-chat] 收录该 id（openai-chat-completions @ https://opencode.ai/zen/go/v1），据此可命中 providerSiteRules[14] → ctx 256000 / max 128000 / img False；上游接口真值 WB:cn:hy3",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 2,
+            "main": false,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 192000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 64000,
+          "reasoning_values": [
+            "low",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "display": "HY4-Free",
+      "base_model": "hy4free",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 960000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "high"
+      ],
+      "reasoning_map": null,
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 WB:cn:hy4free",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 960000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 64000,
+          "reasoning_values": [
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "display": "Beam",
+      "base_model": "beam-free",
+      "channel": "OC",
+      "api_type": "anthropic-messages",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": false,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:beam-free",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1048576,
+          "supports_tool_call": true,
+          "supports_image": false,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+        }
+      }
+    },
+    {
+      "display": "Conatus",
+      "base_model": "qiniu/conatus-free",
+      "channel": "QN",
+      "api_type": "anthropic-messages",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": null,
+      "supports_image": null,
+      "reasoning_values": [
+        "disabled",
+        "high"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 QN:qiniu/conatus-free",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": null,
+          "supports_image": null,
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "QN",
+            "base": "https://api.qnaigc.com/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "disabled",
+            "high"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "Iceman",
+      "base_model": "iceman-contributor-free",
+      "channel": "OC",
+      "api_type": "openai-chat-completions",
+      "context_window": 262144,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": false,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:iceman-contributor-free",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 262144,
+          "supports_tool_call": true,
+          "supports_image": false,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+        }
+      }
+    },
+    {
+      "display": "HY4",
+      "base_model": "hy4std",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 960000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "high"
+      ],
+      "reasoning_map": null,
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 WB:cn:hy4std",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 960000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 64000,
+          "reasoning_values": [
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "display": "Qwen-3.8-Max",
+      "base_model": "Qwen3.8-Max",
+      "channel": "QD",
+      "api_type": "openai-chat-completions",
+      "context_window": null,
+      "max_output_tokens": 131072,
+      "supports_tool_call": null,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "xhigh"
+      ],
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
+      "source": "builtin-family",
+      "confidence": "medium",
+      "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：context_window,supports_tool_call；providerSiteRules 无命中；取自 modelRules[63],modelApiRules[41]（.*qwen3\\.8-(?:max|flash).*,.*qwen3\\.8-(?:max|flash).*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；建议参考：templateRules[opencode-go-messages] 收录该 id（anthropic-messages @ https://opencode.ai/zen/go/v1），据此可命中 providerSiteRules[18] → ctx 1000000 / max 131072 / img True",
+      "provenance": {
+        "field_sources": {
+          "context_window": null,
+          "max_output_tokens": "modelRules[63]",
+          "supports_tool_call": null,
+          "supports_image": "modelRules[63]",
+          "reasoning_values": "modelRules[63]",
+          "reasoning_map": "modelApiRules[41]"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "QD",
+            "base": "http://127.0.0.1:8790/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "reasoning_values": [
+            "low",
+            "medium",
+            "xhigh"
+          ]
+        }
+      }
+    },
+    {
+      "display": "Qwen-3.8-Flash",
+      "base_model": "Qwen3.8-Flash",
+      "channel": "OC",
+      "api_type": "anthropic-messages",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "xhigh"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "site-rule",
+      "confidence": "high",
+      "notes": "命中 providerSiteRules[19]（qwen3\\.8-flash | anthropic-messages | https://opencode\\.ai/zen/go/v1/?）于第 1 跳 OC https://opencode.ai/zen/go/v1；上游接口真值 OC:qwen3.8-flash",
+      "provenance": {
+        "field_sources": {
+          "context_window": "providerSiteRules[19]",
+          "max_output_tokens": "providerSiteRules[19]",
+          "supports_tool_call": "current",
+          "supports_image": "providerSiteRules[19]",
+          "reasoning_values": "providerSiteRules[19]",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "QD",
+            "base": "http://127.0.0.1:8790/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [
+              19
+            ],
+            "evidence": [
+              {
+                "index": 19,
+                "modelMatch": "qwen3\\.8-flash",
+                "apiTypeMatch": "anthropic-messages",
+                "baseUrlMatch": "https://opencode\\.ai/zen/go/v1/?",
+                "carries_values": true
+              }
+            ]
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "medium",
+            "xhigh"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "GLM-5.3-Flash",
+      "base_model": "glm-5.3-flash",
+      "channel": "OC",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "high",
+        "max"
+      ],
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
+      "source": "site-rule",
+      "confidence": "high",
+      "notes": "命中 providerSiteRules[0]（glm-5\\.3-flash | openai-chat-completions | https://opencode\\.ai/zen/go/v1/?）于第 2 跳 OC https://opencode.ai/zen/go/v1；上游接口真值 WB:cn:glm-5.3-flash",
+      "provenance": {
+        "field_sources": {
+          "context_window": "providerSiteRules[0]",
+          "max_output_tokens": "providerSiteRules[0]",
+          "supports_tool_call": "current",
+          "supports_image": "providerSiteRules[0]",
+          "reasoning_values": "providerSiteRules[0]",
+          "reasoning_map": "providerSiteRules[0]"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "QD",
+            "base": "http://127.0.0.1:8790/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 2,
+            "main": false,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [
+              0
+            ],
+            "evidence": [
+              {
+                "index": 0,
+                "modelMatch": "glm-5\\.3-flash",
+                "apiTypeMatch": "openai-chat-completions",
+                "baseUrlMatch": "https://opencode\\.ai/zen/go/v1/?",
+                "carries_values": true
+              }
+            ]
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "low",
+            "high",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "display": "MiniMax-M3.1-Flash",
+      "base_model": "minimax-m3.1-flash",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_map": null,
+      "source": "upstream-api",
+      "confidence": "high",
+      "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：context_window,reasoning_map,reasoning_values,supports_tool_call；providerSiteRules 无命中；取自 modelRules[51]（.*MiniMax-M3.*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；上游接口真值 WB:cn:minimax-m3.1-flash",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "modelRules[51]",
+          "supports_tool_call": "current",
+          "supports_image": "modelRules[51]",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "QD",
+            "base": "http://127.0.0.1:8790/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 2,
+            "main": false,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    },
+    {
+      "display": "MiMo-2.6-Flash",
+      "base_model": "mimo-v2.6-flash",
+      "channel": "OC",
+      "api_type": "openai-chat-completions",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "enabled"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "upstream-api",
+      "confidence": "high",
+      "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：reasoning_map,supports_tool_call；providerSiteRules 无命中；取自 modelRules[77]（.*mimo-v2\\.6-(?:pro|flash).*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；上游接口真值 OC:mimo-v2.6-flash",
+      "provenance": {
+        "field_sources": {
+          "context_window": "modelRules[77]",
+          "max_output_tokens": "modelRules[77]",
+          "supports_tool_call": "current",
+          "supports_image": "modelRules[77]",
+          "reasoning_values": "modelRules[77]",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1048576,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "disabled",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "MiMo-2.6-Pro",
+      "base_model": "mimo-v2.6-pro",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "enabled"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "upstream-api",
+      "confidence": "high",
+      "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：reasoning_map,supports_tool_call；providerSiteRules 无命中；取自 modelRules[77]（.*mimo-v2\\.6-(?:pro|flash).*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；上游接口真值 WB:cn:mimo-v2.6-pro",
+      "provenance": {
+        "field_sources": {
+          "context_window": "modelRules[77]",
+          "max_output_tokens": "modelRules[77]",
+          "supports_tool_call": "current",
+          "supports_image": "modelRules[77]",
+          "reasoning_values": "modelRules[77]",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          },
+          {
+            "priority": 1,
+            "main": false,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "disabled",
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "HY3-X",
+      "base_model": "hy3-x",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 192000,
+      "max_output_tokens": 64000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "high"
+      ],
+      "reasoning_map": null,
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 192000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 64000,
+          "reasoning_values": [
+            "low",
+            "high"
+          ]
+        }
+      }
+    },
+    {
+      "display": "Claude-Haiku-5.5",
+      "base_model": "claude-haiku-5-5",
+      "channel": "OC",
+      "api_type": "anthropic-messages",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:claude-haiku-5-5",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "Muse-Spark1.3",
+      "base_model": "muse-spark-1.3-contributor",
+      "channel": "OC",
+      "api_type": "anthropic-messages",
+      "context_window": 1048576,
+      "max_output_tokens": 131072,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:muse-spark-1.3-contributor",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1048576,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 131072,
+          "reasoning_values": [
+            "minimal",
+            "low",
+            "medium",
+            "high",
+            "xhigh"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+        }
+      }
+    },
+    {
+      "display": "GPT-6-Luna",
+      "base_model": "gpt-6-luna",
+      "channel": "OC",
+      "api_type": "anthropic-messages",
+      "context_window": 1050000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "disabled",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:gpt-6-luna",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": "current"
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "OC",
+            "base": "https://opencode.ai/zen/go/v1",
+            "protocol": "messages",
+            "api_type": "anthropic-messages",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1050000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "disabled",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ],
+          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+        }
+      }
+    },
+    {
+      "display": "Space-Bunny",
+      "base_model": "space-bunny",
+      "channel": "WB",
+      "api_type": "openai-chat-completions",
+      "context_window": 1000000,
+      "max_output_tokens": 128000,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "reasoning_values": [
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ],
+      "reasoning_map": null,
+      "source": "current",
+      "confidence": "low",
+      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 WB:cn:space-bunny",
+      "provenance": {
+        "field_sources": {
+          "context_window": "current",
+          "max_output_tokens": "current",
+          "supports_tool_call": "current",
+          "supports_image": "current",
+          "reasoning_values": "current",
+          "reasoning_map": null
+        },
+        "conflicts": [],
+        "hops": [
+          {
+            "priority": 0,
+            "main": true,
+            "channel": "WB",
+            "base": "http://127.0.0.1:7863/v1",
+            "protocol": "chat",
+            "api_type": "openai-chat-completions",
+            "site_hit_indexes": [],
+            "evidence": []
+          }
+        ],
+        "current": {
+          "context_window": 1000000,
+          "supports_tool_call": true,
+          "supports_image": true,
+          "max_output_tokens": 128000,
+          "reasoning_values": [
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max"
+          ]
+        }
+      }
+    }
+  ]
+}

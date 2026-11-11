@@ -1,0 +1,49 @@
+{
+  "schema": "caps_evidence/v1",
+  "note": "接口拿不到能力字段的渠道（HJ/GM/QW/QD），用厂商文档 + 功能实测取证后的结论；只在接口为 null 时采用，接口有值一律以接口为准。每条的取证过程见 evidence/ 下对应分片。",
+  "models": [
+    {
+      "display": "Gemini-3.8-Flash",
+      "channel": "HJ",
+      "base": "[福利]gemini-3.8-flash",
+      "context_window": 1048576,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "evidence:vendor-doc-gemini-3.8-flash-limits",
+        "max_output_tokens": "evidence:vendor-doc-gemini-3.8-flash-limits",
+        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
+        "supports_image": "evidence:vendor-doc+inline-png-probe"
+      },
+      "conflicts": [],
+      "notes": "HJ /v1beta/models 的 input/outputTokenLimit 全为 null、/api/pricing 无 context 字段，本渠道没有 API 级能力元数据；值取自官方 3.8 Flash Token limits 与 Modalities 页，图像能力另用内联 2x2 PNG 实测（返回 \"Pink\"）。取证：evidence/agent-gemini-truth.md"
+    },
+    {
+      "display": "Gemini-AIS",
+      "channel": "GM",
+      "base": "ais-gemini-3.8-flash",
+      "context_window": 1000000,
+      "max_output_tokens": 65536,
+      "supports_tool_call": true,
+      "supports_image": true,
+      "field_sources": {
+        "context_window": "evidence:GM-v1beta-models-selfreport",
+        "max_output_tokens": "evidence:GM-v1beta-models+vendor-doc",
+        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
+        "supports_image": "evidence:vendor-doc-gemini-3.8-flash-modalities"
+      },
+      "conflicts": [
+        {
+          "field": "context_window",
+          "values": {
+            "GM:v1beta-models": 1000000,
+            "vendor-doc": 1048576
+          },
+          "picked": "evidence:GM-v1beta-models-selfreport"
+        }
+      ],
+      "notes": "GM /v1beta/models 自报 7 跳全部 inputTokenLimit=1000000、outputTokenLimit=65536，与厂商文档只有 ctx 差 4.8%，取中继自报值；图像能力 GM 侧未实测成功（3.8 全 503），按厂商文档判可用。取证：evidence/agent-gemini-truth.md"
+    }
+  ]
+}
