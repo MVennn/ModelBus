@@ -39,6 +39,23 @@
       "link": "https://docs.qoder.cn/product-overview/qwen-3-7-series-model-staggering-discount"
     }
   },
+  "Qwen4-Max-Preview": {
+    "price": 0.1,
+    "peak": 0.5,
+    "valley": 0.1,
+    "off_peak": {
+      "active": false,
+      "window_start": "22:00",
+      "window_end": "08:00",
+      "timezone": "Asia/Shanghai",
+      "discount_factor": 0.2,
+      "badge": "错峰2折",
+      "badge_en": "Off-Peak 80% off",
+      "description": "错峰时段2折优惠（10 PM-8 AM UTC+8）",
+      "description_en": "Off-Peak 80% off (10 PM-8 AM UTC+8)",
+      "link": "https://docs.qoder.cn/product-overview/qwen-3-7-series-model-staggering-discount"
+    }
+  },
   "DeepSeek-V4-Pro": {
     "price": 0.5,
     "peak": 0.5,
