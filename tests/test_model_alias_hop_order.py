@@ -142,15 +142,27 @@ def _entry_by_abbr(abbr: str) -> dict:
 
 
 class GeminiHopOrderTest(unittest.TestCase):
-    def test_ais_chain_is_seven_gm_hops_in_version_order(self) -> None:
-        chain = _entry_by_abbr("Gemini-AIS")["chain"]
-        self.assertEqual(len(chain), 7, "Gemini-AIS 必须是 7 跳纯 GM（哈基米已拆出去）")
+    def test_ais_chain_is_three_gm_hops_in_version_order(self) -> None:
+        entry = _entry_by_abbr("Gemini-AIS")
+        chain = entry["chain"]
+        # CHAIN_CAP：AIS 按次计费，链上只留 3.8 / 3.7 / 3.6（见 ROUTING-POLICY §8.3）。
+        self.assertEqual(len(chain), 3, "Gemini-AIS 只保留前 3 跳")
         self.assertEqual(
             [h["upstream"] for h in chain],
-            GEMINI_HOPS,
-            "链序必须严格是 3.8 → 3.7 → 3.6 → 3.5 → 3.5-lite → 3.1-lite → 3-preview",
+            GEMINI_HOPS[:3],
+            "链序必须严格是 3.8 → 3.7 → 3.6",
         )
         self.assertEqual({h["channel"] for h in chain}, {"GM"}, "AIS 链里不该再出现别的渠道")
+        self.assertEqual(
+            entry.get("dropped_hops"),
+            GEMINI_HOPS[3:],
+            "被 CHAIN_CAP 裁掉的四跳要留痕，方便查「为什么没走 3.5」",
+        )
+        self.assertEqual(
+            {i.split(":", 1)[-1] for i in entry.get("legacy_ids") or []},
+            set(GEMINI_HOPS),
+            "裁掉的跳仍要留在 legacy_ids：老会话点名 ais-gemini-3.5-flash 不能 404",
+        )
 
     def test_hajimi_is_standalone_single_hop_model(self) -> None:
         entry = _entry_by_abbr(HJ_MODEL)
@@ -200,8 +212,8 @@ class GeminiHopOrderTest(unittest.TestCase):
         hj = models.get(HJ_MODEL) or {}
         self.assertEqual(
             [h.get("channel") for h in ais.get("chain") or []],
-            ["GM"] * 7,
-            "磁盘上 Gemini-AIS 必须是 7 跳纯 GM",
+            ["GM"] * 3,
+            "磁盘上 Gemini-AIS 是 3 跳纯 GM（CHAIN_CAP）",
         )
         self.assertEqual(
             [h.get("channel") for h in hj.get("chain") or []],

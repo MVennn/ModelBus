@@ -261,6 +261,16 @@ HOP_PRIORITY = {
 }
 HOP_PRIORITY_DEFAULT = 99
 
+# 链长上限 —— 只对「按次计费」的族生效，收窄 chain/fallbacks，不动 legacy_ids。
+# Gemini-AIS 是 catiecli 按次扣额度（0.11/次，不看 token），而 GM 下 7 个 Gemini
+# Flash 档质量差三档：3.8 是新一代、3.7/3.6 够用，3.5 / 3.5-lite / 3.1-lite /
+# 3-flash-preview 是上一代和更老的小模型。按次计费的账是「每多一跳就多付一次
+# 额度」，所以走到那四跳不但白付钱，用户拿到的还是更差的答案 —— 不如直接报错。
+# 用户 2026-11-11 口径：「能 3.8 就 3.8，兜底只是兜底」。
+# 被裁掉的跳仍登记在 legacy_ids 里：老会话点名 ais-gemini-3.5-flash 照样解析到
+# Gemini-AIS，只是链不再真去打它。
+CHAIN_CAP = {"Gemini-AIS": 3}
+
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
 # 试用池到期后边际成本从 0 变真钱，所以它比额度本身更早需要预警 —— 见 write_quota_windows。
@@ -363,7 +373,8 @@ QD_PRICES = {
 }
 
 # 补建条目（provider_config 里原本没有、由 whitelist_items 新建的型号）默认只有
-# enabled:true，DSH 侧只能吃 dsh_sync 的兜底值（1000000 ctx / 128000 output）。
+# enabled:true；dsh_sync.py 对缺失字段的处理是「不写键」，落宿主自己默认值，
+# 不会兜 1000000 / 128000 —— 要控阈值只能在这里按上游 id 补真值。
 # 一旦拿到某型号的真实 context / output 上限，在这里按上游 id 补元数据，
 # 值直接贴合 providerModelRules 的 config 形态；当前无需要补建的型号。
 MODEL_META = {}
@@ -1570,13 +1581,20 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             ))
             # 机场兜底排在链尾（见 with_airport_fallback 的注释）。
             group = with_airport_fallback(group)
+            # 链长上限：只收窄真正会去打的 chain/fallbacks，legacy_ids 仍按
+            # 全量 group 收（见 CHAIN_CAP 注释）。
+            cap = CHAIN_CAP.get(abbr)
+            chain_group = group[:cap] if cap and len(group) > cap else group
+            # 被 CHAIN_CAP 裁掉的跳：仍要登记进 legacy_ids，否则老会话点名这些
+            # upstream 会变成 404。dropped_hops 只在真有截断时写进 alias map。
+            dropped = [h["upstream"] for h in group[len(chain_group):]]
             is_free_entry = all(h["price"] <= 0 for h in group)
             base_name = abbr
             if protocol != "chat" and "chat" in abbr_protocols.get(abbr, ()):
                 base_name = abbr + ("-Msg" if protocol == "messages" else "-Resp")
             name = base_name + ("-Free" if is_free_entry and len(groups) > 1 else "")
             chain = []
-            for h in group:
+            for h in chain_group:
                 hop = {
                     "upstream": h["upstream"],
                     "base": base_of(h["channel"]),
@@ -1611,6 +1629,8 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
                 "legacy_ids": legacy_ids,
                 "is_free_entry": is_free_entry,
             })
+            if dropped:
+                entry["dropped_hops"] = dropped
             entries.append(entry)
     return entries
 
@@ -2367,6 +2387,9 @@ def main() -> int:
         chain = row.get("chain") or [{"upstream": row.get("upstream")}]
         upstreams = {_bare(h.get("upstream") or "") for h in chain}
         upstreams |= {_bare(row.get("upstream") or ""), _bare(row.get("original") or "")}
+        # CHAIN_CAP 裁掉的跳也要认：老会话点名 ais-gemini-3.5-flash 时仍解析到
+        # 本模型（只是链不会再打它），不能变成 404。
+        upstreams |= {_bare(u) for u in row.get("dropped_hops") or []}
         out: list[str] = []
         for lid in row.get("legacy_ids") or [row["original"], row["upstream"]]:
             key = str(lid)
@@ -2432,6 +2455,8 @@ def main() -> int:
                 "chain": list(row.get("chain") or []),
                 "legacy_ids": _consistent_legacy_ids(row),
             }
+            if row.get("dropped_hops"):
+                alias_models[row["new_id"]]["dropped_hops"] = list(row["dropped_hops"])
             if row.get("is_pool"):
                 alias_models[row["new_id"]]["kind"] = "pool"
                 alias_models[row["new_id"]]["label"] = row.get("label") or ""
@@ -2450,6 +2475,7 @@ def main() -> int:
         if not _model:
             continue
         _hops = {_bare(h.get("upstream") or "") for h in (_model.get("chain") or [_model])}
+        _hops |= {_bare(u) for u in _model.get("dropped_hops") or []}
         if _bare(_key) not in _hops:
             legacy.pop(_key, None)
     valid_ids = set(alias_models)
