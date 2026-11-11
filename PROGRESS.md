@@ -3367,4 +3367,193 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - **守卫切档**：`reasoningGuard.mode` 由 `models` 改 `channels` 并保留白名单（交集），对 Iceman（链 `OC->OC`）行为等价，往后 OC 上新增模型只需进白名单。
 - **仍未做（有意留着）**：cool / silence 两表合一、竞速与串行执行器合一、档位两层收敛、`dsh_sync.py` 的 `_efforts_outside` 死代码与 `_efforts_lost` 少打 WARN —— 都属于结构重排，没有当日线上问题驱动，硬做只会加大回滚面。
 
+## 2026-11-10 能力字段审计批次
+
+### 产物
+
+- `docs/CAPABILITY-AUDIT.md`：八节，含 §2.2 兜底指纹、§3.6 宿主后果表、§4.1 档位三态、§5 衍生七项、§6 P0–P3 修法。
+- 证据分片：`evidence/agent-cap-upstream.md`（101 行）、`evidence/agent-cap-gen.md`（120 行）、`evidence/agent-cap-dsh.md`（106 行）。
+
+### 主结论
+
+- 20 条规则里 9 条的能力字段是 WB 上游真值（逐条对到目录原文，0 条编造），11 条来自 `third-party/zcode/zcode-builtin.json` 的 `.*` 兜底（ctx 1e6 / max 128k / tool true / img false）。
+- 兜底没被真值规则覆盖的原因：`providerSiteRules` 按 baseURL 匹配，而三个聚合 provider 都指向 `http://127.0.0.1:7871/v1`；即使域名对，`modelOrder` 用显示别名（`DeepSeek-4.1-Flash`）也匹配不上 `deepseek-v4\.1-flash`。
+- 逆向损失：8 条规则上游有 ctx/max/tool/img 却留空（Beam / Conatus / Iceman / Qwen-3.8-Flash / MiMo-2.6-Flash / Claude-Haiku-5.5 / Muse-Spark1.3 / GPT-6-Luna）。
+- 档位：A=11 / B=4 / C=5；无来源的 5 条是 Gemini×2、Conatus、Iceman、MiMo-2.6-Flash。
+- 后果链：宿主不读 `provider_config.json` 的 `properties`，全靠 `tools/dsh_sync.py` 投影；`supportsToolCall` 在宿主不存在（工具无条件发送）、图片有硬拦、ctx 无发前预检（填大等于把压缩阈值一起推后）。
+- `tools/model_alias.py:366` 的注释「DSH 侧只能吃 1000000/128000 兜底值」与代码不符，兜底只发生在规则求值期（已写入文档 §1.2）。
+
+### 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `python -B tools/check-docs.py` | 43 篇 OK |
+| `python -B tools/check-project.py` | 8 项 OK |
+| `python -B tools/dsh_sync.py --check` | exit 0「模型表无变化」 |
+| `python -B tools/model_alias.py --check` | exit 1：价格 2 处（Qwen-3.8-Flash 0.09→0.03、Qwen-3.8-Max 0.43→0.17）+ 链路 2 处（同根因），档位 0 处 —— 价格源漂移，本批次未改 |
+[[TASK_ALL_DONE]]
+
+## 2026-11-11 上游能力真值批次
+
+### 产物
+
+- `tools/caps_upstream.py`（新）：按别名 `chain[].channel` 去 WB 面板 / OC / QN 三个上游模型接口取 ctx / max_out / tool / img，输出证据快照；`--fetch` 重采、`--check` 与现网比对。
+- `catalog/upstream_caps.json`（新）：20 条快照，带 `field_sources` / `conflicts` / `cross`，null 表示上游没给这个字段。
+- `tools/model_caps.py`（改）：新增 `apply_upstream()`、`--upstream PATH`、`--apply-source PREFIX`；`diff_records` 改为按字段取 `provenance.field_sources` 标来源（之前整条 record 标 upstream-api 会误导）。
+- `tests/test_caps_upstream.py`（新，8 例）：cn: 前缀对号、主用跳优先、跨跳冲突、后续跳补位、未知渠道只记 cross、check 只算上游字段、apply_upstream 覆盖、only_sources 过滤。
+- 文档：`docs/CAPABILITY-AUDIT.md` 追加 §9（链路 / 逐模型终值 / 未动项 / 验收）、`docs/TOOLS.md` 补 `model_caps.py` 与 `caps_upstream.py` 两行（此前两份脚本都没登记）、`docs/DSH-FIRST.md` §3.1 补落地段、`docs/README.md` 索引标注已修复。
+
+### 主结论
+
+- 真值来源找到了：WB `/panel/api/models`、OC `/zen/go/v1/models`（需浏览器 UA，否则 403）、QN `/v1/models`。20 条里 **16 条**换成接口实测值；剩下 Gemini-3.8-Flash（HJ 需鉴权）、Gemini-AIS（GM 只有 id）、Qwen-3.8-Max（QD 8790 拒连）、HY3-X（WB 无该条目）标 `source=none`，不伪装成已核对。
+- 差额改正示例：Iceman ctx 1000000 → **262144**（此前虚高 3.8 倍）、Beam / Muse-Spark1.3 / MiMo-2.6-Flash 1000000 → **1048576**、GPT-6-Luna → **1050000**；Beam 与 Iceman 的 `supportsImage` 从 false 兜底改为上游明确的「纯文本输入」false（有据），其余 7 条原本被标不支持图片的模型改为 true。
+- 跨跳冲突只记录不擅自取舍：DeepSeek `max_out`（WB 128000 / OC 384000）、MiniMax（WB 128000 / OC 512000）、MiMo-2.6-Pro（WB 1000000/128000 / OC 1048576/131072）都取主用跳 WB。
+- 新增「只落真值」闸门：`--apply-source upstream:` 让 builtin-family / site-rule 的推断值不落盘（此前 `--apply` 会把 MiMo 族级 128000、Qwen 族级 131072 写成事实）。
+- 思考档位一律不动：上游 effort 列表含 `minimal` / `none` / `enabled` 等 ZCode 方言没有的值，收窄会让下拉丢选项；`--check` 里剩的 6 条差异就是这些。
+
+### 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `python -B -m unittest discover -s tests -q` | Ran **120** tests OK（原 112 + 新增 8） |
+| `python -B tools/caps_upstream.py --check` | exit 0「现网与上游真值一致」 |
+| `python -B tools/model_caps.py --upstream catalog/upstream_caps.json --check` | exit 1，剩 6 条故意不落的档位 / 族级推断差异 |
+| `python -B tools/dsh_sync.py --check` | exit 0「模型表无变化」 |
+| `python -B tools/check-docs.py` | 44 篇 OK |
+| `python -B tools/check-project.py` | 8 项 OK |
+| `python -B tools/model_alias.py --check` | exit 1（历史遗留：Qwen-3.8-Flash 价格 0.09→0.03、Qwen-3.8-Max 0.43→0.17 + 链路 2 处；QD 8790 不可达，本批次未动） |
+
+### 验收
+
+- 部署链：`.work/provider_config.bak-caps-20261110155806.json`（备份）→ `.work/provider_config.candidate.json` → 覆盖 `~/.zcode/v2/provider_config.json`：15539 B → 17735 B，md5 `523f009d18e1db330b9e8b6a011f376a`，结构性差异 16 处全为新增、键序与 providerOrder 不变。
+- 投影：`dsh_sync.py --apply` exit 0，备份 `cordis.patch.yml.bak-dshsync-20261110-235826`；patch 实测 ctx：Iceman 262144、Beam / Muse-Spark1.3 / MiMo-2.6-Flash 1048576、GPT-6-Luna 1050000。
+- 环境坑（已复现）：`PATH` 里没有 `python` 与 `node`，run_code 里 spawnSync 必须显式给 `<LOCALAPPDATA>/Programs/Python/Python3xx/python.exe` 与 `%ProgramFiles%\nodejs`，否则 dsh_sync 会 WARN 回退 provider_config 元数据、单测报 21 errors。
+
+### 追加（00:11）：两个 Gemini 的取证补齐
+
+- 接口不给能力字段的渠道（HJ / GM）改走取证：新增 `catalog/upstream_caps_evidence.json` 覆盖层，`tools/caps_upstream.py` 增 `merge_evidence()` / `--evidence`，**只在接口为 null 时采用**，接口有值不覆盖只记 `conflicts`。
+- 补上 8 个字段（此前全吃 `.*` 兜底）：Gemini-3.8-Flash 1048576 / 65536 / tool ✓ / img ✓；Gemini-AIS 1000000（GM 七跳自报，厂商文档 1048576 记冲突）/ 65536 / ✓ / ✓。**原兜底 max=128000 虚高近一倍、img=false 是错的**。
+- 部署：`~/.zcode/v2/provider_config.json` 17735 → 18313 B（md5 `17c9616638aa3f1f00c3c402e2e7d5ec`，备份 `.work/provider_config.bak-gemini-20261110161101.json`，结构化差异仅这两条新增 `properties` 与 `optionSpecs.maxOutputTokens.max`）→ `dsh_sync.py --apply`（备份 `cordis.patch.yml.bak-dshsync-20261111-001111`），patch 实测 `contextWindow: 1048576 / maxTokens: 65536 / input: [text, image]`。
+- 新增 4 个单测（覆盖层只补空字段、null 不补、notes/conflicts 合并、display 不匹配忽略），`tests/test_caps_upstream.py` 现 12 例。
+- 门禁：unittest **124 OK**、`caps_upstream.py --check` exit 0（20 条全对）、`model_caps.py --check` 剩 6 条故意不落（4 处档位 + Qwen-3.8-Max 两条族级推断）、`dsh_sync.py --check` exit 0、check-docs 44 篇 / check-project 8 项 OK。
+- 仍无真值：Qwen-3.8-Max（QD 8790 拒连）、HY3-X（WB 侧无该条目）。
+
+
+
+## 2026-11-11 上游语义批次：忙 / 参数不认 / 断流收口
+
+### 起点（用户实况）
+
+- 「跑着跑着就截断了，然后说模型使用人数过多需要重跑」；「错误码 HTTP_503，此模型当前需求量较大，503 都是这样」。
+- 直连 catiecli 取证（Bearer `GEMINI_API_KEY`）：短问四跳全 200（3.8 = 7.2s / 3.7 = 5.2s / 3.6 = 2.6s / 3.5-flash-lite = 10.8s）；同一条 1200 字长提示四跳**全 503**，耗时 3.4 / 10.3 / 22.4 / 4.3 秒。**不是链路坏，是模型忙**，且 503 来得慢，会白占看门狗窗口。
+- 当晚 23:40 的日志形态：一跳 403「key 池为空」→ `渠道 GM 暂停 1m30s` → 之后 90 秒里同渠道能用的 3.6 一并被拒。
+
+### 产物
+
+- `gateways/zgate/internal/router/upstream_semantics.go`（新，约 6.4 KB）：`busyExhausted`（只认 503/529 + high demand / 需求量较大 / 需求高峰 / spikes in demand / 请稍后再试）、`invalidThinkingParam`（400 + thinking_level / thinking_config）、`stripThinkingParams`（剥 `reasoning_effort` / `thinking` / `thinking_budget` / `thinking_level` 与 `extra_body.google.thinking_config`）、`streamTracker` + `closeTruncated`（补 `finish_reason:"error"` + `upstream_truncated` + `[DONE]`）、`upstreamStats` 四个原子计数。
+- `router.go`：Server 加 `sem`；`/health.upstream` 新段；accept 闭包在 poolDown 之后插 busy 分支（只跳这一跳 + `busyCooldownSeconds`，不再 `markChannelOffFor` 整渠道）；`doForwardWith` 加「400 剥参同跳重发一次」；两处流复制循环喂 tracker，断流时收口。
+- `config.go` 加 `busyCooldownSeconds`；`policy.go` 加 `busyCooldownFor`。
+- `zgate.json` GM：`firstBlockMs` 0 → 12000、`hedgeAfterMs` 18000 → 6000、`maxParallel` 2 → 3、新增 `busyCooldownSeconds: 20`（soft 60 / silence 0 / rate -1 / headerTimeout -1 不变）。
+- `upstream_semantics_test.go`（新，8 例）。
+
+### 文档
+
+- `docs/ROUTING-POLICY.md`：§4 冷却表补「需求高峰」、新增 §4.1「上游语义分类：忙 / 参数不认 / 中途截断」、§7 四段 → 五段（加 upstream 行）、§8 GM 行更新、§9 验收口径、§10 代码坐标。
+- `docs/PITFALLS.md` 新增 §43「上游『忙』被当成渠道故障」。
+
+### 门禁
+
+| 门禁 | 结果 |
+|---|---|
+| `go test ./...` | exit 0（router 17.7s，全包 ok） |
+| `go build` / `go vet` / `gofmt -l` | 全 0 / 空 |
+| `python -B -m unittest discover -s tests -q` | Ran **124** OK |
+| `python -B tools/check-project.py` | 8 项 OK |
+| `python -B tools/check-docs.py` | 44 篇 OK |
+
+### 换版与实测（127.0.0.1:7871）
+
+- `tools/zgate-lifecycle/restart-zgate.cmd` exit 0：候选构建 → 停 pid 18628 → 备份 `zgate.exe.bak-deploy-20261111-100600` → 新 pid **28468**，/health 200。
+- `/health.upstream` = `{busy:0, busy_skipped:0, thinking_strip:0, truncated_streams:0}` 上线即读得到。
+- 短问：200，TTFB 18.0s（三路对冲，3.6 先到），`finish_reason:"stop"` + `[DONE]` 收口。
+- 长文单发：200，38.9s，86 帧 / 41 KB，正常收口。
+- 三路并发长文：全部 200，TTFB 10.2 / 13.1 / 13.8s，26-36s 完成，全部 `[DONE]`。
+- 带 `thinking_level:"BOGUS"` 的请求：200 / 1.7s —— chat 协议下 catiecli 不校验该字段（与此前直连实测一致），所以 `thinking_strip` 保持 0 是**预期**，剥参分支靠单测覆盖。
+- 实况限制：上午上游不忙，五次实测没撞到 503，`busy` 计数仍为 0 —— 该分支由 8 条单测覆盖，**本次未取得真实 503 的端到端证据**，等下次高峰复测。
+- 观察点：`/health.race.hops` 里 GM|ais-gemini-3.6-flash `firstBlockMs` 不再是被响应头污染的 578ms，而是真实的 19775ms。
+
+### 待办（用户 00:22 提供的新素材）
+
+- catiecli 后台任务 API（`/v1/openai/tasks`）：POST 立即回 task_id、GET `?after=N` 按片续传、列表带 `expires_in`、可 cancel，请求体与 chat/completions 一致，保留 30 分钟。用途评估：断流问题的**上游级解法** —— 网关断线重连后可凭 task_id 续传，而不是让客户端重跑。未接入，先记在这里。
+
+## 2026-11-11 10:35 单发串行批次（AIS 不再三连发）
+
+### 起点
+- 用户口径：三连发浪费资格；上游资格是有的，只是慢/会截断；应单发 3.8，报错才切，等上游下判决而不是本地判死。
+
+### 改动（gateways/zgate/zgate.json，热加载生效，未重启进程）
+- channelPolicy.GM：firstBlockMs 12000→0、hedgeAfterMs 6000→0、maxParallel 3→1 → racePlanFor 返回 false，走串行链（日志实拍 [race] 这条链走串行）。
+- chainBudgetSec 90→-1（不限）。旧值会在上游仍在思考时回 504：10:35 那次就是 1m29.99s 被判死。
+- 备份 zgate.json.bak-nohedge-*。
+
+### 实测（10:35:55 起，单发 3.8）
+- 网关：ttfb 8.0s（提前交卷）、total 127.5s、8 个 data 帧 + 11 条心跳、finish_reason stop、usage completion 129 / reasoning 1361、model=ais-gemini-3.8-flash —— 成功且内容完整。
+- 直连对照（同提示、60s 上限）：连响应头都没回（TimeoutError on read 60.45s）→ 3.8 是长思考导致的慢，不是坏、也不是没资格。
+- 结论：旧「90s 预算 + 三连发」会把这类请求砍成 504，用户看到的「截断」有一部分是本地掐的，不是上游断的。
+
+### 文档
+- docs/ROUTING-POLICY.md：§8 GM 行改单发串行、新增 §8.1（三处配套 + 代价）、全局 chainBudgetSec 改 -1。
+
+### 待验证
+- 串行切换（真实 503 → 下一跳）只有既有单测覆盖，本批未造端到端证据。
+- /health.race.hops 不记录串行跳的首字耗时（计数只埋在竞速路径）。
+
+## 2026-11-11 10:47 3.8 优先调参（冷却收紧）
+
+### 口径
+- 用户：AIS 按**次**计费、优先 3.8、兜底只是兜底。冷却期在语义上就是「强制降级期」，3.8 的冷却必须比别的渠道短得多。
+
+### 改动（zgate.json，/admin/reload 10:47:46 生效，进程未重启）
+- channelPolicy.GM：softCooldownSeconds 60→15、busyCooldownSeconds 20→10。
+- 备份 zgate.json.bak-prefer38-20261111-104746。
+
+### 复核到的既有行为（纠正此前误判）
+- 串行链 `at == nil` → `inPlace429` 恒 true → 429 会先退避 700ms 重试同跳一次，与 rateLimitBackoffMs=-1 无关。
+- 500 是唯一「不重试也不换跳」的 5xx：chainAccept default 返回 true，500 原样透给客户端，同时触发 soft 冷却。
+- 504 走常量 timeoutCooldown = 5min，不可配 —— 3.8 一次上游 504 就等于五分钟强制降级，是残留最大一处。
+
+### 文档
+- docs/ROUTING-POLICY.md：§8 GM 行改 soft 15、§3 表 GM busy 10，新增 §8.2「3.8 优先的冷却账」含五档冷却表与 429/500 两处更正。
+
+### 待换版
+- timeoutCooldown 可配化（channelPolicy.timeoutCooldownSeconds，缺省 300 保持兼容）；
+- 500 改「同跳重试一次再换跳」；
+- 兜底链 7 跳 → 3 跳（3.8 → 3.7 → 3.6），按次计费下最坏 7 次计费且后四个模型更弱。
+
+## 2026-11-11 11:06 `3.8 优先` 收尾批次（预算 / 重试 / 链长 / 观测）
+
+### 口径
+- 用户 m02571「你看着来然后收尾我换版本」：授权自定落地项，产出候选二进制，由用户自己换版（会话不启停网关）。
+
+### 代码（gateways/zgate，网关进程未动）
+- 新增 `internal/router/hop_stats.go`：每跳 try/ok/busy/e5xx/silent/no_first_block 计数（键 `Channel|Upstream|Proxy`），`/health.hops` 暴露。此前完全看不到「3.8 最近到底行不行」。
+- `channelPolicy` 新增两键：`timeoutCooldownSeconds`（0=沿用常量 5min、正数=该秒数、负数=不冷却）与 `retry500Once`（500 时同跳重试一次，间隔 800ms，第二次才透传）。
+- 504 冷却改按渠道取值（`coolBridgeFailure` 与 chat accept 两处）；500 重试分支自己补 `hopE5xx` 埋点，否则该路径漏记。
+
+### 配置
+- `gateways/zgate/zgate.json` GM 段增 `timeoutCooldownSeconds: 20` 与 `retry500Once: true`（备份 `zgate.json.bak-500retry-20261111-110328`）。
+- 别名链 Gemini-AIS 7 跳 → 3 跳：改生成器 `tools/model_alias.py` 的 `CHAIN_CAP`，`--apply` 落盘（备份 `model-alias-map.json.bak-chaincap-20261111030216`）；后四跳记 `dropped_hops`，仍在 `legacy_ids` 里，老会话点名 `ais-gemini-3.5-flash` 不 404。其余 19 个模型链未变，legacy 仍 73 条。
+
+### 门禁
+| 项 | 结果 |
+| --- | --- |
+| go build / vet / test ./... | EXIT 0（router cached、supervisor 10.496s）|
+| python unittest discover | Ran 124 tests OK |
+| tools/check-project.py | 8 项通过 |
+| tools/check-docs.py | 44 篇文档通过 |
+
+### 待换版
+- 候选二进制 `gateways/zgate/zgate.candidate.exe`；换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`，会话不自动重启（自身流量经过 7871）。
+- 换版后待看：`/health.hops` 是否开始累积、`timeoutCooldownSeconds` 是否让 504 冷却从 5min 降到 20s、500 是否只重试一次。
+
 [[TASK_ALL_DONE]]
