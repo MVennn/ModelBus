@@ -9,7 +9,7 @@
 > **2026-10-28 起为三组**（主力 / 免费 / 省钱）：高耗组已删除，只收 `MAIN_IDS`
 > 与 `LOW_PICKS` 里的模型，其余超价模型不收录。下文出现的「四组」是 10-23 的历史口径。
 >
-> **2026-10-23 起**：ZCode 统一为四组（主力 / 免费 / 低耗 / 高耗），最终写入者是
+> **2026-10-23（历史口径，10-28 已并为三组）**：当时统一为四组（主力 / 免费 / 低耗 / 高耗），最终写入者是
 > `tools/model_alias.py`。旧的 Go / WorkBuddy / Qoder sync 只作数据采集；日常顺序是
 > `arena_leaderboard.py --refresh --write` → `model_probe.py` →
 > `model_alias.py --probe-file … --apply`。命名/积分规则见
@@ -126,8 +126,8 @@ curl -s http://127.0.0.1:7863/panel/api/models \
 | 已配置模型体检 | 跟上面同一次 | 同上（默认会体检；`--no-existing` 可跳过）。地区受限型号直连 403 会先经机场复测，机场也不通才移除（[PITFALLS.md](PITFALLS.md) §35） |
 | 外部榜单 → 主力候选 | **每天一次**（随 08:00 / 22:00 与工作日时段） | `python tools/arena_leaderboard.py --refresh --write` |
 | 候选变化 → 重写分组 | 随上一步；候选没变脚本会跳过 | `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply` |
-| WorkBuddy 可用性复探 | **换套餐 / 换账号池后**才需要全量重探 | `python providers/workbuddy/workbuddy_probe_zcode.py --sleep 20` |
-| 某个模型单独复探 | 按需 | `python providers/workbuddy/workbuddy_probe_zcode.py --only <前缀> --sleep 20 --force` |
+| WorkBuddy 可用性复探 | **换套餐 / 换账号池后**才需要全量重探 | `python providers/workbuddy/workbuddy_probe.py --sleep 20` |
+| 某个模型单独复探 | 按需 | `python providers/workbuddy/workbuddy_probe.py --only <前缀> --sleep 20 --force` |
 
 **不要**把全量探测挂成高频定时任务 —— 探测会消耗额度，也会触发上游限流。
 榜单接口不消耗本仓额度，可以随时 `--refresh` 看排名；`--apply` 只在候选集合或规则
@@ -148,10 +148,10 @@ curl -s http://127.0.0.1:7863/panel/api/models \
 > 池子大的供应商可以放宽，但**先小批量试**（比如 `--only <前缀>` 跑几个），
 > 看有没有 `no_healthy_account` 这类症状再定间隔。
 
-### 2.3 探测必须用 ZCode 真实 body
+### 2.3 探测必须用宿主生效请求体
 
-WorkBuddy 侧**只能用** `workbuddy_probe_zcode.py`（它先调 `zcode_effective_body.js`
-算出 ZCode 真实会发的 body，失败再退 slim variant）。
+WorkBuddy 侧**只能用** `workbuddy_probe.py`（它先调 `effective_body.js`
+算出宿主生效请求体，失败再退 slim variant）。
 裸 body 探测的结果**不可信** —— 网关会把 ZCode 注入的思考字段原样转发给上游，
 上游不认就 400。机制见 [PITFALLS.md](PITFALLS.md) §2。
 
@@ -186,8 +186,8 @@ WorkBuddy 侧**只能用** `workbuddy_probe_zcode.py`（它先调 `zcode_effecti
 | 脚本 | 备份文件名 | 写入方式 |
 |---|---|---|
 | `go_model_sync.py --apply` | `provider_config.json.bak-gosync-<时间戳>` | 写 `.tmp` → 校验 JSON → `os.replace` 原子替换 |
-| `workbuddy_zcode_sync.py --apply` | `provider_config.json.bak-wbproxy-<时间戳>` | 同上（`.tmp-wbproxy` → `os.replace`） |
-| `providers/qoder/qoder_zcode_sync.py --apply` | `provider_config.json.bak-qoder-merge-<时间戳>`（`--separate` 为 `.bak-qoder-<时间戳>`） | 同上（`.tmp-qoder` → `os.replace`） |
+| `workbuddy_sync.py --apply` | `provider_config.json.bak-wbproxy-<时间戳>` | 同上（`.tmp-wbproxy` → `os.replace`） |
+| `providers/qoder/qoder_sync.py --apply` | `provider_config.json.bak-qoder-merge-<时间戳>`（`--separate` 为 `.bak-qoder-<时间戳>`） | 同上（`.tmp-qoder` → `os.replace`） |
 | `tools/model_alias.py --apply` | `provider_config.json.bak-alias-<时间戳>` | 同上（`.tmp-alias` → `os.replace`） |
 | `tools/dsh_sync.py --apply`（通常由 `model_alias.py --apply` 自动调用） | `cordis.patch.yml.bak-dshsync-<时间戳>`、`.credentials.yaml.bak-dshsync-<时间戳>` | 只替换 DSH profile 的 `llm-pi-ai` 段；写临时文件后 `os.replace` |
 
@@ -242,7 +242,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 | 周期 | 动作 |
 |---|---|
-| **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_zcode_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_zcode_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply` → `model_stream_check.py --changed --soft`（④ 尾，带 `-Soft` 不阻断流水线；只测新增 / 档位变更 / 待复查，见 [MODEL-STREAM.md](MODEL-STREAM.md)）；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
+| **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply` → `model_stream_check.py --changed --soft`（④ 尾，带 `-Soft` 不阻断流水线；只测新增 / 档位变更 / 待复查，见 [MODEL-STREAM.md](MODEL-STREAM.md)）；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
 | **每天（可选，全量体检）** | `python tools/model_probe.py` → `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；定时任务不跑全量 probe，各 sync 自带定向探测。规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6 |
 | **峰谷价切换** | 不额外注册 08:00 / 22:00 峰谷任务：`--slot auto` 在每天 12:00 运行时按当前时刻取价，下一次同步自然纠正（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1 与「现行自动切换」段） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
@@ -268,7 +268,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 4 | ~~根 `LICENSE` 文件未创建~~ **已修** | 仓库根已有 MIT 全文（见 [LICENSE](../LICENSE)），不再只有 `README.md` 里的一句话 | [CHANGELOG.md](../CHANGELOG.md) 「待补」 |
 | 5 | ~~`docs/VERSIONING.md` 未创建~~ **已修** | 版本晋升规则有独立正本 [VERSIONING.md](VERSIONING.md)，不再暂以 `CHANGELOG.md` 头部为正本 | [VERSIONING.md](VERSIONING.md) §1–§2 |
 | 6 | ~~`go_model_sync.py` 的**体检**把全部已配置模型都探向 OpenCode-Go~~ **已修** | 体检按 id 前缀分流：`cn:*` / `global:*` 跳过（由统一路由供给），不再每天刷 18 条假异常 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
-| 7 | ~~`workbuddy_zcode_sync.py` 的 `rate_of` 认不出 `credits` 为空的免费条目~~ **已修** | 改为优先信任价格表归一化的 `eff_rate` / `list_rate`（免费 `-f` 条目为 0.0），缺失才回退原始串；`cn:hy4-preview-f` / `global:hy4-preview-f` 已收进免代档 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
+| 7 | ~~`workbuddy_sync.py` 的 `rate_of` 认不出 `credits` 为空的免费条目~~ **已修** | 改为优先信任价格表归一化的 `eff_rate` / `list_rate`（免费 `-f` 条目为 0.0），缺失才回退原始串；`cn:hy4-preview-f` / `global:hy4-preview-f` 已收进免代档 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
 | 8 | ~~探测失败的已配置模型只打 ⚠、不清理~~ **已修** | 落实「跑不通即清、复通即加回」：Go 侧对 400/402/404/410/5xx 直接 `prune_model`（仅豁免 401/429）；WorkBuddy 侧 blocked/unavailable 亦移除 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §13 |
 | 9 | ~~Go 体检只走直连，把地区受限型号当死模型删掉~~ **已修（2026-11-03）** | 探测遇到地区 403 标记先经 `AIRPORT_PROXY` 复测，机场也不通才移除；报告标 `⇄` / `[经机场]`。Beam / GPT-6-Luna / Muse-Spark1.3 已恢复 | [PITFALLS.md](PITFALLS.md) §35 |
 
@@ -403,7 +403,7 @@ WorkBuddy / Qoder 两个上游仍是**独立 clone**，整目录被主仓 `.giti
 ### 8.5 Qoder（qoder2api-hub，8790）
 
 Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒），
-`qoder:` 模型经 7871 分流；ZCode 侧没有独立 `qoder` provider。
+`qoder:` 模型经 7871 分流；兼容投影侧没有独立 `qoder` provider。
 
 | 场景 | 命令 |
 |---|---|
@@ -414,7 +414,7 @@ Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒）�
 | 签到状态 | `gateways/upstream/qoder/accounts/scheduler/state.json` |
 | 每日同步 | `python tools/model_probe.py`（可加 `--group 免费`）→ `python tools/model_alias.py --slot auto --probe-file ~/.zcode/v2/model_probe.json --apply`；Qoder 显示名为 `Q/积分/型号` |
 
-> Qoder 的专用 `qoder_probe_zcode.py` / `qoder_zcode_sync.py` 现在只作数据采集与兼容；
+> Qoder 的专用 `qoder_probe.py` / `qoder_sync.py` 现在只作数据采集与兼容；
 > 统一探测用 `tools/model_probe.py`，最终写入用 `tools/model_alias.py`。
 > 账号、签到与模型细节见 [QODER.md](QODER.md)。
 

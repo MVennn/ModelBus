@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""model_caps.py —— 20 个模型的「能力字段真值」解析器 + CLI。
+"""model_caps.py —— 20 个模型的「能力字段真值」解析器 + CLI
+
+本仓以 DSH 为主宿主 + 各类 agent：本工具解析兼容投影 provider_config.json 的
+能力字段并产出 catalog/ 真源；DSH 侧由 tools/dsh_sync.py 写 cordis.patch.yml。
+third-party/zcode/ 正本与 ~/.zcode/v2/ 契约路径原样保留。
 
 问题背景
 --------
-ZCode 的模型能力（上下文窗口 / 最大输出 / 是否支持图片 / 是否支持工具调用 /
+兼容投影 provider_config.json 的模型能力（上下文窗口 / 最大输出 / 是否支持图片 / 是否支持工具调用 /
 推理档位）由几种规则共同决定：
 
 * providerSiteRules：modelMatch + apiTypeMatch + baseUrlMatch 三元组，
@@ -144,7 +148,7 @@ def is_wildcard(pattern):
 def match_rule(pattern, value, ignore_case=False):
     """复刻 matchesRule：正则 + 整串全匹配，可选忽略大小写。
 
-    空值、非字符串、非法正则一律不命中（ZCode 里非法正则会抛，这里退化为不命中）。
+    空值、非字符串、非法正则一律不命中（兼容投影引擎里非法正则会抛，这里退化为不命中）。
     """
     if pattern is None or not isinstance(value, str) or not value:
         return False
@@ -186,7 +190,7 @@ def api_type_of(protocol):
 def extract_config(cfg):
     """把一条规则的 config 摊平成「字段 → 值」。
 
-    只有**出现过的键**才会被返回，对应 ZCode overlay 的「未出现即继承」。
+    只有**出现过的键**才会被返回，对应兼容投影 overlay 的「未出现即继承」。
     显式 null 会以 None 返回，表示清空。
     """
     out = {}
@@ -213,7 +217,7 @@ def extract_config(cfg):
 
 
 def _overlay(acc, add, source, wildcard=False):
-    """按 ZCode 语义 overlay：后到覆盖先到，逐字段记录来源。
+    """按兼容投影语义 overlay：后到覆盖先到，逐字段记录来源。
 
     wildcard=True 表示该字段来自通配规则（modelMatch 为 .*），只能算「兜底默认值」，
     不能当模型专属证据 —— 上层据此把这类字段剔掉。
@@ -1018,7 +1022,7 @@ def render_diffs(diffs):
 def build_parser():
     parser = argparse.ArgumentParser(
         prog="model_caps.py",
-        description="解析并核对 ZCode 模型能力字段真值（ctx / max / img / tool / reasoning）",
+        description="解析并核对兼容投影模型能力字段真值（ctx / max / img / tool / reasoning）",
     )
     parser.add_argument("--alias-map", default=DEFAULT_ALIAS_MAP, help="model-alias-map.json 路径")
     parser.add_argument("--builtin", default=DEFAULT_BUILTIN, help="zcode-builtin.json 路径")

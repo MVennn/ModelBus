@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * Compute the exact request-body fields ZCode will send for a given model id,
+ * Compute the exact request-body fields the host will send for a given model id,
  * by replaying the engine's own rule resolution against zcode-builtin.json.
  *
  * ── 引擎语义（已对照**开源上游**逐条核对，不是从私有 bundle 反推的）────────────
@@ -33,16 +33,16 @@
  *
  * ── 输出 ────────────────────────────────────────────────────────────────
  * stdout 是 JSON：{ "<model id>": { "body": {...}, "values": [...], "level": "..." } }
- *   body / values / level 是**既有契约**（workbuddy_probe_zcode.py 依赖），
+  *   body / values / level 是**既有契约**（workbuddy_probe.py 依赖），
  *   config / matched 是新增的诊断信息，消费方忽略无妨。
  *
  * 用法：
- *   node zcode_effective_body.js <model id> [...]
- *   node zcode_effective_body.js --api-type openai-responses --base-url http://127.0.0.1:7863 <id>
+ *   node effective_body.js <model id> [...]
+ *   node effective_body.js --api-type openai-responses --base-url http://127.0.0.1:7863 <id>
  * 环境变量：
  *   ZCODE_BUILTIN   指定 zcode-builtin.json 路径（优先级最高）
- *   ZCODE_API_TYPE  请求的 api type（默认 openai-chat-completions）
- *   ZCODE_BASE_URL  请求的 base URL（provider-site 规则要靠它命中）
+ *   MB_API_TYPE   请求的 api type（默认 openai-chat-completions；旧名 ZCODE_API_TYPE 兼容）
+ *   MB_BASE_URL   请求的 base URL（provider-site 规则要靠它命中；旧名 ZCODE_BASE_URL 兼容）
  */
 const fs = require('fs');
 const os = require('os');
@@ -52,7 +52,7 @@ const HERE = __dirname;
 const REPO = path.resolve(HERE, '..');
 
 // ── 1. 找到 zcode-builtin.json ────────────────────────────────────────────
-// 顺序：环境变量 → 仓内 vendor 的开源版本 → 本机 ZCode 运行时 → 桌面版安装目录
+// 顺序：环境变量 → 仓内 vendor 的开源版本 → 本机兼容投影运行时 → 桌面版安装目录
 function findBuiltin() {
   const env = process.env.ZCODE_BUILTIN;
   if (env) {
@@ -80,7 +80,7 @@ function findBuiltin() {
     }
     if (found.length) {
       found.sort((a, b) => fs.statSync(b).mtimeMs - fs.statSync(a).mtimeMs);
-      return { path: found[0], from: `本机 ZCode 运行时（最新：${path.basename(path.dirname(found[0]))}）` };
+      return { path: found[0], from: `本机兼容投影运行时（最新：${path.basename(path.dirname(found[0]))}）` };
     }
   }
 
@@ -91,7 +91,7 @@ function findBuiltin() {
   ];
   for (const root of appRoots) {
     const f = path.join(root, 'resources', 'config', 'provider', 'zcode-builtin.json');
-    if (fs.existsSync(f)) return { path: f, from: 'ZCode 桌面版安装目录' };
+    if (fs.existsSync(f)) return { path: f, from: '兼容投影桌面版安装目录' };
   }
   throw new Error(
     '找不到 zcode-builtin.json。已尝试：环境变量、仓内 third-party/zcode/、' +
@@ -174,7 +174,7 @@ function evalMap(expr, level, maxTokens) {
 }
 
 // ── 5b. 用户 providerModelRules（provider_config.json）──────────────
-// The builtin file only contains ZCode's shipped rules. Per-model overrides
+// The builtin file only contains the compatibility projection's shipped rules. Per-model overrides
 // written by the sync scripts live in provider_config.json and are applied
 // last by the engine, so append them after the builtin rules.
 function loadUserProviderRules() {
@@ -224,17 +224,17 @@ function parseArgs(argv) {
 
 const opts = parseArgs(process.argv.slice(2));
 if (!opts.ids.length) {
-  console.error('usage: node zcode_effective_body.js [--api-type T] [--base-url U] <model id> [...]');
+  console.error('usage: node effective_body.js [--api-type T] [--base-url U] <model id> [...]');
   process.exit(2);
 }
 
-const API_TYPE = opts.apiType || process.env.ZCODE_API_TYPE || 'openai-chat-completions';
-const BASE_URL = opts.baseUrl || process.env.ZCODE_BASE_URL || undefined;
+const API_TYPE = opts.apiType || process.env.MB_API_TYPE || process.env.ZCODE_API_TYPE || 'openai-chat-completions';
+const BASE_URL = opts.baseUrl || process.env.MB_BASE_URL || process.env.ZCODE_BASE_URL || undefined;
 // maxOutputTokens 是 map 表达式作用域里的第二个自由变量。
 // 它代表**调用方**请求时带的 max output tokens —— 探测脚本会把自己的取值传进来，
 // 这样 `{'max_completion_tokens': maxOutputTokens}` 求出来就是调用方要的那个数，
 // 而不是脚本里写死的常量。
-const MAX_TOKENS = opts.maxTokens || Number(process.env.ZCODE_MAX_OUTPUT_TOKENS) || 1024;
+const MAX_TOKENS = opts.maxTokens || Number(process.env.MB_MAX_OUTPUT_TOKENS || process.env.ZCODE_MAX_OUTPUT_TOKENS) || 1024;
 
 const { path: builtinPath, from: builtinFrom } = findBuiltin();
 const raw = JSON.parse(fs.readFileSync(builtinPath, 'utf8'));
@@ -244,7 +244,7 @@ if (opts.verbose) {
   console.error(`规则总数: ${rules.length}  apiType=${API_TYPE}  baseUrl=${BASE_URL ?? '(无)'}`);
 }
 
-// ZCode 的默认推理档位 = 解析出的 values 列表里的**最后一档**：
+// 兼容投影引擎的默认推理档位 = 解析出的 values 列表里的**最后一档**：
 // 引擎 completeNewModelSelection 取 `values.at(-1)`，`ListModels` 的
 // defaultReasoningLevel 实测同值（low/high/max → max，low/high → high）。
 // 2026-11-03 之前这里按 "enabled 优先 / 再 high / 再第一个" 猜，与引擎不符。

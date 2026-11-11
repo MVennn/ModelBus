@@ -40,7 +40,7 @@ def probe(mid, timeout=60):
         headers={
             "Authorization": f"Bearer {_key()}",
             "Content-Type": "application/json",
-            "User-Agent": "zcode-probe/1.0",
+            "User-Agent": "modelbus-probe/1.0",
             "x-opencode-session": f"probe-{mid}",
             "Accept": "text/event-stream",
         },

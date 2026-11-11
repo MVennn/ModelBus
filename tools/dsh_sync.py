@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-"""Project ZCode's final model groups into DeepSeekRuntime's llm-pi-ai profile.
+"""Project the host's final model groups into DeepSeekRuntime's llm-pi-ai profile.
 
-The daily model sync writes ``~/.zcode/v2/provider_config.json`` through
+The daily model sync writes the compatibility projection ``~/.zcode/v2/provider_config.json`` through
 ``tools/model_alias.py``. This tool reads that final state and rewrites only
 the ``llm-pi-ai`` entry in ``~/.dsh/profiles/<profile>/cordis.patch.yml``:
 
-* every ZCode provider becomes a DSH route (``opencode-go-chat`` -> ``zcode-main``,
+* every provider in the active source becomes a DSH route (``opencode-go-chat`` -> ``zcode-main``,
   ``...-free`` -> ``zcode-free``, ``...-fast`` -> ``zcode-saver``);
 * model order, context window, output cap, image input and reasoning levels are
-  copied from the resolved ZCode metadata (``zcode_effective_body.js``);
-* ZCode models whose effective ``reasoningLevel.map`` is ``{}`` deliberately
+  copied from the resolved host metadata (``effective_body.js``);
+* Models whose effective ``reasoningLevel.map`` is ``{}`` deliberately
   get no ``reasoningEfforts``, because DSH would otherwise send a
   ``reasoning_effort`` that these upstreams reject;
 * all other patch entries and non-``zcode-*`` DSH providers are preserved;
@@ -18,16 +18,20 @@ the ``llm-pi-ai`` entry in ``~/.dsh/profiles/<profile>/cordis.patch.yml``:
   so the daily 12:00 sync regenerates it instead of wiping a hand edit.
 
 The patch never contains a key. The gateway key is written to DSH's managed
-credential store under ``ZCODE_GATEWAY_KEY`` (read from ZCode's provider config).
+credential store under ``ZCODE_GATEWAY_KEY`` (read from the active source's provider config).
 
 Usage
 -----
     python tools/dsh_sync.py            # dry run, print the projected routes
     python tools/dsh_sync.py --apply    # backup + write patch and credential ref
     python tools/dsh_sync.py --check    # exit 1 when DSH is out of date
+    python tools/dsh_sync.py --export-inventory ~/.dsh/profiles/desktop/modelbus-inventory.json
+    python tools/dsh_sync.py --source dsh               # DSH 清单 + catalog 能力真值
+    python tools/dsh_sync.py --source dsh --apply       # 按 DSH 真源写 patch
+    # --source compat（默认）与改造前逐字节一致；--source dsh 不读 ~/.zcode/v2/。
 
 The tool only touches files under ``$DSH_HOME`` (default ``~/.dsh``); it does
-not modify the repository or ZCode's config. DSH hot-reloads the profile patch,
+not modify the repository or the compatibility projection's config. DSH hot-reloads the profile patch,
 so no restart is needed after a write.
 """
 from __future__ import annotations
@@ -57,7 +61,7 @@ for _stream in (sys.stdout, sys.stderr):
 
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent
-EFFECTIVE_SCRIPT = REPO / "providers" / "workbuddy" / "zcode_effective_body.js"
+EFFECTIVE_SCRIPT = REPO / "providers" / "workbuddy" / "effective_body.js"
 ZCODE_CONFIG = Path(
     os.environ.get(
         "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE",
@@ -71,6 +75,10 @@ DEFAULT_BASE = "http://127.0.0.1:7871/v1"
 DSH_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
 # 上一轮投影到 DSH 的型号清单（只用来报「这次少了谁」，不是配置来源）
 DSH_LEDGER = DSH_HOME / "profiles" / DSH_PROFILE / "zcode-model-ledger.json"
+# DSH 原生真源：DSH 侧清单 + catalog 能力真值（--source dsh，默认仍走 compat）
+CATALOG = REPO / "catalog" / "model_caps.json"
+DSH_INVENTORY = DSH_HOME / "profiles" / DSH_PROFILE / "modelbus-inventory.json"
+INVENTORY_SCHEMA = "modelbus-inventory/v1"
 # 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
 _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 KNOWN_PROVIDER_IDS = {
@@ -202,7 +210,7 @@ def _effective_metadata(model_ids: list[str]) -> dict[str, Any]:
         return {}
     node = shutil.which("node")
     if not node or not EFFECTIVE_SCRIPT.exists():
-        print("WARN: 找不到 node 或 zcode_effective_body.js，改用 provider_config 元数据", file=sys.stderr)
+        print("WARN: 找不到 node 或 effective_body.js，改用 provider_config 元数据", file=sys.stderr)
         return {}
     try:
         proc = subprocess.run(
@@ -215,16 +223,16 @@ def _effective_metadata(model_ids: list[str]) -> dict[str, Any]:
             timeout=120,
         )
     except (OSError, subprocess.SubprocessError) as exc:
-        print(f"WARN: zcode_effective_body.js 执行失败，改用 provider_config 元数据：{exc}", file=sys.stderr)
+        print(f"WARN: effective_body.js 执行失败，改用 provider_config 元数据：{exc}", file=sys.stderr)
         return {}
     if proc.returncode != 0:
         detail = (proc.stderr or "").strip().splitlines()[-1:] or ["unknown error"]
-        print(f"WARN: zcode_effective_body.js 退出码 {proc.returncode}，改用 provider_config 元数据：{detail[0]}", file=sys.stderr)
+        print(f"WARN: effective_body.js 退出码 {proc.returncode}，改用 provider_config 元数据：{detail[0]}", file=sys.stderr)
         return {}
     try:
         data = json.loads(proc.stdout)
     except json.JSONDecodeError as exc:
-        print(f"WARN: zcode_effective_body.js 输出不是 JSON，改用 provider_config 元数据：{exc}", file=sys.stderr)
+        print(f"WARN: effective_body.js 输出不是 JSON，改用 provider_config 元数据：{exc}", file=sys.stderr)
         return {}
     return data if isinstance(data, dict) else {}
 
@@ -242,7 +250,7 @@ def _efforts_outside(values: list[Any]) -> list[str]:
 def _efforts_lost(rules: dict[tuple[str, str], dict[str, Any]], routes: dict[str, Any]) -> list[str]:
     """源头有档位、投影后却没有的模型 —— 每日同步的回归守门。
 
-    ZCode 配置是档位的唯一正本；DSH 侧只是投影。投影把一条非空档位写成空，用户
+    当前真源（compat=兼容投影配置 / dsh=catalog 能力真值）是档位的唯一正本；DSH 侧只是投影。投影把一条非空档位写成空，用户
     看到的是「模型选择器里的推理等级突然消失」，而且没有任何报错。所以这里把两边
     对一遍，漂移就返回明细，由 --check 判失败、由 --apply 打 WARN。
 
@@ -315,7 +323,7 @@ def _metadata_for(model_id: str, effective: dict[str, Any], fallback: dict[str, 
 
 
 def _reasoning(values: list[Any], map_expr: Any) -> dict[str, Any]:
-    """Map ZCode's effective reasoning rule to llm-pi-ai's schema."""
+    """Map the host's effective reasoning rule to llm-pi-ai's schema."""
     if map_expr is not None and str(map_expr).strip() == "{}":
         return {}
     clean = [str(v) for v in values if isinstance(v, str)]
@@ -429,7 +437,7 @@ class _PatchDoc:
 def _keep_efforts(routes: dict[str, Any], old_providers: dict[str, Any]) -> dict[str, Any]:
     """把现有 patch 里手写/人工调过的 reasoningEfforts 保留到新生成的路由上。
 
-    ZCode 源头的 optionSpecs 缺失或退化（map="{}"、只留开关）时，生成器只能写出
+    真源的 optionSpecs 缺失或退化（map="{}"、只留开关）时，生成器只能写出
     空档位；这些档位一旦被 --apply 抹掉，模型选择器里的推理等级就消失。规则：
       - 新路由没算出 reasoningEfforts → 沿用旧的；
       - 新路由算出了 → 以新路由为准（源头改档位时能被正确更新）。
@@ -559,25 +567,208 @@ def _route_summary(routes: dict[str, Any]) -> str:
     )
 
 
+
+# --- DSH 原生真源（--source dsh）-------------------------------------------
+# 默认 --source compat 与改造前逐字节一致：仍读兼容投影最终态。
+# --source dsh 把分组/型号/顺序真源迁到 DSH 侧清单，能力真值来自 catalog，
+# 各类 agent（会话 / 子代理 / headless / 服务插件）不再依赖 ZCode 客户端配置。
+
+def _catalog_capabilities() -> dict[str, dict[str, Any]]:
+    """catalog/model_caps.json -> {display: 归一化能力字段}。
+
+    catalog 是各类 agent 共用的唯一能力真源；这里只做字段改名，绝不拿它的
+    键集合去裁现网型号全集（少一条就会让 DSH 会话硬失败）。
+    """
+    try:
+        doc = json.loads(CATALOG.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for row in doc.get("models") or []:
+        if not isinstance(row, dict) or not row.get("display"):
+            continue
+        caps: dict[str, Any] = {}
+        if row.get("context_window") is not None:
+            caps["contextWindow"] = row["context_window"]
+        if row.get("max_output_tokens") is not None:
+            caps["maxTokens"] = row["max_output_tokens"]
+        if row.get("supports_image") is not None:
+            caps["supportsImage"] = bool(row["supports_image"])
+        if row.get("reasoning_values") is not None:
+            caps["reasoningValues"] = row["reasoning_values"]
+        if row.get("reasoning_map") is not None:
+            caps["reasoningMap"] = row["reasoning_map"]
+        out[str(row["display"])] = caps
+    return out
+
+
+def _read_inventory(path: Path) -> dict[str, Any]:
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError as exc:
+        raise DshSyncError(f"找不到 DSH 清单：{path}（先用 --export-inventory 导出）") from exc
+    except json.JSONDecodeError as exc:
+        raise DshSyncError(f"DSH 清单不是合法 JSON：{path}（{exc}）") from exc
+    if not isinstance(doc, dict) or doc.get("schema") != INVENTORY_SCHEMA:
+        raise DshSyncError(f"DSH 清单 schema 不是 {INVENTORY_SCHEMA}：{path}")
+    return doc
+
+
+def _dsh_providers(inv: dict[str, Any]) -> list[dict[str, Any]]:
+    """DSH 侧清单 -> providers。型号全集 / 顺序 / baseUrl 全来自 DSH 真源。"""
+    rows = inv.get("providers")
+    if not isinstance(rows, list) or not rows:
+        raise DshSyncError("DSH 清单里没有 providers")
+    providers: list[dict[str, Any]] = []
+    for row in rows:
+        if not isinstance(row, dict) or not row.get("providerId"):
+            raise DshSyncError("DSH 清单 providers 条目缺少 providerId")
+        ids = [str(m) for m in row.get("modelIds") or [] if str(m).strip()]
+        if not ids:
+            continue
+        providers.append(
+            {
+                "providerId": str(row["providerId"]),
+                "providerName": row.get("providerName") or str(row["providerId"]),
+                "modelIds": ids,
+                "baseUrl": row.get("baseUrl") or DEFAULT_BASE,
+                "apiKey": "",
+            }
+        )
+    if not providers:
+        raise DshSyncError("DSH 清单里没有任何含模型的 provider")
+    return providers
+
+
+def _inventory_rules(inv: dict[str, Any]) -> dict[tuple[str, str], dict[str, Any]]:
+    out: dict[tuple[str, str], dict[str, Any]] = {}
+    for key, value in (inv.get("modelRules") or {}).items():
+        pid, sep, mid = str(key).partition("::")
+        if sep and isinstance(value, dict):
+            out[(pid, mid)] = value
+    return out
+
+
+def _inventory_effective(inv: dict[str, Any]) -> dict[str, Any]:
+    """清单能力快照；声明了 catalog 真源时，只覆盖 catalog 命中的型号。"""
+    effective = {
+        str(k): v for k, v in (inv.get("effective") or {}).items() if isinstance(v, dict)
+    }
+    if inv.get("capabilities_source") != "catalog/model_caps.json":
+        return effective
+    for model_id, cap in _catalog_capabilities().items():
+        if model_id not in effective:
+            continue
+        cfg = dict(effective[model_id].get("config") or {})
+        props = dict(cfg.get("properties") or {})
+        opts = dict(cfg.get("optionSpecs") or {})
+        inp = dict(props.get("inputFormat") or {})
+        rl = dict(opts.get("reasoningLevel") or {})
+        if "contextWindow" in cap:
+            props["contextWindow"] = cap["contextWindow"]
+        if "maxTokens" in cap:
+            opts["maxOutputTokens"] = dict(opts.get("maxOutputTokens") or {})
+            opts["maxOutputTokens"]["max"] = cap["maxTokens"]
+        if "supportsImage" in cap:
+            inp["supportsImage"] = cap["supportsImage"]
+            props["inputFormat"] = inp
+        if "reasoningValues" in cap:
+            rl["values"] = cap["reasoningValues"]
+        if "reasoningMap" in cap:
+            rl["map"] = cap["reasoningMap"]
+        opts["reasoningLevel"] = rl
+        cfg["properties"] = props
+        cfg["optionSpecs"] = opts
+        effective[model_id] = {**effective[model_id], "config": cfg}
+    return effective
+
+
+def _existing_credential(path: Path) -> str | None:
+    """DSH 凭据库里已有的网关 key；dsh 源不读 ZCode 配置也能续用。"""
+    try:
+        parsed = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (FileNotFoundError, yaml.YAMLError):
+        return None
+    refs = parsed.get("refs") if isinstance(parsed, dict) else None
+    value = refs.get(API_KEY_ENV) if isinstance(refs, dict) else None
+    return str(value) if value else None
+
+
+def _export_inventory(
+    cfg: dict[str, Any], path: Path, catalog_caps: bool = True
+) -> dict[str, Any]:
+    """把 compat 最终态导出成 DSH 侧清单：型号全集不缩水，能力真值取 catalog。"""
+    providers = _zcode_providers(cfg)
+    ids = list(dict.fromkeys(mid for p in providers for mid in p["modelIds"]))
+    inv: dict[str, Any] = {
+        "schema": INVENTORY_SCHEMA,
+        "generated_by": "tools/dsh_sync.py --export-inventory",
+        "source": "dsh",
+        "providers": [
+            {k: p[k] for k in ("providerId", "providerName", "modelIds", "baseUrl")}
+            for p in providers
+        ],
+        "modelRules": {
+            f"{pid}::{mid}": rule for (pid, mid), rule in _model_rules(cfg).items()
+        },
+        "effective": _effective_metadata(ids),
+    }
+    if catalog_caps:
+        inv["capabilities_source"] = "catalog/model_caps.json"
+        inv["effective"] = _inventory_effective(inv)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(inv, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    return inv
+
+
+def _load_source(
+    source: str, config_path: Path, inventory_path: Path
+) -> tuple[list[dict[str, Any]], dict[str, Any], dict[tuple[str, str], dict[str, Any]]]:
+    """compat = 改造前的唯一路径；dsh = DSH 清单 + catalog 能力真值。"""
+    if source == "compat":
+        cfg = _read_json(config_path)
+        providers = _zcode_providers(cfg)
+        ids = list(dict.fromkeys(mid for p in providers for mid in p["modelIds"]))
+        return providers, _effective_metadata(ids), _model_rules(cfg)
+    if source == "dsh":
+        inv = _read_inventory(inventory_path)
+        return _dsh_providers(inv), _inventory_effective(inv), _inventory_rules(inv)
+    raise DshSyncError(f"未知 --source：{source}")
+
+
 def _main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="同步 ZCode 最终模型到 DeepSeekRuntime llm-pi-ai")
+    parser = argparse.ArgumentParser(description="同步宿主模型分组到 DeepSeekRuntime llm-pi-ai（默认 compat 行为不变）")
     mode = parser.add_mutually_exclusive_group()
     mode.add_argument("--apply", action="store_true", help="备份并写入 DSH patch 与凭据引用")
     mode.add_argument("--check", action="store_true", help="只检测漂移；有漂移退出码 1")
     parser.add_argument("--dsh-home", type=Path, default=DSH_HOME, help="DSH_HOME（默认 ~/.dsh）")
     parser.add_argument("--profile", default=DSH_PROFILE, help="DSH profile（默认 desktop）")
-    parser.add_argument("--config", type=Path, default=ZCODE_CONFIG, help="ZCode provider_config.json")
+    parser.add_argument("--config", type=Path, default=ZCODE_CONFIG, help="compat 源：provider_config.json")
+    parser.add_argument("--source", choices=("compat", "dsh"), default="compat",
+                        help="真源：compat=兼容投影最终态（默认，行为不变）；dsh=DSH 清单 + catalog 能力真值")
+    parser.add_argument("--inventory", type=Path, default=DSH_INVENTORY,
+                        help="DSH 侧 modelbus-inventory.json（--source dsh）")
+    parser.add_argument("--export-inventory", type=Path, default=None,
+                        help="从 compat 最终态导出 DSH 清单后退出（不写 patch / 凭据）")
+    parser.add_argument("--no-catalog-caps", action="store_true",
+                        help="导出时不把 catalog 能力真值烘进清单（行为等价对照用）")
     args = parser.parse_args(argv)
+
+    if args.export_inventory is not None:
+        cfg = _read_json(args.config)
+        inv = _export_inventory(cfg, args.export_inventory,
+                                catalog_caps=not args.no_catalog_caps)
+        rows = inv.get("providers") or []
+        model_count = sum(len(p.get("modelIds") or []) for p in rows)
+        print(f"已导出 DSH 清单：{args.export_inventory}")
+        print(f"provider {len(rows)} 个 / 型号 {model_count} 个")
+        return 0
 
     patch_path = args.dsh_home / "profiles" / args.profile / "cordis.patch.yml"
     if not patch_path.exists():
         raise DshSyncError(f"找不到 DSH profile patch：{patch_path}")
 
-    cfg = _read_json(args.config)
-    providers = _zcode_providers(cfg)
-    model_ids = list(dict.fromkeys(mid for p in providers for mid in p["modelIds"]))
-    effective = _effective_metadata(model_ids)
-    rules = _model_rules(cfg)
+    providers, effective, rules = _load_source(args.source, args.config, args.inventory)
     routes: dict[str, Any] = {}
     for provider in providers:
         dsh_id, route = _build_route(provider, effective, rules)
@@ -587,12 +778,22 @@ def _main(argv: list[str] | None = None) -> int:
 
     old_text = patch_path.read_text(encoding="utf-8")
     new_text, changed, item = _merge_patch(old_text, routes)
-    patch_key = providers[0]["apiKey"]
-    key_changed, cred_backup = _credentials_state(
-        args.dsh_home / ".credentials.yaml", patch_key, args.apply
+    patch_key = (
+        providers[0]["apiKey"]
+        if args.source == "compat"
+        else (os.environ.get(API_KEY_ENV)
+              or _existing_credential(args.dsh_home / ".credentials.yaml") or "")
     )
+    # --source dsh 不带 apiKey（凭据走 env / DSH 凭据库）；check / dry-run 不该
+    # 因凭据库缺 key 直接 exit 2。compat 默认路径行为逐字不变。
+    if args.source == "dsh" and not patch_key and not args.apply:
+        key_changed, cred_backup = False, None
+    else:
+        key_changed, cred_backup = _credentials_state(
+            args.dsh_home / ".credentials.yaml", patch_key, args.apply
+        )
 
-    print(f"ZCode      : {len(providers)} 个 provider / {sum(len(p['modelIds']) for p in providers)} 个模型")
+    print(f"Host/Compat: {len(providers)} 个 provider / {sum(len(p['modelIds']) for p in providers)} 个模型")
     print(f"DSH 路由   : {_route_summary(routes)}")
     print(f"patch      : {patch_path}")
     print(f"模型表     : {'有变化' if changed else '无变化'}；凭据引用：{'有变化' if key_changed else '无变化'}")

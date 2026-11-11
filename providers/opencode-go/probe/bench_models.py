@@ -66,7 +66,7 @@ def req_chat(mid, msgs, max_tokens, tools=None, stream=False):
     if tools: body["tools"] = tools
     r = urllib.request.Request(BASE + "/chat/completions", data=json.dumps(body).encode(),
         method="POST", headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-        "User-Agent": "zcode-bench/1.0", "x-opencode-session": f"b-{mid}"})
+        "User-Agent": "modelbus-bench/1.0", "x-opencode-session": f"b-{mid}"})
     return r
 
 def req_messages(mid, msgs, max_tokens, tools=None):
@@ -77,7 +77,7 @@ def req_messages(mid, msgs, max_tokens, tools=None):
                              "required": ["path"]}}]
     r = urllib.request.Request(BASE + "/messages", data=json.dumps(body).encode(),
         method="POST", headers={"x-api-key": _key(), "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json", "User-Agent": "zcode-bench/1.0",
+        "Content-Type": "application/json", "User-Agent": "modelbus-bench/1.0",
         "x-opencode-session": f"b-{mid}"})
     return r
 
@@ -90,7 +90,7 @@ def req_responses(mid, text, max_tokens, tools=None):
                            "required": ["path"]}}]
     r = urllib.request.Request(BASE + "/responses", data=json.dumps(body).encode(),
         method="POST", headers={"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-        "User-Agent": "zcode-bench/1.0", "x-opencode-session": f"b-{mid}"})
+        "User-Agent": "modelbus-bench/1.0", "x-opencode-session": f"b-{mid}"})
     return r
 
 def call(mid, proto, msgs_or_text, max_tokens, tools=None):

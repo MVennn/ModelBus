@@ -88,62 +88,6 @@
       }
     },
     {
-      "display": "Gemini-3.8-Flash",
-      "base_model": "[福利]gemini-3.8-flash",
-      "channel": "HJ",
-      "api_type": "openai-chat-completions",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "supports_tool_call": true,
-      "supports_image": true,
-      "reasoning_values": [
-        "disabled",
-        "low",
-        "medium",
-        "high"
-      ],
-      "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}",
-      "source": "current",
-      "confidence": "low",
-      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 evidence:vendor-doc+inline-png-probe",
-      "provenance": {
-        "field_sources": {
-          "context_window": "current",
-          "max_output_tokens": "current",
-          "supports_tool_call": "current",
-          "supports_image": "current",
-          "reasoning_values": "current",
-          "reasoning_map": "current"
-        },
-        "conflicts": [],
-        "hops": [
-          {
-            "priority": 0,
-            "main": true,
-            "channel": "HJ",
-            "base": "https://api.gemai.cc/v1",
-            "protocol": "chat",
-            "api_type": "openai-chat-completions",
-            "site_hit_indexes": [],
-            "evidence": []
-          }
-        ],
-        "current": {
-          "context_window": 1048576,
-          "supports_tool_call": true,
-          "supports_image": true,
-          "max_output_tokens": 65536,
-          "reasoning_values": [
-            "disabled",
-            "low",
-            "medium",
-            "high"
-          ],
-          "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}"
-        }
-      }
-    },
-    {
       "display": "Gemini-AIS",
       "base_model": "ais-gemini-3-flash-preview",
       "channel": "GM",

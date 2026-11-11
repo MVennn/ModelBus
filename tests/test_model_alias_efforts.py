@@ -88,10 +88,11 @@ class InheritEffortsTest(unittest.TestCase):
         self.assertNotIn("reasoningLevel", picked["Brand-New"].get("optionSpecs") or {})
 
     def test_decorative_channel_drops_unusable_levels(self):
-        # 哈基米前缀（HJ）不回写档位：上游根本发不出这个字段，留着只会骗人
+        # gem 前缀（Gemini-AIS / GM）不在档位渠道表里、map 又是空的：不回写档位，
+        # 免得 GUI 摆一个永远发不出去的下拉
         cfg = _cfg(_rule("Gemini-AIS", ["disabled", "low"]))
-        entries = [_entry("Gemini-AIS", "[福利]gemini-3.8-flash", "gemini-3.8-flash",
-                          channel="HJ", protocol="messages")]
+        entries = [_entry("Gemini-AIS", "ais-gemini-3.8-flash", "ais-gemini-3.8-flash",
+                          channel="GM", protocol="messages")]
         old = {str(r["modelId"]): r["config"] for r in cfg["config"]["modelConfigRules"]["providerModelRules"]}
         picked = A.pick_rule_config(entries, cfg, old)
         self.assertNotIn("reasoningLevel", picked["Gemini-AIS"].get("optionSpecs") or {})
@@ -134,14 +135,14 @@ class NonChatEffortTest(unittest.TestCase):
     def test_dead_effort_is_blanked(self):
         # 既不在能力表、又没有表达式 = 空头下拉，必须去掉
         cfg = self._cfg_with(["low", "high"], "{}")
-        A._enforce_non_chat_effort(cfg, {"channel": "HJ", "protocol": "chat"})
+        A._enforce_non_chat_effort(cfg, {"channel": "GM", "protocol": "chat"})
         self.assertEqual(cfg["optionSpecs"]["reasoningLevel"], {"map": "{}"})
 
     def test_effort_is_live_needs_a_real_expression(self):
         self.assertTrue(A._effort_is_live({"channel": "WB"}, {"values": ["low"]}))
-        self.assertFalse(A._effort_is_live({"channel": "HJ"}, {"values": ["low"], "map": "{}"}))
-        self.assertFalse(A._effort_is_live({"channel": "HJ"}, {"values": ["low"]}))
-        self.assertTrue(A._effort_is_live({"channel": "HJ"}, {"values": ["low"], "map": "{a: 1}"}))
+        self.assertFalse(A._effort_is_live({"channel": "GM"}, {"values": ["low"], "map": "{}"}))
+        self.assertFalse(A._effort_is_live({"channel": "GM"}, {"values": ["low"]}))
+        self.assertTrue(A._effort_is_live({"channel": "GM"}, {"values": ["low"], "map": "{a: 1}"}))
 
 
 class DriftGateTest(unittest.TestCase):
@@ -195,7 +196,7 @@ class DriftGateSnapshotTest(unittest.TestCase):
                   for r in A.model_rules(work)}
         old_rules = {str(r["modelId"]): copy.deepcopy(r.get("config") or {})
                      for r in A.model_rules(work)}
-        A._inherit_efforts(old_rules["Beam"], {"name": "Beam", "channel": "HJ"},
+        A._inherit_efforts(old_rules["Beam"], {"name": "Beam", "channel": "GM"},
                            old_rules, [], False)
         self.assertEqual(landed["Beam"], ["low", "high"])
 

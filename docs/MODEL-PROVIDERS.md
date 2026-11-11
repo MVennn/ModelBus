@@ -34,7 +34,7 @@
 |---|---|---|---|
 | 1 | 摸清接口面 | 目录从哪个接口拿、每个模型走哪种协议、怎么计价 | §2.1 / §4.1 |
 | 2 | 取目录与价格 → **归一化成一张表** | 归一化之后分档就是纯本地计算 | [MAINTENANCE.md](MAINTENANCE.md) §1.1、§1.3 的字段表 |
-| 3 | 探测 | 必须用 **ZCode 真实请求体** + 限速 | [MAINTENANCE.md](MAINTENANCE.md) §2.2、§2.3；思考参数见 §5 |
+| 3 | 探测 | 必须用 **宿主生效请求体** + 限速 | [MAINTENANCE.md](MAINTENANCE.md) §2.2、§2.3；思考参数见 §5 |
 | 4 | 分档并写配置 | 按成本档切、档内按单价升序；只写 ZCode 配置的三个落点 | §1、§4.2 |
 
 ### 0.2 通用概念 ↔ 本仓叫法
@@ -60,13 +60,13 @@
 
 ### 0.3 不随供应商变的三件事
 
-1. **ZCode 侧的落点** —— 只有 §1 那三处，换供应商不用改；
+1. **兼容投影侧的落点** —— 只有 §1 那三处，换供应商不用改；
 2. **思考参数覆盖机制** —— `optionSpecs.reasoningLevel.map`（§5），换供应商不用改；
-3. **探测的两条铁律** —— 用 ZCode 真实 body、必须限速（限速的具体数值看对方账号池规模）。
+3. **探测的两条铁律** —— 用宿主生效请求体、必须限速（限速的具体数值看对方账号池规模）。
 
 ---
 
-## 1. ZCode 侧的关系：配置落点与写入行为
+## 1. 兼容投影侧的关系：配置落点与写入行为
 
 > **一句话**：脚本改 ZCode 的哪几处、三个同步脚本各自怎么写、写了怎么回退 —— 本节是这些口径的**正本**。
 
@@ -90,15 +90,15 @@
 | 脚本 | 默认行为 | 风险 |
 |---|---|---|
 | `providers/opencode-go/ops/go_model_sync.py --apply` | 只**追加**模型 + 备用档重排（`BACKUP_MODEL_IDS`）+ 改一个 provider 显示名（"备用"→"响应"） | 低。已有模型的**组内顺序**可能被打乱（新模型追加到组尾） |
-| `providers/workbuddy/workbuddy_zcode_sync.py --apply` | 默认**合并** WorkBuddy 模型到五个 OpenCode chat 组（历史口径）（不改 OpenCode 模型与顺序）；`--separate` 才整条替换四个 `workbuddy-*` provider | 低（统一）/ 中（分离）。统一模式只动 WorkBuddy 模型与五个 chat 组（历史口径）的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 |
-| `providers/qoder/qoder_zcode_sync.py --apply` | 默认**合并**：拉 `/v1/models`，按 `price_factor` 把 `qoder:` 前缀模型并入三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写独立 `qoder` provider；默认 `--max-price 0.8`；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流） | 低。只增删 `qoder:` 条目与（separate 模式的）`qoder` provider，不碰其它模型 |
+| `providers/workbuddy/workbuddy_sync.py --apply` | 默认**合并** WorkBuddy 模型到五个 OpenCode chat 组（历史口径）（不改 OpenCode 模型与顺序）；`--separate` 才整条替换四个 `workbuddy-*` provider | 低（统一）/ 中（分离）。统一模式只动 WorkBuddy 模型与五个 chat 组（历史口径）的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 |
+| `providers/qoder/qoder_sync.py --apply` | 默认**合并**：拉 `/v1/models`，按 `price_factor` 把 `qoder:` 前缀模型并入三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写独立 `qoder` provider；默认 `--max-price 0.8`；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流） | 低。只增删 `qoder:` 条目与（separate 模式的）`qoder` provider，不碰其它模型 |
 
 **正确姿势**：先不带 `--apply` 跑一遍，看清它要写什么，再决定。
 
 ```bash
 python providers/opencode-go/ops/go_model_sync.py            # 只出报告
-python providers/workbuddy/workbuddy_zcode_sync.py           # 只打印计划
-python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder 计划
+python providers/workbuddy/workbuddy_sync.py           # 只打印计划
+python providers/qoder/qoder_sync.py                   # 只打印 Qoder 计划
 ```
 
 三个脚本都**先备份再原子替换** `provider_config.json`（备份文件名与回退步骤见
@@ -127,7 +127,7 @@ python providers/qoder/qoder_zcode_sync.py                   # 只打印 Qoder �
 > **2026-10-21 起为统一模式**：五个 chat provider 的 `api.baseUrl` 指向
 > `gateways/zgate`（`http://127.0.0.1:7871/v1`），模型列表同时包含
 > OpenCode-Go 与 WorkBuddy；路由按 model 前缀分流。`对话` / `响应` 仍直连 OpenCode。
-> 分离模式（`workbuddy_zcode_sync.py --separate`）见 §4.2。
+> 分离模式（`workbuddy_sync.py --separate`）见 §4.2。
 >
 > **现行 ZCode 只有 3 个 chat provider**（`opencode-go-chat` / `-free` / `-fast`）：
 > Qoder / 千问 / 七牛模型都按成本并入这三组（见 §4.9）。下面的七 provider 表是历史口径。
@@ -286,7 +286,7 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
 - `对话` / `响应` 仍直连 OpenCode-Go，不经过路由。
 - 入口由 `gateways/zgate` 常驻（登录自启）；手动启动
   `gateways/zgate/zgate.exe serve`，健康检查 `GET http://127.0.0.1:7871/health`。
-- **分离模式**：`workbuddy_zcode_sync.py --separate --apply` 会重建 §4.2 的四个
+- **分离模式**：`workbuddy_sync.py --separate --apply` 会重建 §4.2 的四个
   `workbuddy-*` provider；默认（不带 `--separate`）是统一模式。
 
 ### 4.1 目录与别名
@@ -321,7 +321,7 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
 ---
 ### 4.2 分离模式：倍率与四档（`--separate`）
 
-> 以下四档只在 `workbuddy_zcode_sync.py --separate --apply` 时出现；默认统一模式
+> 以下四档只在 `workbuddy_sync.py --separate --apply` 时出现；默认统一模式
 > 不创建 `workbuddy-*`，WorkBuddy 模型并入 §4.0 的五个 chat 组（历史口径）。
 
 `credits` = 牌价，`promo_credits` = 生效价（取 `promo_credits` 优先）。
@@ -358,7 +358,7 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
    小米 MiMo → 腾讯混元 → 阶跃星辰 → 匿名/其他；
 4. 同公司内按倍率升序，同倍率按 id 字典序。
 
-排序与分价规则的正本是 `providers/workbuddy/workbuddy_zcode_sync.py` 的 `PINNED_MODEL_IDS`
+排序与分价规则的正本是 `providers/workbuddy/workbuddy_sync.py` 的 `PINNED_MODEL_IDS`
 / `VENDOR_ORDER` / `LOW_MAX` / `DEFAULT_MAX_RATE` / `BACKUP_MODEL_IDS`；改完用
 `--reorder-only --apply` 只重排、不动成员与档位，改分价阈值则重新 `--apply`；
 只搬备用档用 `--reclassify-only --apply`。
@@ -491,9 +491,9 @@ glm-5v-turbo 0.454、kimi-k3-1 0.901、gpt-5.3-codex 0.976。
 **脚本**：
 
 ```bash
-python providers/qoder/qoder_zcode_sync.py                                  # dry run
-python providers/qoder/qoder_probe_zcode.py                                 # 真实 body 探测
-python providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply
+python providers/qoder/qoder_sync.py                                  # dry run
+python providers/qoder/qoder_probe.py                                 # 真实 body 探测
+python providers/qoder/qoder_sync.py --probe-file providers/qoder/qoder_probe.json --apply
 ```
 
 ---
@@ -526,7 +526,8 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 > **一句话**：`Gemini-AIS` 显示名背后是 `ais-gemini-3.8-flash` 领头的一条同站降级链
 > （**2026-11-11 11:03 起链上只留 3 跳**：3.8 → 3.7 → 3.6；后四跳质量低一档、按次计费还白付额度，故裁掉 —— 见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8.3），
 > 靠 zgate 的「首块对冲」在几秒内出首字，失败逐级降档，不会卡在某一跳上死循环。
-> 跨站兜底（哈基米福利 3.8）已于 2026-11-10 拆成**独立模型 `Gemini-3.8-Flash`**、排在它前面，见 §4.11.5。
+> 另一家的同代跨站兜底（哈基米 3.8）2026-11-10 曾拆成独立模型，**2026-11-11 整族下线**：价目表清空、
+> 渠道与凭据保留但不再收录型号，主力组里只剩这条 AIS 链。
 
 网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
 2026-11-10 实测返回 7 个 id：`ais-gemini-3.5-flash-lite` / `ais-gemini-3.1-flash-lite` /
@@ -540,9 +541,9 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`router.go` 的 `applyHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
 | 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
 | 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
-| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七个 GM 跳同族合并成一条链；哈基米福利 3.8 已拆成独立模型 `Gemini-3.8-Flash`，同为 `zcode-main`、排在它之前） |
+| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七个 GM 跳同族合并成一条链；同代跨站兜底 2026-11-11 下线，主力组里没有第二个同代模型） |
 | 思考参数 | **未定论**。3.8/3.7 常态 503，拿不到稳定样本；3.6 上 `{"thinking":{"type":"disabled"}}` 单次首字 2.27s（对照 `reasoning_effort:minimal` 12.67s），样本不足，暂不配 `optionSpecs.reasoningLevel` |
-| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，**11-11 11:03 起只保留前 3 跳**（全 GM、价格同为 0.11），顺序由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定；跨站同代已拆成独立模型（见 §4.11.5） |
+| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，**11-11 11:03 起只保留前 3 跳**（全 GM、价格同为 0.11），顺序由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定 |
 
 **与前面四例的关键差异**：① 价格无公开源，必须在代码里登记，缺价即整条消失；
 ② 上游对高需求模型直接 503，探测窗口要挑时段；③ 它是唯一走 `gem:` 显式前缀的渠道
@@ -569,18 +570,18 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 - `tools/model_alias.py` 的 `ABBR` 把 7 个 `ais-gemini-*` 映射成显示名 **`Gemini-AIS`**，
   `family_entries()` 因此把它们合并成一条链（`GM_PRICES` 全 0.11），长度由 `CHAIN_CAP = {'Gemini-AIS': 3}` 截到 3 跳（2026-11-11 11:03）；
-  哈基米的 `[福利]gemini-3.8-flash` 单独映射成 **`Gemini-3.8-Flash`**，自成一条单跳族。
+  哈基米那一路曾单独映射成一条单跳族，2026-11-11 整族下线：`HJ_PRICES` 清空后它没有价，进不了模型表。
 - 链内顺序由 `HOP_PRIORITY` 固定（3.8=0、3.7=1、3.6=2、3.5=3、3.5-lite=4、3.1-lite=5、
   3-preview=6），不加这张表就会退化成按 upstream 字符串排序（3.5 反而排最前）。
-  跨站同代**不进这张表** —— 它是独立模型，单跳族没有链序可排，进表反而会被并回 AIS 链。
-- 主力组顺序由 `MAIN_ORDER` 决定：`chat:hjm:[福利]gemini-3.8-flash` 排在整套 `chat:gem:*`
-  之前，于是模型列表里 `Gemini-3.8-Flash` 压在 `Gemini-AIS` 上面（用户 2026-11-10 指定）。
-- 旧名映射表 `NAME_RENAMES` 已清空：历史上它把 `Gemini-3.8-Flash` 记成 `Gemini-AIS` 的旧名，
-  现在这个 id 被新模型占用，同名的 legacy 条目会被当「与 live 模型同名」丢掉、旧映射会把老会话
-  解析到 AIS —— 两头都不对，只能撤掉。
+  别的渠道的同代跳**不进这张表** —— 单跳族没有链序可排，进表反而会被并回 AIS 链。
+- 主力组顺序由 `MAIN_ORDER` 决定：`chat:gem:ais-gemini-3.8-flash` 起头。2026-11-10 曾有另一家的
+  同代 3.8 排在整套 `chat:gem:*` 之前（用户指定），2026-11-11 该族下线、那三行从 `MAIN_ORDER` 删除，AIS 回到首位。
+- 旧名映射表 `NAME_RENAMES` 为空：历史上它把某个已撤的显示名记成 `Gemini-AIS` 的旧名，那个 id
+  后来被新模型占用时两头都不对（同名 legacy 条目被当「与 live 模型同名」丢掉、旧映射又把老会话解析
+  到 AIS），只能撤掉。当前没有存量显示名需要重定向。
 - 拆族会留下脏 legacy：`_consistent_legacy_ids()` 只保留「带渠道前缀、且能被该模型某跳
   `_bare()` 命中」的条目；写盘后再扫一遍 `legacy`，对不上目标跳表的前缀条目直接 pop。
-  否则 AIS 的 `legacy_ids` 会继续挂着 `hjm:[福利]gemini-3.8-flash`，同一个上游 id 两个 canonical。
+  否则 AIS 的 `legacy_ids` 会继续挂着别家渠道的前缀条目，同一个上游 id 两个 canonical。
 
 ### 4.11.3 zgate 侧机制（`channelPolicy.GM` / `channelPolicy.HJ`）
 
@@ -598,14 +599,15 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | `authFailCooldownHours` | 24 | 0 | key 无效/被封类 403 → 整渠道禁用一天 |
 
 两个渠道**不再共用一套参数**：`GM` 是降级链的链首（当时 7 跳，11-11 11:03 起 3 跳），需要的只是「慢一点也先让下一跳并排跑」。
-`HJ` 是单跳直连的普通供应商（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
+`HJ` 按单跳直连的普通供应商处理（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
 「一次 502 + 客户端重试 + 上游重跑」，所以它那份收敛到只剩 `headerTimeoutSec: -1`
 （其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数**逐跳取值**（2026-11-10 深夜改）：
 `racePlanFor` 按链上每一跳自己的 `channelPolicy` 聚合 —— `hedgeAfterMs` 取各跳**最小正值**、
 `maxParallel` 取**最大值**、只配 `firstBlockMs` 时用它当发车间隔（兜底 1200ms / 2）；
 `headerTimeoutSec`、两个冷却、`rateLimitBackoffMs`、`authFailCooldownHours` 本来就按被尝试的那一跳查。
-所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上各跳（现 3 跳）各自那份共同决定；
-`Gemini-3.8-Flash` 那份仍然只作用于自己。完整口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md)。
+所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上各跳（现 3 跳）各自那份共同决定。
+`HJ` 那份仍留在 `zgate.json` 里（渠道没删），只是该渠道 2026-11-11 起没有收录型号，暂时没有请求走到它。
+完整口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md)。
 
 四件事必须一起看：
 
@@ -685,42 +687,9 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 > **一句话**：这条链的首字速度不是靠「多发几路」堆出来的，而是靠
 > 「少撞死跳（冷却） + 首块判真假（闸门） + 只叠一层对冲（maxParallel≤2）」。
 
-### 4.11.5 跨站同代：`Gemini-3.8-Flash`（`HJ` 哈基米，主业是独立模型）
+### 4.11.5 加新渠道要动的四处（这次一次踩全，别再漏）
 
-> **一句话**：`ais-*` 那一家不可用时，主力组里下一条就是**另一家的同代 3.8** ——
-> 单跳直连、不经任何降级链，2026-11-10 22:27 实测经网关响应头 4.4 秒、SSE 正常出字。
-
-| 项 | 值（2026-11-10） |
-|---|---|
-| 显示名 / 模型 id | `Gemini-3.8-Flash`（连字符风格，与 `DeepSeek-4.1-Flash` 一致） |
-| 分组 | 主力（`zcode-main`），`MAIN_ORDER` 里排在整套 `chat:gem:*` 之前，即模型列表里在 `Gemini-AIS` 上面 |
-| 渠道 | `HJ`，远程直连，无本地子进程 |
-| 网关 | `https://api.gemai.cc/v1`，OpenAI 兼容 |
-| 上游模型 id | `[福利]gemini-3.8-flash`（原样带方括号与中文前缀，不做改写） |
-| 模型名前缀 | `hjm:`（`chat:hjm:[福利]gemini-3.8-flash`），与 `gem:` / `qwen:` 同级；也是它 `legacy_ids` 的唯一一条 |
-| 链长 | 1 跳（单跳族，没有降级余地 —— 它自己就是兜底） |
-| 协议 | `chat`（OpenAI 兼容），SSE 流式 |
-| 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`router.go` 的 `applyHeaders` 名单里有 `HJ`）；透传会被回 401 |
-| 凭据落点 | `providers/hajimi/.env.local` 的 `HJM_API_KEY`；`zgate.json` 的 `hajimiEnvFile` 指向它 |
-| 价 | `tools/model_alias.py` 的 `HJ_PRICES` 登记 `0.05`。**不能写 0.0**：`family_entries()` 见到「同族 0 价 + 有价」会拆成付费 / `-Free` 两条 |
-| 渠道策略 | `channelPolicy.HJ` 只剩 `{"headerTimeoutSec": -1}`：单跳链没有备胎，不设响应头看门狗、不判首块、不埋沉默冷却 —— 与 `QN` 同级的普通供应商口径（见 §4.11.3） |
-
-**演进：先在链里当兜底，后被拆成独立模型**（2026-11-10 两轮）。第一版把它夹在 AIS 链的
-3.8 与 3.7 之间当「同代兜底」，被三件事证明不合适：
-
-1. **链内兜底只能吃链首的规则**（当时；2026-11-10 深夜已改成逐跳取值，见 [ROUTING-POLICY.md](ROUTING-POLICY.md)）。对冲参数与响应头窗口都取 `Chain[0]` 的渠道，HJ 在第二位
-   只能分到对冲余量；链首 `ais-gemini-3.8-flash` 又常态「60 秒后才回 503 high demand」，
-   每轮先白等一个窗口，才轮到它。
-2. **AIS 整片不可用时，最优解是「根本不试 AIS」**。当晚 catiecli 七个型号整片 error / 排队，
-   链内兜底仍要先给 GM 那几跳各判一次死刑；独立模型一个请求就打到 HJ。
-3. **「先降档还是先换站」该让用户选**。链内 = 先降代再兜底（能力掉档），独立模型 = 用户自己
-   决定什么时候切站；主力组里放在 AIS 上面，正好对应「3.8 这条线优先用能用的那家」。
-
-**代价**：模型列表里多一条与 `Gemini-AIS` 同代不同源的选项，只能靠名字区分 ——
-`Gemini-3.8-Flash` 是哈基米单跳（4 秒级出字），`Gemini-AIS` 是 catiecli 降级链（现 3 跳）（有降级、也有降级带来的等待）。
-两者价格不同（0.05 / 0.11），别名表里是两条独立记录，别再把 HJ 写回 AIS 的 `ABBR`。
-
-**加新渠道要动的四处**（这次一次踩全，别再漏）：`zgate.json` 的 `upstreams` 与
+要动的是：`zgate.json` 的 `upstreams` 与
 `channelPolicy`、`keys.go` 的 `Channels` 与 `Set` 字段、`keys.go` 的 `Load` 取值链、
 `router.go` 的 `applyHeaders` 名单与 `healthSegments`。`tools/check-project.py` 现在
 静态比对前三处的渠道集合，漏一处门禁直接红。
@@ -741,7 +710,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 ## 5. 关思考参数矩阵
 
 > §5.1 是**上游实测数据**（哪个模型认哪种写法，随模型变）；
-> §5.2–§5.4 是**ZCode 侧的通用机制**（换供应商照样成立）。
+> §5.2–§5.4 是**兼容投影侧的通用机制**（换供应商照样成立）。
 
 ### 5.1 上游接受哪种写法（直连实测 2026-10-19）
 
@@ -753,7 +722,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | beam-free | 不需要 | 天生带思考关不掉，但本身就是 1 秒级 |
 | muse-spark-1.2 / 1.3-contributor | **无** | 带 `reasoning_effort` 报错 |
 
-### 5.2 ZCode 侧怎么配
+### 5.2 兼容投影侧怎么配
 
 ZCode 会在请求里注入思考字段，**「关掉」是靠 `optionSpecs.reasoningLevel.map` 覆盖实现的**。
 map 是**一段 JS 表达式**，引擎求值成 JSON 对象后再发出去。
@@ -767,14 +736,16 @@ map 是**一段 JS 表达式**，引擎求值成 JSON 对象后再发出去。
 | `map = '{"thinking":{"type":"enabled"}}'` | 上游只认 thinking 一个字段 |
 | 不配 | 模型正常认 ZCode 默认注入的字段（`thinking` + `enable_thinking` + `reasoning_effort` + `reasoning`） |
 
-**当前 ZCode 里配了空 map 的模型**（`Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、
-`Muse-Spark1.3`、`GPT-6-Luna`）—— 它们的档位即使上游声明了也是装饰项，见 §5.4。
+**空 map 模型清单（历史口径，现网 0 实例）**：`Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、
+`Muse-Spark1.3`、`GPT-6-Luna` 是 2026-11-10 前采集时点的记录；2026-11-11 实测
+`providerModelRules` 19 条里 0 条 `map = "{}"`，早先 id 已并组改名且不在现网配置。
+机制与历史复现手法见 [PITFALLS.md](PITFALLS.md) §2，档位装饰项的解释见 §5.4。
 
 **WorkBuddy 侧 18 个模型一个都没配覆盖** —— 探测确认它们**全部接受 ZCode 原生 body**。
 （与 OpenCode-Go 侧不同：那边 minimax-m3 会拒 `thinking:{type:"enabled"}`，这边 CodeBuddy 上游接受。）
 
 **Qoder 侧 7 个模型（带 `qoder:` 前缀，经 7871）也没有配覆盖** —— 2026-10-23 用
-`zcode_effective_body.js` 复算后探测，原生四件套全部 HTTP 200；`Qwen3.8-Max` 的合法档位是 low/medium/xhigh，
+`effective_body.js` 复算后探测，原生四件套全部 HTTP 200；`Qwen3.8-Max` 的合法档位是 low/medium/xhigh，
 `DeepSeek-V4-Pro` / `GLM-5.3` / `Kimi-K2.8-Preview` 是 low/high/max。
 
 ### 5.3 ZCode 内置规则的形状（为什么要复刻）
@@ -791,7 +762,7 @@ ZCode 的内置规则 `resources/config/provider/zcode-builtin.json` 里：
   `thinking` + `enable_thinking` + `reasoning_effort` + `reasoning` **四个字段**，
   且**不看模型是否支持**。
 
-`providers/workbuddy/zcode_effective_body.js` 就是复刻这套语义，用来算「ZCode 真实会发什么」。
+`providers/workbuddy/effective_body.js` 就是复刻这套语义，用来算「宿主生效请求体」。
 **任何时候改了规则或换了模型 id，都要用它重算，不要手写规则表。**
 
 ### 5.4 档位：不写 `reasoningLevel.values` 就只剩「思考 / 不思考」
@@ -801,7 +772,7 @@ ZCode 的档位下拉**只**由 `optionSpecs.reasoningLevel.values` 生成，与
 `values = ["disabled","enabled"]` —— 界面上就只剩一个开关，**上游支持的低档永远发不出去**
 （选「思考」时实际发的是 `reasoning_effort: "high"`）。
 
-判定方法：`node providers/workbuddy/zcode_effective_body.js <模型 id>` 看返回的 `values`。
+判定方法：`node providers/workbuddy/effective_body.js <模型 id>` 看返回的 `values`。
 
 **数组顺序是行为的一部分**：ZCode 的默认档 = `values` 的**最后一档**（引擎
 `completeNewModelSelection` 取 `values.at(-1)`；`ListModels` 的 `defaultReasoningLevel`
@@ -812,8 +783,8 @@ high 抬到 max，等于改费用与首字延迟，不能当成排版问题。
 
 | 渠道 | 元数据来源 | 谁写 | 补 `disabled` 的规则 |
 |---|---|---|---|
-| WB | `/panel/api/models` 的 `supported_efforts` | `workbuddy_zcode_sync.py` `build_model_rule()` | `can_disable_thinking=true` 才补 |
-| QD | `/v1/models` 的 `reasoning_efforts` | `qoder_zcode_sync.py` `model_rule_config()` | 目录没这字段，不补 |
+| WB | `/panel/api/models` 的 `supported_efforts` | `workbuddy_sync.py` `build_model_rule()` | `can_disable_thinking=true` 才补 |
+| QD | `/v1/models` 的 `reasoning_efforts` | `qoder_sync.py` `model_rule_config()` | 目录没这字段，不补 |
 | OC | `/models` 的 `capabilities.reasoning.effort` | `go_model_sync.py` `add_model()` | 目录没这字段，不补 |
 | QN / QW | 目录里没有档位字段 | —— | 只能「思考/不思考」，同步日志会列出这些型号 |
 

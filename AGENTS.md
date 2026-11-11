@@ -3,6 +3,8 @@
 > **一句话**：四条硬规矩 —— **PROGRESS 按逻辑任务分家**、**凭据只走环境变量**、
 > **有 CodeGraph 就先用 CodeGraph**、**改完 Go 代码自动走 `restart-zgate.cmd` 换版**。其它都能从 `docs/` 里查到。
 
+**当前架构（2026-11-11 起）**：本仓以 **DSH 为主宿主**，会话 / 子代理 / headless / 服务插件等各类 agent 共用 `gateways/zgate` 单一入口与同一份路由策略；ZCode 降为兼容投影。实现层命名已去 ZCode，但**契约层一个字不动** —— `~/.zcode/v2/provider_config.json`、`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` / `ZCODE_BUILTIN`、`third-party/zcode*` 原件、schema 键、`%LOCALAPPDATA%\ZCodeGateway\`、NOTICE 商标段照旧。三层命名口径与批次见 [docs/DSH-FIRST.md](docs/DSH-FIRST.md)。
+
 ---
 
 ## 1. PROGRESS：路径由逻辑任务决定，不是物理目录

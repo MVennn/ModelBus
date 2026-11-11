@@ -3,12 +3,12 @@
 > **一句话**：这里解释**为什么**会出这些故障 —— 每一条都对应一次真实的排查，
 > 机制讲清楚，步骤去 [TROUBLESHOOTING.md](TROUBLESHOOTING.md)。
 >
-> **读法**：标 **【通用】** 的坑换任何供应商都成立（ZCode 客户端侧的行为）；
+> **读法**：标 **【通用】** 的坑换任何供应商都成立—— 主语是 DSH 主宿主（兼容投影为 ZCode 客户端）；
 > 标 **【实例 A】/【实例 B】** 的是本仓两个示例供应商特有的上游行为。
 
 | 标记 | 适用范围 |
 |---|---|
-| **【通用】** | ZCode 客户端侧 —— 换任何供应商都成立 |
+| **【通用】** | 宿主侧 —— 换任何供应商都成立 |
 | **【实例 A】** | OpenCode-Go 特有 |
 | **【实例 B】** | WorkBuddy2API 网关特有 |
 
@@ -67,13 +67,13 @@ WorkBuddy 网关更糟一层：它的出站逻辑**只**重写 `reasoning_effort
 
 **解法**：
 
-1. **探测必须用 ZCode 真实请求体**，不能拿裸 body 试 ——
-   `providers/workbuddy/workbuddy_probe_zcode.py` 就是干这个的（先算真实 body，失败再退
+1. **探测必须用宿主生效请求体**，不能拿裸 body 试 ——
+   `providers/workbuddy/workbuddy_probe.py` 就是干这个的（先算真实 body，失败再退
    slim variant）。
-2. 给模型配 `optionSpecs.reasoningLevel.map = "{}"` —— **发空 map 覆盖掉通用规则**，
-   一个思考字段都不发。**2026-11-10 实测：现网 20 条规则里 0 条用这种写法**，早先那批
-   （`beam-free`、`minimax-m3` 等）已经并组改名，别照旧清单去找；要复现这个手法，
-   写前先跑 `python tools/model_alias.py --check` 看清现场。
+2. 给模型配 `optionSpecs.reasoningLevel.map = "{}"` —— **发空 map 覆盖掉通用规则**（历史手法，现网 0 实例），
+   一个思考字段都不发。**2026-11-10 复核：现网 20 条规则里 0 条空 map，早先清单里的
+   id（`beam-free`、`minimax-m3` 等）已并组改名且不在现网配置，旧清单已失效；
+   该手法目前只剩历史复现用途；要看现场，写前先跑 `python tools/model_alias.py --check`。
 3. 需要「显式关掉」而不是「不发」时，用 `{"thinking":{"type":"disabled"}}`。
 
 **「curl 能通但 ZCode 400」的根因永远是这一条**，不是配置写错、不是模型下线。
@@ -94,7 +94,7 @@ WorkBuddy 网关更糟一层：它的出站逻辑**只**重写 `reasoning_effort
 `.*deepseek-v4[.-]1-flash.*` 也能匹配上**（因为是 `.*` 包裹的模式）——
 但如果你自己写规则只写 `deepseek-v4.1-flash`，就**匹配不到** `cn:deepseek-v4.1-flash`。
 
-**解法**：写规则一律用 `.*` 头尾包；改完用 `providers/workbuddy/zcode_effective_body.js`
+**解法**：写规则一律用 `.*` 头尾包；改完用 `providers/workbuddy/effective_body.js`
 验证命中的是哪一条。
 
 ---
@@ -120,7 +120,7 @@ WorkBuddy 网关更糟一层：它的出站逻辑**只**重写 `reasoning_effort
 
 ---
 
-## 5. 探测必须用 ZCode 真实 body，且间隔 ≥ 20 秒 【通用机制 + 实例 B 的间隔值】
+## 5. 探测必须用宿主生效请求体，且间隔 ≥ 20 秒 【通用机制 + 实例 B 的间隔值】
 
 **现象（其一）**：探测结果全是 200，但 ZCode 里实际用不了（→ 见 §2）。
 
@@ -826,10 +826,11 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
 ## 43. 配置加了渠道、进程没重载：整条降级链静默退回串行 【通用】
 
-> **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；现在 `Gemini-AIS` 是 7 跳全 GM，
-> 哈基米 3.8 已拆成独立模型 `Gemini-3.8-Flash`（排在 AIS 前面）。
-> **再更新（2026-11-11 13:35）**：HJ「福利」档断供，这一族改成 `[满血A]` 同站三跳
-> （3.8 → 3.7 → 3.6，各 0.05），见 §39。
+> **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；当时 `Gemini-AIS` 改成 7 跳全 GM，
+> 哈基米 3.8 被拆成独立单跳模型（排在 AIS 前面）。
+> **再更新（2026-11-11 13:35）**：HJ「福利」档断供，那一族改成 `[满血A]` 同站三跳（3.8 → 3.7 → 3.6，各 0.05），见 §39。
+> **下线（2026-11-11 15:00）**：该族整族下线 —— `HJ_PRICES` 清空后没有价就进不了模型表，渠道与凭据保留；
+> 上文只作历史记录读，别再按它去选这个模型。
 > `(1/8)` 这类日志按历史读，`channelPolicy` 少一个渠道就会退回串行的结论仍然成立。
 > **链长再变（2026-11-11 11:03）**：AIS 只留 3 跳，日志变 `(x/3)`；裁掉的四跳记 `dropped_hops` 并留在 `legacy_ids`，见 §44。
 
@@ -907,3 +908,12 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **判据**：`--apply` 后立刻核 `models==20`、`legacy==73`、`len(AIS.chain)==3`、`len(AIS.dropped_hops)==4`；单测 `test_ais_chain_is_three_gm_hops_in_version_order` 同时锁链长、dropped 与 legacy 覆盖。
 - **同类**：任何「先按名字聚合成一条链、再按上限裁剪」的生成器（工具清单、provider 目录、路由表）都有这个陷阱 —— 裁的是执行路径，不是身份。
 
+## 50. AIS 跳带 tools 只回思考不回正文，DSH 报「the turn degenerated again after the continuation nudge」 【实例 A】
+
+- **现象**：DSH 里选 Gemini-AIS 写长文，整轮零输出，界面只留一行 `❌ [ACP] stream error: the turn degenerated again after the continuation nudge`。会话 `sessionStats` 是 `ttftMs=25483 / llmMs=25483 / decodeTokens=0 / toolMs=0` —— 模型想了 25 秒然后什么都没有，正文和工具调用双零。
+- **根因（三层）**：① 上游：GM 的 `ais-gemini-3.8-flash` 跳在请求**带 tools** 时随机退化成三种形态 —— 空参数工具调用（`{"name":"read","arguments":"{}"}`）、只回一句话根本不调工具、或整段空流；② 网关：`hasContentDelta`（`internal/router/race.go:210`）的判定是 `if c.Delta.Content != "" || c.Delta.Reasoning != ""` —— **思考也算首块**，而 GM 的 `firstBlockMs=0` 又把首块看门狗关了，于是「只出思考、零正文」的 200 被当成功原样交给客户端，日志里既没有 fallback 也没有 error 行；③ DSH：`billion-context` 的 `retryEmptyTurn` 把「干净 stop + 有思考 + 零正文 + 零工具调用」判成退化，续问一次仍退化就抛这句报错。
+- **处置**：写作、需要读文件的任务不要挂 AIS，改用 `DeepSeek-4.1-Flash`（WB 跳 ok=3296 / try=3299）；AIS 只留给不调工具的纯对话，且 effort 用 `off` 档。
+- **证据**：直打 `127.0.0.1:7871` `model=Gemini-AIS` 的实测矩阵 —— 带 read/grep 两工具 + `max_tokens=128000` + high：100 s 后 content=0、reasoning=947、toolDeltas=1、finish=stop；同参数**不带工具**：33 s 正常出 1761 字；给 `write_file` 工具并要求写文件：31.5 s、零工具调用、只回 24 字；`reasoning_effort=off` 带工具：14.6 s 回空参数工具调用；写文提示 + 8000 tokens：三跳全挂回 502 `all upstreams failed`。同批 `/health` 里 `HJ|[满血A]gemini-3.8-flash` 也在抖（try 14→21、ok 停在 9）。
+- **判据**：分清「链路坏了」还是「模型这一跳退化」只看三件事 —— 会话 `sessionStats.decodeTokens` 是否为 0、网关日志那次请求后面有没有 fallback/error 行、同一条链**不带 tools** 直打有没有正文。三件全中就是模型退化，不是配置掉了。
+
+- **同类**：任何「把思考流也算作产出」的探活/首块判定都会漏掉这一类空回；`reasoning` 只能证明上游活着，不能证明它给了可用的答案。

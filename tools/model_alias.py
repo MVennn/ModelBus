@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Rebuild ZCode's model list as four credit-based groups with stable aliases.
+"""Rebuild the host's model list as four credit-based groups with stable aliases.
+
+DSH (DeepSeekRuntime) is the primary host for sessions, subagents, headless
+jobs and service plugins. The ~/.zcode/v2/provider_config.json written here is
+a compatibility projection; tools/dsh_sync.py projects the same groups into
+DSH's cordis.patch.yml, and tools/agent_profiles.py serves per-agent views.
 
 The display id is:
 
@@ -92,26 +97,12 @@ QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
 # 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
 # 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
 GM_BASE = "https://catiecli.sukaka.top/v1"
-# 哈基米（gemai.cc）福利通道：网页售卖站的 `[福利]gemini-3.8-flash` 是独立中转站上
-# 与 ais 3.8 同代的模型。它和 GM 是两家独立中转、两把独立 key
-# （HJM_API_KEY，providers/hajimi/.env.local），所以模型 id 一字不改地带上
-# `[福利]` 前缀 —— 上游只认这个字符串。
-# 2026-11-10 用户口径：catiecli 的 ais 全档排队/不可用时直接用它，所以它不再是
-# Gemini-AIS 链里的一跳，而是独立模型 Gemini-3.8-Flash（见 ABBR 与 MAIN_ORDER）。
+# 哈基米（gemai.cc）中转渠道：key 走 HJM_API_KEY（providers/hajimi/.env.local）。
+# 2026-11-11 用户口径：该渠道的 Gemini 3.8 族整族下线。渠道本身保留（CHANNEL_BASE /
+# CHANNEL_PREFIX / zgate upstreams 里的 HJ 不动），只把价目表清空 —— price_of 对本渠道
+# 一律返 None，任何 id 都进不了模型表，旧配置里的条目在 --apply 时按缺价剔除。
 HJ_BASE = "https://api.gemai.cc/v1"
-HJ_PRICES = {
-    # 2026-11-11 现网实测：gemai.cc 的「福利」档 3.8 / 3.7 / 3.6 全部
-    # model_not_found（「No available channel for model」），售卖站的价目在，
-    # 分销通道已经停了。「满血 A/B/C/F」与「官逆 B」四档的 3.8-flash 实测可用
-    # （200 / 4.6–8.4s，与「福利」同代同款），所以主力档换 [满血A]，
-    # 同型号 3.8 → 3.7 → 3.6 逐跳降级（实测三档都 200，5.4–6.2s）。
-    # 价目没有公开表，沿用原来的估算口径（比 catiecli 3.8 的 0.11 便宜）。
-    # 不能写 0.0 冒充免费：family_entries 见同一族里同时存在 <=0 与 >0 的跳时，
-    # 会把这条链拆成「付费 + -Free」两条（见 MERGE_FREE_GB 注释）。
-    "[满血A]gemini-3.8-flash": 0.05,
-    "[满血A]gemini-3.7-flash": 0.05,
-    "[满血A]gemini-3.6-flash": 0.05,
-}
+HJ_PRICES: dict = {}
 GM_PRICES = {
     # 上游没有公开价目表，7 个跳一律沿用同一个估算值（0.11 = DeepSeek 标准档）。
     # 同价是刻意的：跳序不靠价格区分，靠 HOP_PRIORITY 显式压制（见该常量注释）。
@@ -151,14 +142,6 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 哈基米档（HJ 渠道）2026-11-10 拆成独立模型 Gemini-3.8-Flash。
-    # 位置压在 Gemini-AIS 之前：ais 全档排队不可用时用户直接点它，主力组列表里
-    # 先给「能用的 3.8」再给「会降级的 3.8」，点名候选也按这个先后。
-    # 2026-11-11 起 HJ 这段变成同站 3.8 → 3.7 → 3.6 三跳（「福利」档已断供），
-    # 三个 id 都得点名，否则 3.7 / 3.6 只能等配置里先出现才进链。
-    "chat:hjm:[满血A]gemini-3.8-flash",
-    "chat:hjm:[满血A]gemini-3.7-flash",
-    "chat:hjm:[满血A]gemini-3.6-flash",
     # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
     # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链**（默认 7 跳，CHAIN_CAP 可截短）。
     # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
@@ -258,15 +241,9 @@ CHANNEL_RANK_DEFAULT = 4
 # 反而成了尾跳。版本新者必须先试，所以把「新一代优先」写成显式数字表。
 # 只对表里的 upstream 生效；其它渠道的跳不在表里 → 取 HOP_PRIORITY_DEFAULT(99)
 # → 同价时的相对顺序与加这张表之前完全一致（行为不变）。
-# 2026-11-10 哈基米福利档拆成独立模型后已从表里移除：单跳族没有链内顺序，
-# 留在表里反而会让这张表的语义（「链内跳序」）和实际链对不上。
-# 同族但不同站的跳（哈基米 HJ）也在这里排：键是 upstream，值小的在前。
-# 2026-11-11 起 Gemini-3.8-Flash 是 HJ 同站三跳，必须显式写 0/1/2，
-# 否则三跳都取默认 99、并列时按 upstream 字符串序，链首会变成 3.6。
+# 表里只有 GM（catiecli）这一家的 ais-* 跳：它们是同价同渠道，链内顺序除了这张表
+# 没有别的依据。其它渠道的跳一律取默认值（见下一条）。
 HOP_PRIORITY = {
-    "[满血A]gemini-3.8-flash": 0,
-    "[满血A]gemini-3.7-flash": 1,
-    "[满血A]gemini-3.6-flash": 2,
     "ais-gemini-3.8-flash": 0,
     "ais-gemini-3.7-flash": 1,
     "ais-gemini-3.6-flash": 2,
@@ -407,15 +384,6 @@ ABBR = {
     # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
     # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。
     "ais-gemini-3.8-flash": "Gemini-AIS",
-    # 哈基米档 2026-11-10 拆成独立族：显示名 Gemini-3.8-Flash（HJ 渠道）。
-    # 以前它和 ais 同名、混在一条链里当兜底；用户口径改成「ais 不可用时直接用它」，
-    # 于是从 Gemini-AIS 链里摘出来，不再参与那条链的降级。
-    # 2026-11-11：「福利」档断供后这一族改成 [满血A] 的 3.8/3.7/3.6 三跳，
-    # 显示名仍是 Gemini-3.8-Flash（链首 3.8 持有名字，跳序 3.8 → 3.7 → 3.6）。
-    # 显示名去掉渠道档位前缀：上游 id 只认 [满血A]，用户侧只该看到一个 Gemini 名字。
-    "gemini-3.8-flash": "Gemini-3.8-Flash",
-    "gemini-3.7-flash": "Gemini-3.8-Flash",
-    "gemini-3.6-flash": "Gemini-3.8-Flash",
     "ais-gemini-3.7-flash": "Gemini-AIS",
     "ais-gemini-3.6-flash": "Gemini-AIS",
     "ais-gemini-3.5-flash": "Gemini-AIS",
@@ -488,13 +456,11 @@ ABBR = {
 }
 
 # 显示名改名表：旧名 → 新名。--apply 落盘时 legacy 里会留着旧名（历史条目是
-# 自指形式 "Gemini-3.8-Flash" -> "Gemini-3.8-Flash"），改名后旧 target 不再是
-# 任何模型的新 id，resolved_legacy 会把整条记录当成死链丢掉 —— 老会话里选中的
-# 模型就解析不到了。main() 在 resolved_legacy 过滤前逐条补映射（缺失或自指才改写）。
-# 2026-11-10：原来这里有一条 "Gemini-3.8-Flash" -> "Gemini-AIS"。哈基米福利档拆出来
-# 独立成模型时正好复用了这个 id，它现在是 live 模型名 —— 改名映射必须撤掉。
-# zgate 的 Resolve 先查 models 再查 legacy，路由本来就是新模型；但 legacy 里留一条
-# 指向 AIS 的同名脏映射会误导排查，main() 另有一处「同名 legacy 一律丢弃」兜底。
+# 自指形式 "Old" -> "Old"），改名后旧 target 不再是任何模型的新 id，resolved_legacy
+# 会把整条记录当成死链丢掉 —— 老会话里选中的模型就解析不到了。main() 在
+# resolved_legacy 过滤前逐条补映射（缺失或自指才改写）。
+# 当前为空：历史上那条 "Gemini-3.8-Flash" -> "Gemini-AIS" 早在 2026-11-10 就撤了，
+# 而该显示名所属的模型也已在 2026-11-11 整族下线（见 HJ_PRICES 注释）。
 NAME_RENAMES = {}
 
 
@@ -675,12 +641,11 @@ def _blank_effort_global(cfg: dict) -> bool:
 # 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
 EMPTY_ALLOWED: set = {
-    # 两家谷歌中转（GM: catiecli / HJ: gemai）的 /v1/models 只有 id，不回 reasoning
-    # 能力位，本脚本也无从继承 —— 这两条注定是空档位。2026-11-11 之前它一直被报成
-    # 「本轮同步补不回来」的漂移，每天让 sync-models.ps1 的漂移复查判失败一次，
-    # 用户看到的是「复查仍有漂移，需要人工看」，实际什么都没坏。
+    # GM（catiecli）的 /v1/models 只有 id，不回 reasoning 能力位，本脚本也无从继承 ——
+    # 这条注定是空档位。2026-11-11 之前它一直被报成「本轮同步补不回来」的漂移，每天让
+    # sync-models.ps1 的漂移复查判失败一次，用户看到的是「复查仍有漂移，需要人工看」，
+    # 实际什么都没坏。
     "Gemini-AIS",
-    "Gemini-3.8-Flash",
 }
 
 def drifted_efforts(cfg: dict) -> list:
@@ -1101,6 +1066,7 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
         return GM_PRICES.get(upstream)
     if channel == "HJ":
         # 哈基米同为转售站，口径同 GM：只认 HJ_PRICES 的显式价，未收录即 None。
+        # 该渠道 2026-11-11 起没有收录型号（HJ_PRICES 为空），所以这里恒返 None。
         return HJ_PRICES.get(upstream)
     if channel == "QW":
         return 0.0 if qw_credit_active() else None
@@ -1364,9 +1330,10 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "legacy_ids": [model],
         }
     if model.startswith("hjm:"):
-        # 显式 HJ 渠道（哈基米 gemai.cc）：白名单写
-        # chat:hjm:[满血A]gemini-3.8-flash 走到这里。不写前缀会落到末尾 OC 兜底，
-        # 那条会把 [福利] 前缀当成型号名发给 opencode.
+        # 显式 HJ 渠道（哈基米 gemai.cc）。当前该渠道没有收录型号（HJ_PRICES 为空），
+        # 这段只为存量配置里的 hjm: 条目保住渠道归属 —— 掉到末尾的 OC 兜底会把
+        # `[满血A]` 这类售卖站前缀当成型号名发给 opencode，且缺价剔除时会被记成
+        # OC 的缺价，污染另一家渠道的统计。
         upstream = model[len("hjm:"):]
         return {
             "raw": model,
@@ -2044,11 +2011,12 @@ def write_quota_windows(path: Path = QUOTA_WINDOWS) -> None:
 
 
 def sync_deepseek_harness(config_path: Path) -> None:
-    """Project the just-written ZCode config into a local DeepSeekRuntime install.
+    """Project the just-written compatibility-projection config into local DSH.
 
-    This is deliberately best-effort: DSH is an optional client on this machine,
-    and a bad DSH profile must never turn a successful ZCode sync into a failed
-    cron run. The standalone ``tools/dsh_sync.py --check`` remains the strict
+    This is deliberately best-effort: DSH is the primary host, but the
+    compatibility projection is written first, and a bad DSH profile must never
+    turn a successful group sync into a failed cron run. The standalone
+    ``tools/dsh_sync.py --check`` remains the strict
     drift check.
     """
     dsh_home = Path(os.environ.get("DSH_HOME", str(Path.home() / ".dsh")))
@@ -2073,7 +2041,7 @@ def sync_deepseek_harness(config_path: Path) -> None:
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip().splitlines()
         print(
-            "WARN: DeepSeekHarness 同步失败（ZCode 配置已写入）："
+            "WARN: DSH 投影同步失败（兼容投影配置已写入）："
             + (detail[-1] if detail else f"exit {proc.returncode}"),
             file=sys.stderr,
         )
@@ -2196,7 +2164,7 @@ def main() -> int:
 
     path = config_path(args.config)
     if not path.exists():
-        raise SystemExit(f"找不到 ZCode 配置：{path}")
+        raise SystemExit(f"找不到兼容投影配置：{path}")
     cfg = json.loads(path.read_text(encoding="utf-8"))
     alias_file = alias_path(args.alias_map)
     existing = {}
@@ -2248,7 +2216,7 @@ def main() -> int:
     arena_targets = load_arena_targets(arena_file) if (args.arena and not args.no_arena) else {}
 
     # Copy the original model rule (optionSpecs / properties) before removing
-    # the old rules. A renamed id no longer matches ZCode's builtin patterns,
+    # the old rules. A renamed id no longer matches the projection's builtin patterns,
     # so models that need an empty thinking map must carry it explicitly.
     old_rules = {}
     for entry in model_rules(cfg):
@@ -2643,7 +2611,7 @@ def main() -> int:
     write_quota_windows()
     print(f"\n已写入 {path.name}（备份：{backup.name}）")
     print(f"已写入 {alias_file}")
-    # Only project the real ZCode config by default. A caller using --config for
+    # Only project the real host config by default. A caller using --config for
     # a fixture/sandbox must not overwrite the local DSH profile.
     if not args.no_dsh and args.config is None:
         sync_deepseek_harness(path)

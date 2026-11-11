@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""把竞技榜成绩折算成「智力 / 价格 / 性价比」三个分数，供生成器选型参考。
+"""把竞技榜成绩折算成「智力 / 价格 / 性价比」三个分数，供生成器选型参考
+
+本仓以 DSH 为主宿主；下列 ~/.zcode/v2/ 产物是兼容投影落点，DSH 侧投影由
+tools/dsh_sync.py 写 cordis.patch.yml，各类 agent 只读 catalog/ 真源。。
 
 用法：
     python tools/model_score.py                 # 打印排行（dry run）

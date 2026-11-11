@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
-"""上游能力真值采集器（catalog/upstream_caps.json）。
+"""上游能力真值采集器（catalog/upstream_caps.json）
 
-model_caps.py 的解析链是「别名 → ZCode 内置规则 → 现网 providerModelRules」，
+本仓以 DSH 为主宿主；采集结果写 catalog/ 供各类 agent 只读，不写回任何现网配置。。
+
+model_caps.py 的解析链是「别名 → 兼容投影内置规则 → 现网 providerModelRules」，
 它能证明某个字段「规则里没写」，但证明不了「这个模型真实上限是多少」。真值只在
 各家上游的模型接口里：
 

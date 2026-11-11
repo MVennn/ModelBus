@@ -225,7 +225,7 @@ if ([string]::IsNullOrEmpty($env:WB_GATEWAY_KEY)) {
 }
 
 Invoke-Py "WorkBuddy 价格表"   @("providers\workbuddy\workbuddy_fetch_pricing.py")
-Invoke-Py "WorkBuddy 写配置"   @("providers\workbuddy\workbuddy_zcode_sync.py", "--max-rate", "0.3", "--apply")
+Invoke-Py "WorkBuddy 写配置"   @("providers\workbuddy\workbuddy_sync.py", "--max-rate", "0.3", "--apply")
 
 # ---- 三、Qoder -----------------------------------------------------------
 Say "----- 三、Qoder -----"
@@ -250,7 +250,7 @@ if (-not (Test-Port "127.0.0.1" 8790)) {
 }
 
 # 清单从 hub 的 live catalog 拉，不再逐个模型发探测请求。
-Invoke-Py "Qoder 写配置" @("providers\qoder\qoder_zcode_sync.py", "--apply")
+Invoke-Py "Qoder 写配置" @("providers\qoder\qoder_sync.py", "--apply")
 
 # ---- 四、统一命名与分组 ---------------------------------------------------
 Say "----- 四、统一命名与分组 -----"

@@ -3571,4 +3571,27 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 ### 注释口径
 - 代码里 5 处「AIS 7 跳」的历史注释跟到 3 跳（hop_stats.go / hop_stats_test.go / router.go 两处 / race.go / model_alias.py 两处），行为未变。
 
+## 2026-11-11 16:40 DSH 主导架构：代码 + 功能审查、去 ZCode 命名、多 agent 只读投影（本轮落地）
+
+### 起手与委派
+- §7/§14 四条件全命中（≥3 目标 / ≥3 处同类 / ≥10 次工具 / 多视角），用户当轮授权不限 3 路 → 同批派 7 路子代理：ZCode 全仓普查 / 代码审查 / 功能审查 / 文档一致性 / 替换方案 / 6 脚本改名 / docs 同步。分片报告落 `evidence/agent-*.md`，主代理按磁盘独立验收（self-report 不当结论）。
+- `codegraph_status` = Not initialized，按仓规直接用 grep / glob / read，会话内不自行 init。
+
+### 方向正本与三层命名口径
+- `docs/DSH-FIRST.md` 升级为当前架构：DSH 主宿主 + 各类 agent 共用 `gateways/zgate` 单一入口，ZCode 降为兼容投影。契约层（`~/.zcode/v2/*`、`ZCODE_*` env、schema 键、`third-party/zcode*`、NOTICE 商标、`zcode-*` route id）一字不动；实现层改中性名并留旧名兜底；新层用 catalog / agent 词汇。
+- 拍板：zcode-census 与 replacement-plan 提议的「新增 DSH_* 同名 env 优先」不采纳 —— 再造一套同名替代会双写静默漂移，DSH patch 的 route id 与 refs 键已绑定 zcode-*；方案报告只读归档，不执行。
+
+### 落地清单
+- 门面 5 文件 + 方向正本主语改 DSH 主宿主 + 多 agent；18 个 blob/main 绝对链接归零。
+- 6 脚本中性化改名 + 11 文件引用同步 + 4 组自造 env 新名优先旧名兜底（第 6 路独立交付，主代理复核 6 新名在 / 6 旧名消失）。
+- 新增 `tools/agent_profiles.py`（11983B / 264 行）+ `tests/test_agent_profiles.py` 14 例 + `tools/dsh_sync.py` 的 `--source compat|dsh` / `--export-inventory` 补丁（37234B / 850 行）+ `tests/test_dsh_source.py` 10 例；默认 compat 逐字节等价，dsh 源不缩型号全集、不读 ZCode 配置。
+- 第一方 `tools/`、legacy-router JS、`model_alias.py` / `make_social_preview.py`、`providers/` 叙述层去 ZCode 专项表述；`docs/` 22 篇活文档脚本名与主语同步（第 7 路），`docs/TOOLS.md:38` 补 agent_profiles.py 索引。
+- 不动 `gateways/zgate/` 下 Go 代码（AGENTS.md:107 改 Go 即触发 zgate 受控换版，长驻网关禁止会话重启），不重启 zgate，Go 侧 11 行叙述性 ZCode 留后续演进。
+
+### 验收
+- `unittest discover` Ran 158 / OK；`check-docs.py` [OK] 46 篇；`check-project.py` 8 项；`dsh_sync.py --check` 模型表/凭据引用无变化；`model_caps.py --check` exit 1 的 10 条能力真值差异经 HEAD 基线复核为本轮前既有。
+- 全仓门禁日志 `.work/dsh-gate-20261111/gate.log`；7 路分片报告 + 汇总审查报告 `evidence/DSH-REVIEW-SUMMARY-2026-11-11.md`。
+- 收尾复跑（全部改动落盘后）：`.work/dsh-gate-20261111/gate-final.log` 六项退出码 unittest=0 / check-docs=0 / check-project=0 / dsh_sync --check=0 / py_compile=0 / model_caps --check=1（HEAD 基线同 10 条既有差异）；过期口径按现网真值收口 `docs/MODEL-PROVIDERS.md:739` 与 `docs/DSH-FIRST.md` §7；汇总审查报告 `evidence/DSH-REVIEW-SUMMARY-2026-11-11.md`（16086B / 115 行）落盘，7 路分片全部验收为 inactive。
+- 回滚备份：`.work/dsh-first-20261111/`、`dsh-rename-20261111/`、`dsh-source-20261111/`、`dsh-tools-20261111/`、`dsh-providers-20261111/`、`dsh-final-20261111/`。
+
 [[TASK_ALL_DONE]]

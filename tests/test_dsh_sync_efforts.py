@@ -134,19 +134,19 @@ class EffortDriftGateTest(unittest.TestCase):
     """源头有档位、投影后为空 —— 每日同步必须能提前发现，而不是等用户发现。"""
 
     def test_source_levels_without_projection_is_drift(self):
-        rules = {("zcode-main", "Gemini-3.8-Flash"): {"optionSpecs": {"reasoningLevel": {
+        rules = {("zcode-main", "Gemini-AIS"): {"optionSpecs": {"reasoningLevel": {
             "values": ["disabled", "low", "high"],
             "map": "{}",
         }}}}
-        routes = {"zcode-main": {"models": [{"id": "Gemini-3.8-Flash"}]}}
+        routes = {"zcode-main": {"models": [{"id": "Gemini-AIS"}]}}
         self.assertEqual(len(K._efforts_lost(rules, routes)), 1)
 
     def test_projected_levels_are_fine(self):
-        rules = {("zcode-main", "Gemini-3.8-Flash"): {"optionSpecs": {"reasoningLevel": {
+        rules = {("zcode-main", "Gemini-AIS"): {"optionSpecs": {"reasoningLevel": {
             "values": ["disabled", "low"],
         }}}}
         routes = {"zcode-main": {"models": [
-            {"id": "Gemini-3.8-Flash", "reasoningEfforts": {"off": "disabled", "low": "low"}}
+            {"id": "Gemini-AIS", "reasoningEfforts": {"off": "disabled", "low": "low"}}
         ]}}
         self.assertEqual(K._efforts_lost(rules, routes), [])
 

@@ -9,7 +9,7 @@
 
 | 标记 | 含义 |
 |---|---|
-| **【通用】** | 换任何供应商都成立 —— ZCode 客户端侧的行为、协议与配额机制 |
+| **【通用】** | 换任何供应商都成立 —— DSH 主宿主（兼容投影为 ZCode 客户端）侧的行为、协议与配额机制 |
 | **【实例 A】** | OpenCode-Go 特有（本仓实例一） |
 | **【实例 B】** | WorkBuddy2API 网关特有（本仓实例二） |
 
@@ -65,7 +65,7 @@ python -c "import json,os; c=json.load(open(os.path.expanduser('~/.zcode/v2/prov
 ```bash
 # 1) 看 ZCode 会给这个模型发什么（复刻引擎规则，算真实 body）
 cd workbuddy
-node zcode_effective_body.js <model-id>
+node effective_body.js <model-id>
 
 # 2) 看这个模型归在哪个 provider、什么协议
 python -c "import json,os; c=json.load(open(os.path.expanduser('~/.zcode/v2/provider_config.json'),encoding='utf-8')); r=c['config']['providerConfigRules']; rs=r['providerRules'] if isinstance(r,dict) else r; [print(p['providerId'], p['config']['api']['type'], m) for p in rs for m in p['config'].get('personalModelIds',[]) if m=='<model-id>']"
@@ -179,7 +179,7 @@ curl -s http://127.0.0.1:7863/panel/api/models -H "Authorization: Bearer $WB_GAT
 | 原因 | 解法 |
 |---|---|
 | 价格表**忘了刷新** | 跑 `providers/workbuddy/workbuddy_fetch_pricing.py`（`--dry-run` 先看差异）；别的供应商照 [MAINTENANCE.md](MAINTENANCE.md) §1.1 的通用做法用自己的取数脚本 |
-| 限时免费到期（网关日志：`free tier ended, now 0.227 credits/1k`） | 统一模式重跑 `workbuddy_zcode_sync.py --apply`；分离模式重排四档 |
+| 限时免费到期（网关日志：`free tier ended, now 0.227 credits/1k`） | 统一模式重跑 `workbuddy_sync.py --apply`；分离模式重排四档 |
 | 网关未重启时 `/panel/api/models` 只返回 34 个 global 模型 | 重启网关再取 |
 
 ---
@@ -213,7 +213,7 @@ for f in [p]+b:
 | 原因 | 适用范围 | 解法 |
 |---|---|---|
 | **ZCode 界面保存时整份写回** | **【通用】** | 写配置期间不要在界面里改；重新跑脚本 |
-| `workbuddy_zcode_sync.py` 默认**合并**到五个 OpenCode chat 组；`--separate` 才整条替换四个 `workbuddy-*` provider | **【实例 B】** | 统一模式只动 WorkBuddy 模型与五个 chat 组的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 —— 加完要重跑脚本，别手改配置 |
+| `workbuddy_sync.py` 默认**合并**到五个 OpenCode chat 组；`--separate` 才整条替换四个 `workbuddy-*` provider | **【实例 B】** | 统一模式只动 WorkBuddy 模型与五个 chat 组的 `baseUrl`；分离模式会冲掉 `workbuddy-*` 上手工加的模型 —— 加完要重跑脚本，别手改配置 |
 | `go_model_sync.py` 把新模型追加到**组尾**，打乱了手工排的顺序 | **【实例 A】** | 组内顺序由脚本按版本号倒序排；要固定顺序就改脚本后重跑 |
 | 别的脚本 / 别的会话也在写同一份配置 | **【通用】** | 同一时间只跑一个写入者 |
 
@@ -290,7 +290,7 @@ curl -si -X POST http://127.0.0.1:7863/v1/chat/completions \
 
 ## 9. 探测脚本报 `wb_pricing.json missing` 【实例 B】
 
-**现象**：`workbuddy_probe_zcode.py` 直接退出：
+**现象**：`workbuddy_probe.py` 直接退出：
 `wb_pricing.json missing - fetch pricing first`。
 
 **原因 / 解法**
@@ -316,7 +316,7 @@ curl -si -X POST http://127.0.0.1:7863/v1/chat/completions \
 | 原因 | 适用范围 | 解法 |
 |---|---|---|
 | 没装 Node.js | **【通用】** | 装 Node.js 并保证 `node` 在 PATH 里 |
-| `zcode_effective_body.js` 不在 `workbuddy_probe_zcode.py` 同目录（**硬依赖**） | **【实例 B】** | 把两个文件放同一目录 |
+| `effective_body.js` 不在 `workbuddy_probe.py` 同目录（**硬依赖**） | **【实例 B】** | 把两个文件放同一目录 |
 | 找不到 ZCode 内置规则文件 | **【通用】** | 设 `ZCODE_BUILTIN` 指向 `.../ZCode/resources/config/provider/zcode-builtin.json` |
 | 规则文件 JSON 坏了 | **【通用】** | 修好它；脚本会退化成发裸 body，结果**不可信**（见 [PITFALLS.md](PITFALLS.md) §2） |
 
@@ -353,7 +353,7 @@ schtasks /query /tn "ModelBus-zgate-watchdog" /fo LIST
 | Qoder 冷启动失败 | 看 `%LOCALAPPDATA%\ZCodeGateway\qoder.stderr.log`；确认 `python` 在 PATH、`gateways/upstream/qoder/` 完整 |
 | 端口被占但健康检查不通 | zgate 会拒绝重复启动并报「端口被占用且健康检查不通」；先清掉占用进程 |
 | 子进程老是退出 | 默认 `ondemand` 模式下 WB 空闲 15 分钟会被回收，这是正常行为；不是「挂了」 |
-| `status` 的 Provider 段显示 key 缺失 | 四组没指向 7871，或 provider 里没有 apiKey：重跑 `python tools/model_alias.py --slot auto --apply`，或检查 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` |
+| `status` 的 Provider 段显示 key 缺失 | 三组没指向 7871，或 provider 里没有 apiKey：重跑 `python tools/model_alias.py --slot auto --apply`，或检查 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` |
 | 想彻底回到手动 | `zgate.exe uninstall` 移除自启；网关仍可用 `gateways/upstream/workbuddy/run.bat`、Qoder 用 `start-qoder-proxy.bat` 单独起 |
 
 > zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管 2 个子进程
@@ -385,7 +385,7 @@ python -c "import os; p=os.path.join(os.environ['LOCALAPPDATA'],'ZCodeGateway','
 | 原因 | 解法 |
 |---|---|
 | 入口没起 | `gateways/zgate/zgate.exe serve` 前台启动排错，或 `zgate.exe install` 重建自启 |
-| 7871 被别的进程占用 | `Get-NetTCPConnection -LocalPort 7871`；换 `ZGATE_LISTEN` 后同步改四组的 `baseUrl` |
+| 7871 被别的进程占用 | `Get-NetTCPConnection -LocalPort 7871`；换 `ZGATE_LISTEN` 后同步改三组的 `baseUrl` |
 | 缺 OpenCode key | 设置 `OPENCODE_GO_KEY`，或检查 `provider_config.json` 里 OpenCode provider 的 `access.apiKey` |
 | 缺 WorkBuddy key | 设置 `WB_GATEWAY_KEY`，或检查 `gateways/upstream/workbuddy/config.json` 的 `api_key` |
 | 只有 WorkBuddy 模型 502 | 网关没起 / 没就绪；看 `gateway.stderr.log` |
@@ -422,7 +422,7 @@ python -c "import json,pathlib,urllib.request,urllib.error; ..."   # 复刻探�
 
 | 现象 | 原因 | 解法 |
 |---|---|---|
-| 18 个 `cn:*` / `global:*` 全部 400 `Model is unavailable` | **误报**：`go_model_sync.py` 的体检固定探 OpenCode-Go 的公共 API（`https://opencode.ai/zen/go/v1`），而这些模型在统一路由并组后由本机网关供给，OpenCode-Go 那边本来就没有 | 体检要按模型 id 前缀分流上游；在脚本改好前，**这 18 条不用管**，WorkBuddy 侧的真实状态看 `workbuddy_probe_zcode.py` 的结果 |
+| 18 个 `cn:*` / `global:*` 全部 400 `Model is unavailable` | **误报**：`go_model_sync.py` 的体检固定探 OpenCode-Go 的公共 API（`https://opencode.ai/zen/go/v1`），而这些模型在统一路由并组后由本机网关供给，OpenCode-Go 那边本来就没有 | 体检要按模型 id 前缀分流上游；在脚本改好前，**这 18 条不用管**，WorkBuddy 侧的真实状态看 `workbuddy_probe.py` 的结果 |
 | `beam-free` / `gpt-6-luna` / `gpt-5.6-luna` / `muse-spark-*` 403 `RegionError` | 出口 IP 落在不支持的地区。**本仓的出网代理在 OpenWrt 上（ShellCrash 透明代理），本机没有系统代理** | **2026-11-03 起体检自带机场复测**：直连 403 → 自动用 `AIRPORT_PROXY`（`10.0.0.1:7896`）再探一次，通过就保留并在报告里标 `⇄` / `[经机场]`；只有机场也不通才判「上游不可用」移除（[PITFALLS.md](PITFALLS.md) §35）。若两个出口都 403，再去查 OpenWrt 侧的 ShellCrash 规则 / 节点；**不要**在任务里加「先开梯子」这类前置条件 |
 | `mimo-v2.5-pro` 400 `Unsupported model` | 上游已下架该模型，与网络无关 | 无需手动处理：`go_model_sync.py --apply` 按「跑不通即清」直接移除，复通后自动加回 |
 | `longcat-2.0` / `longcat-2.5-preview-free` 402 `Endpoint is unavailable` | 上游端点不可用，与网络无关 | 同上：自动移除，等上游恢复后自动加回 |
@@ -437,17 +437,17 @@ python -c "import json,pathlib,urllib.request,urllib.error; ..."   # 复刻探�
 
 ## 14. Qoder（qoder2api-hub，8790）【实例 C】
 
-先分三层确认：服务活着、账号可用、模型写进 ZCode。
+先分三层确认：服务活着、账号可用、模型写进兼容投影 provider_config.json 的模型列表（DSH 侧由 cordis.patch.yml 投影）。
 
 ```bash
 curl -s http://127.0.0.1:8790/ping
 curl -s http://127.0.0.1:8790/health        # accounts / api_key_required / risk.queue
-python providers/qoder/qoder_zcode_sync.py            # dry run：模型清单与 provider 计划
+python providers/qoder/qoder_sync.py            # dry run：模型清单与 provider 计划
 ```
 
 | 现象 | 怎么查 | 原因 / 解法 |
 |---|---|---|
-| ZCode 里没有 `qoder:` 模型 | `ListModels`；看五个 chat 组里是否有 `qoder:` 前缀的 model id + model rule；`curl http://127.0.0.1:7871/health` 的 `qoder.key`；8790 `/v1/models` 是否可达 | 同步没写，或被 ZCode 界面整份写回覆盖。重跑 `qoder_zcode_sync.py --apply`，不要与界面同时保存 |
+| 兼容投影配置里没有 `qoder:` 模型 | `ListModels`；看五个 chat 组里是否有 `qoder:` 前缀的 model id + model rule；`curl http://127.0.0.1:7871/health` 的 `qoder.key`；8790 `/v1/models` 是否可达 | 同步没写，或被 ZCode 界面整份写回覆盖。重跑 `qoder_sync.py --apply`，不要与界面同时保存 |
 | 请求 401 | `providers/qoder/.env.local` 的 `QD_API_KEY` 与 `gateways/upstream/qoder/accounts/settings.json` 是否一致；`--separate` 模式再看 provider_config 里的 `qoder` apiKey | 合并模式 key 只在 `.env.local` / 7871 路由；三处不一致时轮换后一起改，再重启 hub 与路由 |
 | 7871 `/health` 里 `qoder.key=false` 或 `qoder:` 请求 502 `Qoder key not configured` | 路由启动时没读到 `QD_API_KEY` | 确认 `providers/qoder/.env.local` 存在且可读，然后重启路由（zgate 会自动拉起） |
 | 502 / `10605` / `isQueued` | `/health` 的 `risk.queue`；`providers/qoder/qoder_probe.json` 的状态 | 上游排队，不是本地故障。免费 `Qwen3.8-Flash` 最容易中，`DeepSeek-Flash` 也会（64s 后 200，或 90s+ 后 502）。`--probe-file` 只看 `ever_ok`：曾 200 的模型遇排队仍保留，只有从未成功过的才会被排除 |
@@ -465,7 +465,7 @@ python providers/qoder/qoder_zcode_sync.py            # dry run：模型清单�
 | 现象 | 怎么查 | 原因 / 解法 |
 |---|---|---|
 | 模型名变成 `WB:` / `OC:` / `QD:` | 四个 provider 的 `personalModelIds`；`~/.zcode/v2/model-alias-map.json` 的条数；`GET 7871/health` 的 `alias.models` | 正常；由 `tools/model_alias.py` 生成。名字不对就重跑它 |
-| `OC:MiniMax-M3` / `OC:Beam` 400 `thinking` | `node providers/workbuddy/zcode_effective_body.js --provider-id <pid> <model>` 的 body 是否只剩 `max_completion_tokens` | 这两类模型需要空 map；`model_alias.py` 会从旧规则复制，丢了就重跑 |
+| `OC:MiniMax-M3` / `OC:Beam` 400 `thinking` | `node providers/workbuddy/effective_body.js --provider-id <pid> <model>` 的 body 是否只剩 `max_completion_tokens` | 这两类模型需要空 map；`model_alias.py` 会从旧规则复制，丢了就重跑 |
 | 桥接模型 502 `bridge upstream error` | 7871 日志；OC key；请求头是否有 `x-opencode-session` / 正常 UA | 桥接器已带 `opencode-cli/1.0` + `unified-bridge`；检查 OpenCode key |
 | 旧 ID（`cn:` / `qoder:` / bare OC）还能用 | alias map 的 `legacy` | 正常，老会话兼容；价格变化时旧显示名也会进 legacy |
 | WB GB 模型 503 `no_healthy_account` | `curl 127.0.0.1:7863/status` 的账号池 | 池冷却，按瞬时限流处理，不删模型 |
@@ -585,9 +585,9 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 
 **现象**：选 `Gemini-AIS` 发一句话，客户端一分钟零字节（最后手动点「停止」）；上游反代后台**一条请求记录都没有**；同一时刻别的模型（DeepSeek 系）一切正常。
 
-> **口径更新（2026-11-10 22:27）**：`Gemini-AIS` 现在是 **7 跳全 GM** 链，哈基米福利 3.8 已拆成独立模型
-> `Gemini-3.8-Flash`（单跳 `HJ`）。本节及 §18.1-§18.3 里出现的 `(x/8)` 与 HJ 跳都是当晚的历史日志，
-> 排障时按 `(x/7)` 对照，别把「链里没有 HJ」当成回归。见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.5。
+> **口径更新（2026-11-10 22:27）**：`Gemini-AIS` 当时改成 **7 跳全 GM** 链，哈基米福利 3.8 被拆成独立模型
+> （单跳 `HJ`；该族 2026-11-11 已整族下线）。本节及 §18.1-§18.3 里出现的 `(x/8)` 与 HJ 跳都是当晚的历史日志，
+> 排障时按 `(x/7)`（更后来是 `(x/3)`）对照，别把「链里没有 HJ」当成回归。见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.3。
 >
 > **再度收窄（2026-11-11 11:03）**：`Gemini-AIS` 只留 3 跳（3.8 → 3.7 → 3.6），后四跳记 `dropped_hops` 但仍留在 `legacy_ids`；新日志按 `(x/3)` 读，见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8.3。
 
@@ -646,7 +646,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 
 ### 18.4 后台明明在跑 token、本地却断开了又重跑一次（2026-11-10 21:30 定位，同一晚第三次改方向）
 
-**现象**：用户一句话发出去，反代后台（上游那边）在正常吐 token，本地却先「无响应」再直接重试、又跑一遍，最后断开；连发两句时两分钟里大半时间都花在撞已知慢跳上。模型是 `Gemini-3.8-Flash`（HJ 单跳）和 `Gemini-AIS`（GM 链，11-11 11:03 起 3 跳）。
+**现象**：用户一句话发出去，反代后台（上游那边）在正常吐 token，本地却先「无响应」再直接重试、又跑一遍，最后断开；连发两句时两分钟里大半时间都花在撞已知慢跳上。模型是 `Gemini-3.8-Flash`（HJ 单跳，2026-11-11 整族下线）和 `Gemini-AIS`（GM 链，11-11 11:03 起 3 跳）。
 
 **判据**（只读日志，零真实调用）：
 
@@ -702,5 +702,5 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
    实例 A：`curl https://opencode.ai/zen/go/v1/models`；
    实例 C：`curl http://127.0.0.1:8790/health`）。
 2. **再看配置写没写进去**（`provider_config.json` + `.bak-*` 备份链）。
-3. **再看 ZCode 真实发了什么**（`providers/workbuddy/zcode_effective_body.js`）。
+3. **再看宿主生效请求体**（`providers/workbuddy/effective_body.js`）。
 4. **最后才怀疑上游** —— 大部分「上游坏了」其实是本地配置或请求体的问题。

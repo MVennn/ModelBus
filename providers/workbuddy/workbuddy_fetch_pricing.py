@@ -9,12 +9,12 @@
 
 1. 换成你自己的目录接口地址（`fetch_models()` 里那一行）；
 2. 把上游条目归一化成**同一套字段**（下面那张表）—— 归一化之后，
-   分档脚本（`workbuddy_zcode_sync.py`）就不用改；
+    分档脚本（`workbuddy_sync.py`）就不用改；
 3. 保留「写前备份 + 打印变动摘要」这两条约定。
 
 为什么需要这个脚本
 ------------------
-`wb_pricing.json` 是 `workbuddy_zcode_sync.py` 的**唯一价格输入**：
+`wb_pricing.json` 是 `workbuddy_sync.py` 的**唯一价格输入**：
 分档（免代 / 低代 / 高代）完全依赖它里面的 `eff_rate`。
 在它出现之前，这张表只能手工维护 —— 改一次套餐就得手改一次 JSON，
 这是本仓最实质的工程缺口。本脚本把它变成一条命令。
@@ -23,7 +23,7 @@
 ------
 `GET {WB_GATEWAY_BASE}/panel/api/models` → `{"models": [ ... ]}`
 
-每个模型会被**归一化**成下面这组字段（与 `workbuddy_zcode_sync.py` 的消费方式一致）：
+每个模型会被**归一化**成下面这组字段（与 `workbuddy_sync.py` 的消费方式一致）：
 
 | 字段 | 含义 | 上游来源（按优先级尝试） |
 |---|---|---|

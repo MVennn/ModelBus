@@ -2,9 +2,11 @@
 /**
  * 统一路由：把 OpenCode-Go、WorkBuddy 与 Qoder 放在同一个 baseUrl 后面
  *
+ * DSH (DeepSeek Harness) 是主宿主；ZCode 客户端降为只读兼容投影。
+ *
  * 为什么需要它
  * ------------
- * ZCode 的一个 provider 只能填一个 `api.baseUrl`。OpenCode-Go 与 WorkBuddy
+ * 兼容投影 provider_config.json 的一个 provider 只能填一个 `api.baseUrl`。OpenCode-Go 与 WorkBuddy
  * 是两个不同上游，要把它们并进「主力 / 免费 / 低耗 / 高耗 / 备用」
  * 这些 OpenCode provider，就必须有一个本地路由按 model 分流。Qoder 并入同一批
  * 组后也走这里（用 `qoder:` 前缀区分同名模型）。

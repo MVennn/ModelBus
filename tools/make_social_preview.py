@@ -42,8 +42,8 @@ PREVIEW_PNG = os.path.join(ROOT, "assets", "social-preview.png")
 # 标题、副标题、标语、胶囊标签 —— 改这里就能改门面，不必动渲染代码。
 BRAND = {
     "title": "ModelBus",
-    "subtitle": "把模型供应商接进 ZCode 客户端的脚本与文档",
-    "tagline": "不改 ZCode 的代码，只写它的配置文件。",
+    "subtitle": "把模型供应商接进 DSH 主宿主与各类 agent 的脚本与文档",
+    "tagline": "以 catalog/ 为模型能力真源，投影到 DSH 与各宿主配置。",
     "pills": ["Python 3", "Node.js 18+", "MIT"],
 }
 

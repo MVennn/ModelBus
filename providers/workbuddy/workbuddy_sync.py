@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync WorkBuddy2API gateway models into ZCode as tiered personal providers.
+"""Sync WorkBuddy2API gateway models into the host's compatibility projection (provider_config.json) as tiered personal providers.
 
 Scope
 -----
@@ -8,7 +8,7 @@ below is driven by the gateway's credit multiplier, which is WorkBuddy-specific.
 To onboard a different provider, write a sibling script with the same shape:
 read your own normalized pricing table, apply your own tier thresholds, and
 write the same three places of `provider_config.json` (see docs/MODEL-PROVIDERS.md
-§1).  The ZCode-side write path itself is provider-neutral.
+§1).  The host-side write path itself is provider-neutral.
 
 The gateway bills by a credit multiplier ("倍率"): smaller = cheaper. Models are
 split into four providers. The first three are rate tiers; the fourth is a
@@ -30,17 +30,17 @@ premium tier.
 
 Data sources
     pricing : GET /panel/api/models   (list rate `credits`, effective `promo_credits`)
-    probe   : workbuddy_probe_zcode.py cache (availability with ZCode's real body)
+    probe   : workbuddy_probe.py cache (availability with the client's effective body)
 
 Usage
-    python workbuddy_zcode_sync.py                 # dry run (default)
-    python workbuddy_zcode_sync.py --apply         # backup + write config
-    python workbuddy_zcode_sync.py --max-rate 1.2  # widen the ceiling
-    python workbuddy_zcode_sync.py --reorder-only --apply
+    python workbuddy_sync.py                 # dry run (default)
+    python workbuddy_sync.py --apply         # backup + write config
+    python workbuddy_sync.py --max-rate 1.2  # widen the ceiling
+    python workbuddy_sync.py --reorder-only --apply
                                                    # only fix model/provider order
 
 Notes
-    * ZCode hot-reloads provider_config.json (~1s polling), so no restart is
+    * The host hot-reloads provider_config.json (~1s polling), so no restart is
       normally required. Avoid editing provider settings in the UI while this
       script writes.
     * Routing aliases (auto / primary / deep / fast / balanced / enhance) are
@@ -103,7 +103,7 @@ VENDOR_ORDER = (
     "other",      # 匿名 / 未标注厂商
 )
 # Reverse-proxy providers: 低代 first (it holds the pinned daily driver), then
-# 免代, 高代, and 备用 last.  ZCode renders personal providers in providerOrder.
+# 免代, 高代, and 备用 last.  The compatibility projection renders personal providers in providerOrder.
 TIER_DISPLAY_ORDER = ("low", "free", "high", "backup")
 
 # Unified mode (default): merge WorkBuddy models into the OpenCode chat tier
@@ -115,7 +115,7 @@ MAIN_MODEL_IDS = {"cn:deepseek-v4.1-flash", "global:deepseek-v4.1-flash-sg"}
 # 上游档位表的「手工覆写」登记处（键 = 上游 id）。默认不需要登记：
 # build_model_rule() 会按上游 supported_efforts 原样写 values，可关思考的型号
 # 自动在数组最前面加 "disabled"。只有要**改顺序**（= 改默认档）时才登记。
-# 数组顺序**就是** ZCode 下拉的顺序，而 ZCode 拿**最后一档**当默认档
+# 数组顺序**就是** 兼容投影下拉的顺序，而客户端拿**最后一档**当默认档
 # （`ListModels` 实测：GLM-5.3-Flash 的 low/high/max → default max），
 # 所以顺序是行为的一部分，不是排版问题。
 EFFORT_VALUES: dict[str, list[str]] = {}
@@ -149,7 +149,7 @@ CONFIG_FILE = Path(
 CACHE_DIR = HERE / "cache"
 # 活数据（价格表 / 探测结果）统一放 cache/；可用环境变量覆盖
 PRICING_FILE = Path(os.environ.get("WB_PRICING_FILE", CACHE_DIR / "wb_pricing.json"))
-PROBE_FILE = Path(os.environ.get("WB_ZCODE_PROBE_FILE", CACHE_DIR / "wb_zcode_probe.json"))
+PROBE_FILE = Path(os.environ.get("WB_PROBE_FILE", os.environ.get("WB_ZCODE_PROBE_FILE", CACHE_DIR / "wb_zcode_probe.json")))
 
 # Pure routing aliases: no own price, resolve to another model underneath.
 ALIAS_IDS = {
@@ -299,10 +299,10 @@ def build_model_rule(provider_id: str, model: dict, probe_rec: dict | None) -> d
     if out > 0:
         cfg["optionSpecs"] = {"maxOutputTokens": {"max": out}}
 
-    # 把上游声明的档位表原样写进 values。不写的话 ZCode 落到兜底规则 `.*`
+    # 把上游声明的档位表原样写进 values。不写的话客户端会落到兜底规则 `.*`
     # （values ["disabled","enabled"]），界面只剩思考开关，上游的低档永远发不出去。
     # 顺序 = 上游 supported_efforts 的顺序；能关思考的型号在最前面补 "disabled"。
-    # 记住 ZCode 拿最后一档当默认档，所以「上游默认档」必须等于列表末位——
+    # 记住客户端拿最后一档当默认档，所以「上游默认档」必须等于列表末位——
     # 上游声明 default_effort=max 时末位就是 max，这不是 bug。
     # 需要改顺序（= 改默认档）的型号走 EFFORT_VALUES 手工覆写。
     efforts = [str(e) for e in (model.get("efforts") or model.get("supported_efforts") or [])
@@ -317,9 +317,9 @@ def build_model_rule(provider_id: str, model: dict, probe_rec: dict | None) -> d
         values = (["disabled"] if can_disable else []) + efforts
         cfg.setdefault("optionSpecs", {})["reasoningLevel"] = {"values": values}
 
-    # The probe found that ZCode's native body (thinking + reasoning_effort +
+    # The probe found that the client's native body (thinking + reasoning_effort +
     # enable_thinking + reasoning) is rejected by this model; a slimmer body
-    # works. Override reasoningLevel.map so ZCode stops sending the rejected
+    # works. Override reasoningLevel.map so the client stops sending the rejected
     # fields. Merge (not replace) so declared values survive.
     if probe_rec and probe_rec.get("status") == "fallback":
         variant_maps = {
@@ -336,7 +336,7 @@ def build_model_rule(provider_id: str, model: dict, probe_rec: dict | None) -> d
 def reorder_provider_order(root: dict, active_ids: set[str]) -> None:
     """Keep the reverse-proxy providers contiguous, in display order.
 
-    ZCode renders personal providers in `providerOrder` sequence, so this is
+    The compatibility projection renders personal providers in `providerOrder` sequence, so this is
     what decides whether 低代 (holding the pinned daily driver) shows up first.
     """
     order = root.setdefault("providerOrder", [])

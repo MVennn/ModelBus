@@ -121,7 +121,7 @@
 | 2 | **对话能力**：砍掉 embedding、rerank、asr、tts、ocr、omni-realtime、image、video（wan/wanx）、wordart、sambert、cosyvoice 等 | 209 |
 | 3 | **去快照**：`-YYYY-MM-DD` / `-MMDD` / `-latest` / `-preview` 归并到家族，每家族留主 id | 118 |
 | 4 | **人工收口**：只留旗舰 + 每厂商代表 + 一个多模态 | 18 |
-| 5 | **真实体探测**：经 7871 用 ZCode 真实 body 打一遍，`Model not exist.` 即删 | **14** |
+| 5 | **真实体探测**：经 7871 用宿主生效请求体打一遍，`Model not exist.` 即删 | **14** |
 
 第 4 层不是必需，但**第 5 层是** —— 控制台列出的模型有 3 个 API 里根本没有（§4.4）。
 
@@ -166,14 +166,14 @@
   名字长度」降序，再按厂商（Qwen → DeepSeek → GLM → Kimi → MiniMax → QwQ → QvQ）
   **轮转打散**，保证相邻两跳不同公司 —— 一家整体挂了，下一跳就换家。
 - 这是**排序启发式，不是跑分**。想改顺序就直接改 `providers/qwen/pools.json` 里
-  `hops` 数组的顺序；想改编入规则就改 `qwen_zcode_sync.py` 的 `tier_of()` 再
+  `hops` 数组的顺序；想改编入规则就改 `qwen_sync.py` 的 `tier_of()` 再
   `--write-pools` 重生成。
 - 池子会**包含已知调不通的 id**（如 `qwen3-max`）：路由撞到一次就把它冷却，之后跳过。
 
 生成与关闭：
 
 ```bash
-python providers/qwen/qwen_zcode_sync.py --write-pools   # 重算 pools.json
+python providers/qwen/qwen_sync.py --write-pools   # 重算 pools.json
 python tools/model_alias.py --slot auto --apply          # 池子进免费组
 python tools/model_alias.py --no-pools --apply           # 只要单型号，不要池子
 ```
@@ -231,7 +231,7 @@ DeepSeek-4.1-Flash
 | 文件 | 作用 |
 |---|---|
 | `providers/qwen/.env.local` | `QWEN_API_KEY` / `QWEN_BASE`（gitignored，唯一持久落点） |
-| `providers/qwen/qwen_zcode_sync.py` | 目录 → `qwen:` 前缀播种进免费组；`--only` / `--all-chat` / `--probe-file` |
+| `providers/qwen/qwen_sync.py` | 目录 → `qwen:` 前缀播种进免费组；`--only` / `--all-chat` / `--probe-file` |
 | `providers/qwen/cache/freetier_20261028.txt` | 118 个家族的控制台快照（`family <= id,id`），漏斗的输入 |
 
 ### 5.2 改
@@ -257,8 +257,8 @@ DeepSeek-4.1-Flash
 
 ```bash
 # 播种（只在换清单/换 key 时跑；日常不用跑）
-python providers/qwen/qwen_zcode_sync.py                 # dry run
-python providers/qwen/qwen_zcode_sync.py --apply
+python providers/qwen/qwen_sync.py                 # dry run
+python providers/qwen/qwen_sync.py --apply
 
 # 归一化成三组（每天 12:00 的定时任务里已有这一步，会保留 QW 跳）
 python tools/model_alias.py --slot auto --apply

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Sync Qoder models from qoder2api-hub into ZCode's existing chat tiers.
+"""Sync Qoder models from qoder2api-hub into the host's existing chat tiers.
 
 Default (merge mode)
 --------------------
@@ -13,7 +13,7 @@ The prefix is required because Qoder and WorkBuddy/OpenCode share names such as
 `GLM-5.3-Flash`, `MiniMax-M3.1-Flash` and `GLM-5.3`. `tools/unified-router.js`
 routes `qoder:` models to the hub on 127.0.0.1:8790 and strips the prefix before
 forwarding. The old standalone `qoder` provider is removed in merge mode, so the
-ZCode provider list stays at seven entries.
+The host's provider list stays at seven entries.
 
 `--separate` restores the previous behaviour: one standalone `qoder` provider
 with bare model ids. Switching modes cleans both shapes first, so it is safe to
@@ -21,22 +21,22 @@ run repeatedly.
 
 The hub must be running. Credentials never go to stdout and never enter the
 repository: the API key comes from `--api-key`, `$QD_API_KEY`, or the local
-`qoder/.env.local` (gitignored), and the ZCode config write is backed up first.
+`qoder/.env.local` (gitignored), and the host config write is backed up first.
 
 Usage
 -----
-    python qoder/qoder_zcode_sync.py                 # dry run (merge)
-    python qoder/qoder_zcode_sync.py --apply          # backup + write (merge)
-    python qoder/qoder_zcode_sync.py --separate --apply
-    python qoder/qoder_zcode_sync.py --probe-file qoder/qoder_probe.json --apply
-    python qoder/qoder_zcode_sync.py --max-price 1.4  # widen the default 0.8 cap
-    python qoder/qoder_zcode_sync.py --max-price 0    # no price cap
+    python qoder/qoder_sync.py                 # dry run (merge)
+    python qoder/qoder_sync.py --apply          # backup + write (merge)
+    python qoder/qoder_sync.py --separate --apply
+    python qoder/qoder_sync.py --probe-file qoder/qoder_probe.json --apply
+    python qoder/qoder_sync.py --max-price 1.4  # widen the default 0.8 cap
+    python qoder/qoder_sync.py --max-price 0    # no price cap
 
 Notes
 -----
-* ZCode hot-reloads provider_config.json (~1s polling); no restart is needed.
-* Probe results are a separate concern: `qoder_probe_zcode.py` tests the exact
-  body ZCode sends and writes `qoder_probe.json`. `--probe-file` keeps only
+* The host hot-reloads provider_config.json (~1s polling); no restart is needed.
+* Probe results are a separate concern: `qoder_probe.py` tests the exact
+  body the host sends and writes `qoder_probe.json`. `--probe-file` keeps only
   models that answered 200; a model that has answered before is kept through a
   transient queue/timeout (`ever_ok`).
 * In merge mode the API key lives only in `qoder/.env.local` / `$QD_API_KEY`,
@@ -270,10 +270,10 @@ def upsert_provider(cfg: dict, rule: dict, order_after: str) -> str:
 
 
 def model_rule_config(model: dict) -> dict:
-    """模型级规则：把 Qoder 目录里的 reasoning_efforts 写成 ZCode 的档位表。
+    """模型级规则：把 Qoder 目录里的 reasoning_efforts 写成主机的档位表。
 
-    不写 values 的话 ZCode 落到兜底规则 `.*`（["disabled","enabled"]），界面只剩
-    思考开关、上游声明的低档发不出去。**顺序 = 下拉顺序**，且 ZCode 拿最后一档
+    不写 values 的话主机落到兜底规则 `.*`（["disabled","enabled"]），界面只剩
+    思考开关、上游声明的低档发不出去。**顺序 = 下拉顺序**，且主机拿最后一档
     当默认档（`ListModels` 实测 low/high/max → default max），所以这里原样沿用
     目录顺序。目录没有 can_disable 字段，故不自行补 "disabled"。
     """
@@ -358,13 +358,13 @@ def main() -> int:
     parser.add_argument("--order-after", default=DEFAULT_ORDER_AFTER,
                         help=f"separate 模式插入位置（默认 {DEFAULT_ORDER_AFTER}）")
     parser.add_argument("--probe-file",
-                        help="qoder_probe_zcode.py 的结果；只保留 status=ok 的模型")
+                        help="qoder_probe.py 的结果；只保留 status=ok 的模型")
     args = parser.parse_args()
 
     key = resolve_api_key(args.api_key)
     path = config_path(args.config)
     if not path.exists():
-        raise SystemExit(f"找不到 ZCode 配置：{path}")
+        raise SystemExit(f"找不到兼容投影配置：{path}")
 
     models, skipped = select_models(fetch_models(args.base_url, key), args.max_price)
     transient_kept: list[str] = []

@@ -81,7 +81,7 @@ ZCode 的写入路径是 `~/.zcode/v2/config.json`（legacy）+ `~/.zcode/cli/co
 **外加 `~/.zcode/v2/provider_config.json`（个人配置）** —— 和本仓写的是同一个文件。
 
 **模型能力探测**：填完点「测试」，一次性检测**接口连通 / 模型列表 / 流式响应 / 工具调用 /
-视觉多模态**五项。是「真实请求一次」的路子，和本仓的 `workbuddy_probe_zcode.py` 同源。
+视觉多模态**五项。是「真实请求一次」的路子，和本仓的 `workbuddy_probe.py` 同源。
 
 **thinking / reasoning 参数**：这是它最值钱的部分。文件
 `sidecar/lib/thinking-effort.js`（248 行）把思考档位处理成一张**协议 → 字段**的映射：
@@ -112,7 +112,7 @@ ZCode 的写入路径是 `~/.zcode/v2/config.json`（legacy）+ `~/.zcode/cli/co
    注释原文：*「map 由条目字段 reasoningLevelMap 提供：空 = 移除（回落 ZCode 内置 "{}"，即值透传）」*。
 
 **能借鉴什么**：①「按协议发最小思考字段」的映射表（**已落地**，见 §4.1）；
-②托管命名空间 + 只写自己管的字段（对应本仓 `workbuddy_zcode_sync.py` 分离模式的
+②托管命名空间 + 只写自己管的字段（对应本仓 `workbuddy_sync.py` 分离模式的
 「整条替换四个 provider」写法，是明确的改进方向，见 §6）。
 
 **为什么没有 vendor 它的代码**：仓库 11.4 MiB、Rust + Tauri + 内嵌 `cursor-core` 子项目
@@ -133,7 +133,7 @@ ZCode 的写入路径是 `~/.zcode/v2/config.json`（legacy）+ `~/.zcode/cli/co
 `403 FreeTierError`。
 
 **与本仓的关系**：**上游完全一样**（opencode.ai），但**解法不同**：
-本仓是「用合法 API key 直接写进 ZCode 配置」；zen-proxy 是「伪造成 OpenCode CLI 的请求」。
+本仓是「用合法 API key 直接写进兼容投影配置」；zen-proxy 是「伪造成 OpenCode CLI 的请求」。
 本仓的 `providers/opencode-go/ops/opencode-header-proxy.js` 和它是同一类东西。
 
 **供应商接入方式**：不是配置文件 —— 它**根本不配供应商**，只有一个上游地址
@@ -236,7 +236,7 @@ key 的**变量名**写在表里，值从环境变量读 —— 这跟本仓 AGE
 **解决什么**：给 ZCode 一条「可审计、可自己编译」的路。
 
 **与本仓的关系**：**本仓只读它的源码，不碰它的代码**。
-本仓的 `providers/workbuddy/zcode_effective_body.js` 是**复刻** ZCode 引擎的规则解析顺序，
+本仓的 `providers/workbuddy/effective_body.js` 是**复刻** 兼容投影引擎的规则解析顺序，
 用来算出「某个 modelId 在 ZCode 里实际会发什么请求体」。而 ZCodium 仓库里
 **就有那份规则的原文**：`config/provider/zcode-builtin.json`。
 
@@ -276,7 +276,7 @@ key 的**变量名**写在表里，值从环境变量读 —— 这跟本仓 AGE
   也就是说：**这份切片不只对上 fork，对上游客户端本体同样成立。**
 
 **能借鉴什么**：把「ZCode 内置通用思考规则」的原文**抄一份最小切片**进本仓当依据，
-以后 ZCode 客户端升级、规则变了，**一条命令就能发现**（见 §4.2）。
+以后 DSH 主宿主（兼容投影为 ZCode 客户端）升级、规则变了，**一条命令就能发现**（见 §4.2）。
 
 **为什么没有 vendor 它的代码**：仓库 100+ MB，是**整个客户端**（含 Electron 应用、
 Android 模拟器插件、几十个 package）。本仓只需要那份 2.5 KB 的规则切片 ——
@@ -348,8 +348,8 @@ node third-party/zcodium/reasoning-rules.js map --api-type=openai-chat-completio
 
 ### 4.2 内置规则从「实测」变成「可 diff 的源码依据」
 
-**问题**：本仓 `docs/PITFALLS.md` §2 关于「ZCode 内置规则无条件发思考字段」的结论，
-此前只能靠**实测反推**。ZCodium 提供了这份规则的 MIT 原文，可以直接抄一小片当依据。
+**问题**：本仓 `docs/PITFALLS.md` §2「ZCode 内置通用规则无条件发思考字段 → 400」的结论，
+过去只能靠**实测反推**；现已把 ZCodium 的 MIT 规则原文抄成可 diff 的最小切片（下），§2 的机制解释以该切片为准。
 
 **落地**：
 - [../third-party/zcodium/zcode-builtin-reasoning-rules.json](../third-party/zcodium/zcode-builtin-reasoning-rules.json)
@@ -412,9 +412,9 @@ node third-party/zcodium/reasoning-rules.js check /path/to/zcode-builtin.json
 |---|---|---|
 | Go 套餐是否也要求 `x-opencode-session-id` | **待验证** | zen-proxy 说免费档要**两个头一起发**且 id 前 12 位 hex 要像时间戳。本仓的 `opencode-header-proxy.js` 只发一个头、用固定字符串兜底。付费 Go 套餐是否同样要求**未实测** —— 需拿真实 key 打一次 `/zen/go/v1` 比对 |
 | WorkBuddy 网关是否吞掉多余的思考字段 | **待验证** | 本仓 PITFALLS §2 说网关只重写 `reasoning_effort`、其余原样透传。AnyBridge 的做法（只发该协议的字段）能绕开这个问题，但**网关侧的实际行为需再确认** |
-| `workbuddy_zcode_sync.py` 是否改成「托管命名空间 + 只写自己管的字段」 | **待落地** | 借鉴 AnyBridge §3.1：分离模式下脚本是**整条替换**四个 provider，用户手加的模型会被冲掉。改成按 providerId 前缀 upsert + 只写 `contextWindow` / `inputFormat.supportsImage` 后可保留用户在 ZCode 界面里的其它勾选 |
+| `workbuddy_sync.py` 是否改成「托管命名空间 + 只写自己管的字段」 | **待落地** | 借鉴 AnyBridge §3.1：分离模式下脚本是**整条替换**四个 provider，用户手加的模型会被冲掉。改成按 providerId 前缀 upsert + 只写 `contextWindow` / `inputFormat.supportsImage` 后可保留用户在 ZCode 界面里的其它勾选 |
 | 静态分档是否要升级成「有序降级链」 | **待落地** | 借鉴 my-free-code §3.3 与 zen-proxy §3.2：档位 → 候选序列 → 逐个降级；并按错误分级决定「重试」还是「换模型」 |
-| 探测结果该不该再解读一次 | **待落地** | 借鉴 zen-proxy §3.2：合成探针与「模型已下线」在上游侧表现相同。本仓的探测用 ZCode 真实 body，**比裸 body 强**，但仍不等于真实业务流量 —— 结论应区分「目录里没有」与「探针没探通」 |
+| 探测结果该不该再解读一次 | **待落地** | 借鉴 zen-proxy §3.2：合成探针与「模型已下线」在上游侧表现相同。本仓的探测用宿主生效请求体，**比裸 body 强**，但仍不等于真实业务流量 —— 结论应区分「目录里没有」与「探针没探通」 |
 | CCR / otari 的能力目录读法 | **待补** | 本仓的思考档位来自 WorkBuddy 面板；CCR 是从上游目录 metadata 读。本仓的网关没有目录接口，暂不可用 |
 | `docs/README.md` 索引未收录本篇 | **已补** | 索引已收录（分类：参考资料），见 [README.md](README.md) |
 

@@ -1,14 +1,16 @@
 'use strict';
 /**
  * Protocol bridge: OpenAI Chat Completions -> Anthropic Messages / OpenAI
+ *
+ * DSH is the primary host; the ZCode client is one compatibility projection.
  * Responses, and the reverse for the response.
  *
  * The unified router exposes four chat providers. A few OpenCode-Go models are
  * only available over `messages` or `responses`; this bridge lets them live in
- * the same chat groups without asking ZCode to speak three protocols.
+ * the same chat groups without asking the host to speak three protocols.
  *
  * Upstream calls are non-streaming; the bridge synthesizes the chat SSE that
- * ZCode expects. That keeps the translation small and deterministic (no SSE
+ * the host expects. That keeps the translation small and deterministic (no SSE
  * delta accumulation across chunk boundaries). The trade-off is that bridged
  * models deliver their text in one chunk instead of token-by-token.
  */

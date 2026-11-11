@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Warm-start ZCode with the Qwen platform's free-quota models.
+"""Warm-start the host's compatibility projection with the Qwen platform's free-quota models.
 
 What this does
 --------------
@@ -24,18 +24,18 @@ before the alias map is regenerated, exactly like the `qoder:` prefix.
 Why so few models by default
 ----------------------------
 506 free entries collapse to 209 chat-capable models / 118 families. Putting
-them all into one ZCode group is unusable in the picker, and each one costs a
+them all into one host group is unusable in the picker, and each one costs a
 non-streaming bridge round-trip. The default list is the flagships plus one
 model per vendor; use `--all-chat` only for a deliberate quota burn.
 
 Usage
 -----
-    python providers/qwen/qwen_zcode_sync.py                    # dry run
-    python providers/qwen/qwen_zcode_sync.py --apply            # backup + write
-    python providers/qwen/qwen_zcode_sync.py --all-chat         # every family
-    python providers/qwen/qwen_zcode_sync.py --only qwen3.8-max,glm-5.3
-    python providers/qwen/qwen_zcode_sync.py --probe-file ~/.zcode/v2/model_probe.json --apply
-    python providers/qwen/qwen_zcode_sync.py --fetch            # try /api/models first
+    python providers/qwen/qwen_sync.py                    # dry run
+    python providers/qwen/qwen_sync.py --apply            # backup + write
+    python providers/qwen/qwen_sync.py --all-chat         # every family
+    python providers/qwen/qwen_sync.py --only qwen3.8-max,glm-5.3
+    python providers/qwen/qwen_sync.py --probe-file ~/.zcode/v2/model_probe.json --apply
+    python providers/qwen/qwen_sync.py --fetch            # try /api/models first
 
 Credentials never reach stdout or the repository: the key is read from
 `$QWEN_API_KEY` or `providers/qwen/.env.local` (gitignored).
@@ -452,7 +452,7 @@ def main() -> int:
 
     path = config_path(args.config)
     if not path.exists():
-        raise SystemExit(f"找不到 ZCode 配置：{path}")
+        raise SystemExit(f"找不到兼容投影配置：{path}")
     cfg = json.loads(path.read_text(encoding="utf-8"))
 
     target = next((r for r in provider_rules(cfg) if r.get("providerId") == TARGET_PROVIDER), None)

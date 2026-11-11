@@ -35,30 +35,31 @@
 | `tools/dsh_sync.py` | **DeepSeekRuntime 投影**：读 ZCode 最终 `provider_config.json`，重写 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 三组路由，保留其他 patch 条目和非 `zcode-*` provider；`reasoningLevel.map="{}"` 的模型不写 `reasoningEfforts`（避免 DSH 发送上游会拒的 `reasoning_effort`）；`--apply` 备份并写 patch + DSH 凭据引用，`--check` 有漂移退出 1。通常由 `model_alias.py --apply` 自动调用 | DSH profile patch；`~/.dsh/.credentials.yaml` 的 `ZCODE_GATEWAY_KEY` 引用；`*.bak-dshsync-<时间戳>` | ✅ 长期 |
 | `tools/model_caps.py` | **能力字段真值与差额对账**：解析「别名 → ZCode 内置规则（modelRules / modelApiRules / providerSiteRules / 模板 / 用户规则）」六层叠加，给出每个模型 ctx / max_out / tool / img / 档位的取值与来源等级；`--upstream` 吃 `catalog/upstream_caps.json` 的上游接口真值并压过规则解析值；`--apply --apply-source upstream:` 只把上游真值写进副本（规则推断值不落盘），`--target` 指向 `~/.zcode` 一律拒绝；`--check` 与现网比对，有差异退出 1 | `catalog/model_caps.json`（单一真源快照，含 provenance / conflicts / hops） | ✅ 长期 |
 | `tools/caps_upstream.py` | **上游能力真值采集**：按别名 `chain[].channel` 去对应上游模型接口取 ctx / max_out / tool / img —— WB `/panel/api/models`、OC `/zen/go/v1/models`、QN `/v1/models`；WB 的 `cn:` 前缀与大小写差异都试，主用跳优先，跨跳不一致只记 `conflicts`；主用渠道无元数据（QD / GM / HJ / QW）时只记 `cross` 交叉参考，**不推算补值**；这些渠道的能力字段另走取证覆盖层 `catalog/upstream_caps_evidence.json`（厂商文档 / 功能实测，`field_sources` 标 `evidence:`），只在接口为 `null` 时采用，接口有值不覆盖。`--fetch` 联网重采、`--evidence` 指定覆盖层、无参打印表格、`--check` 与现网比对 | `catalog/upstream_caps.json`（证据快照，可提交、可离线复算）+ `catalog/upstream_caps_evidence.json`（取证覆盖层） | ✅ 长期（改模型后跑一次） |
-| `tools/model_probe.py` | 用 **ZCode 真实 body**（`zcode_effective_body.js` + provider id）探测三组模型；经 7871，含桥接模型；结果带 `ever_ok` | `~/.zcode/v2/model_probe.json`（活数据） | ✅ 长期 |
+| `tools/agent_profiles.py` | **DSH 主宿主下各类 agent 的只读模型投影**：以 `catalog/model_caps.json` 为唯一能力真源，为 session / subagent / headless / service-plugin 四类 profile 生成只读投影；`--list` 列出 profile、`--check` 对账漂移、`--json` 输出机器可读结果；**不写任何现网配置** | 只读投影（stdout / `--json`），无落盘写入 | ✅ 长期 |
+| `tools/model_probe.py` | 用 **宿主生效请求体**（`effective_body.js` + provider id）探测三组模型；经 7871，含桥接模型；结果带 `ever_ok` | `~/.zcode/v2/model_probe.json`（活数据） | ✅ 长期 |
 | `tools/model_stream_check.py` | **流式 / 思考 / 输出 / TPS 自动准入探针**：以 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 模型表为唯一契约，模型进表即自动纳入；`--changed` 只测新增 / 档位变更 / 待复查，`--soft` 供每日同步链尾调用不阻断；首选档思考占满预算时同档位提至 2048 补测正文；单列 `ENC` 识别上游加密思考分流（零明文 thinking delta 不再混判为模型故障）。判定口径与接线守卫见 [MODEL-STREAM.md](MODEL-STREAM.md) | `.work/model-stream/report-<UTC>.json` 与 `latest.json`（`.gitignore` 排除） | ✅ 长期 |
 | `gateways/legacy-router/protocol_bridge.js` | chat ↔ Anthropic Messages / OpenAI Responses 转换（旧 Node 实现，已由 zgate 内置桥取代） | 由 `unified-router.js` require | ⚠️ 回退用（保留一个版本） |
 | `providers/workbuddy/workbuddy_fetch_pricing.py` | 拉网关目录接口 → 归一化 → 写价格表（打印倍率变化 / 新增 / 下架摘要）；条数骤降时逐个探活，只删确认下架的 | `providers/workbuddy/cache/wb_pricing.json`（写前自动备份） | ✅ 长期 |
-| `providers/workbuddy/workbuddy_probe_zcode.py` | 用 **ZCode 真实 body** 探测网关模型可用性，可断点续跑 | `providers/workbuddy/cache/wb_zcode_probe.json`；`workbuddy/logs/wb_zcode_probe.log` | ✅ 长期 |
-| `providers/workbuddy/workbuddy_zcode_sync.py` | **默认统一模式**：把 WorkBuddy 模型并入现役三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写免代 / 低代 / 高代 / 备用四个独立 provider（历史兼容模式，非默认）。倍率取价格表归一化的 `eff_rate`/`list_rate`（免费 `-f` 条目 0.0 进免代）；probe 为 blocked/unavailable 的模型移除，复通后自动加回。`--reclassify-only` 只搬备用档，`--reorder-only` 只重排（分离模式） | 备份 `provider_config.json.bak-wbproxy-<时间戳>` | ✅ 长期 |
-| `providers/workbuddy/zcode_effective_body.js` | 复刻 ZCode 引擎的规则解析顺序，算某 modelId **真实会发的请求体** | stdout JSON | ✅ 长期（`probe_zcode.py` 依赖它，必须同目录） |
+| `providers/workbuddy/workbuddy_probe.py` | 用 **宿主生效请求体** 探测网关模型可用性，可断点续跑 | `providers/workbuddy/cache/wb_zcode_probe.json`；`workbuddy/logs/wb_zcode_probe.log` | ✅ 长期 |
+| `providers/workbuddy/workbuddy_sync.py` | **默认统一模式**：把 WorkBuddy 模型并入现役三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写免代 / 低代 / 高代 / 备用四个独立 provider（历史兼容模式，非默认）。倍率取价格表归一化的 `eff_rate`/`list_rate`（免费 `-f` 条目 0.0 进免代）；probe 为 blocked/unavailable 的模型移除，复通后自动加回。`--reclassify-only` 只搬备用档，`--reorder-only` 只重排（分离模式） | 备份 `provider_config.json.bak-wbproxy-<时间戳>` | ✅ 长期 |
+| `providers/workbuddy/effective_body.js` | 复刻兼容投影引擎的规则解析顺序，算某 modelId **真实会发的请求体** | stdout JSON | ✅ 长期（`workbuddy_probe.py` 依赖它，必须同目录） |
 | `gateways/legacy-router/unified-router.js` | **旧 Node 路由**（回退用）：与 zgate 行为对齐；P3 验收通过后删除 | 日志 `router.stdout.log` / `router.stderr.log` | ⚠️ 回退用（保留一个版本） |
 | `gateways/upstream/workbuddy/` | 上游 WorkBuddy2API Panel 的**独立 clone** + 运行时（`config.json` / `auths/` / `data/` / `wb2api.exe`）；整目录被 `.gitignore` 排除 | 网关自身的 `data/` 与日志 | ✅ 长期（更新：`git -C gateways/upstream/workbuddy pull --ff-only`） |
 | `gateways/upstream/qoder/` | 上游 qoder2api-hub 的**独立 clone** + 运行时（`accounts/` / `usage/` / `umid/`）；整目录被 `.gitignore` 排除。默认 `127.0.0.1:8790`，`start-qoder-proxy.bat` / `stop-qoder-proxy.bat` 管理 | 网关自身的 `accounts/scheduler/state.json`、`qoder-proxy.log` / `.err.log` | ✅ 长期（更新：`git -C gateways/upstream/qoder pull --ff-only`） |
-| `providers/qoder/qoder_zcode_sync.py` | **默认合并**：拉 qoder2api-hub `/v1/models` → 排除 `Auto`/`Fast` 别名 → 按 `price_factor` 把 `qoder:` 前缀模型并入三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写独立的 `qoder` provider；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流），默认 `--max-price 0.8`。每天 12:00 定时任务里与 `qoder_probe_zcode.py` 成对执行（见 [MAINTENANCE.md](MAINTENANCE.md) §6） | 备份 `provider_config.json.bak-qoder-merge-<时间戳>`（separate 模式 `.bak-qoder-<时间戳>`）；dry run 打印落组 | ✅ 长期 |
-| `providers/qoder/qoder_probe_zcode.py` | 用 **ZCode 真实 body**（复算 `zcode_effective_body.js`）探测 Qoder 模型；默认经 7871 + `qoder:` 前缀（与 ZCode 实际路径一致），`--direct` 直连 8790；候选从 8790 `/v1/models` 取；状态 ok / fallback / queued / rate_limited / blocked / unavailable / timeout / error；结果带 `ever_ok`，瞬时限流不误杀曾 ok 的模型 | `providers/qoder/qoder_probe.json`（`.gitignore` 排除） | ✅ 长期 |
+| `providers/qoder/qoder_sync.py` | **默认合并**：拉 qoder2api-hub `/v1/models` → 排除 `Auto`/`Fast` 别名 → 按 `price_factor` 把 `qoder:` 前缀模型并入三个 chat 组（主力 / 免费 / 省钱）；`--separate` 才写独立的 `qoder` provider；`--probe-file` 只保留探测 `ok`（或曾 ok 的瞬时限流），默认 `--max-price 0.8`。每天 12:00 定时任务里与 `qoder_probe.py` 成对执行（见 [MAINTENANCE.md](MAINTENANCE.md) §6） | 备份 `provider_config.json.bak-qoder-merge-<时间戳>`（separate 模式 `.bak-qoder-<时间戳>`）；dry run 打印落组 | ✅ 长期 |
+| `providers/qoder/qoder_probe.py` | 用 **宿主生效请求体**（复算 `effective_body.js`）探测 Qoder 模型；默认经 7871 + `qoder:` 前缀（与 ZCode 实际路径一致），`--direct` 直连 8790；候选从 8790 `/v1/models` 取；状态 ok / fallback / queued / rate_limited / blocked / unavailable / timeout / error；结果带 `ever_ok`，瞬时限流不误杀曾 ok 的模型 | `providers/qoder/qoder_probe.json`（`.gitignore` 排除） | ✅ 长期 |
 | `providers/opencode-go/probe/probe_models.py` | 34 个模型最小 token 连通性 + 首字节延迟 | `probe_results.json`（**写到当前工作目录**，需手动归档到 `results/<日期>/`） | ❌ 一次性 |
-| `providers/qwen/qwen_zcode_sync.py` | 千问平台：从控制台快照（`cache/freetier_<日期>.txt`，`family <= id,id`）或 `--fetch`（`/api/models` 不稳定）取目录 → 四道漏斗筛对话模型 → 把 `qwen:<id>` 写进免费组；`--only` 指定 id、`--all-chat` 收全部 118 家族、`--write-pools` 生成集合体、`--probe-file` 只留探测 ok。**2026-10-29 起 `POOL_SPECS` 已清空**，只播种 `deepseek-v4.1-flash`（主力链尾跳），集合体与其它单型号下线（见 [QWEN.md](QWEN.md) §4.5） | 备份 `provider_config.json.bak-qwen-<时间戳>`；dry run 打印落组 | ⚠️ 仅兜底跳 |
-| `providers/qwen/qwen_pool_probe.py` | 千问上游探测：逐个试 `pools.json` 里每一跳，产出 `qwen_pool_probe.json`（`--sleep`/`--timeout` 可调）。**手动工具，定时任务不跑**；重新启用集合体时先跑它，再 `qwen_zcode_sync.py --write-pools --probe-file` 剔死跳 | 只发 8 tokens 的探活请求；额度耗尽会标 `fatal` | ⚠️ 手动 |
+| `providers/qwen/qwen_sync.py` | 千问平台：从控制台快照（`cache/freetier_<日期>.txt`，`family <= id,id`）或 `--fetch`（`/api/models` 不稳定）取目录 → 四道漏斗筛对话模型 → 把 `qwen:<id>` 写进免费组；`--only` 指定 id、`--all-chat` 收全部 118 家族、`--write-pools` 生成集合体、`--probe-file` 只留探测 ok。**2026-10-29 起 `POOL_SPECS` 已清空**，只播种 `deepseek-v4.1-flash`（主力链尾跳），集合体与其它单型号下线（见 [QWEN.md](QWEN.md) §4.5） | 备份 `provider_config.json.bak-qwen-<时间戳>`；dry run 打印落组 | ⚠️ 仅兜底跳 |
+| `providers/qwen/qwen_pool_probe.py` | 千问上游探测：逐个试 `pools.json` 里每一跳，产出 `qwen_pool_probe.json`（`--sleep`/`--timeout` 可调）。**手动工具，定时任务不跑**；重新启用集合体时先跑它，再 `qwen_sync.py --write-pools --probe-file` 剔死跳 | 只发 8 tokens 的探活请求；额度耗尽会标 `fatal` | ⚠️ 手动 |
 | `providers/opencode-go/probe/probe_protocols.py` | 判定每个模型走哪种协议 | 只打印，不落盘 | ❌ 一次性 |
 | `providers/opencode-go/probe/bench_models.py` | 吞吐 + 工具调用基准 | `bench_results.json`（同上，需手动归档） | ❌ 一次性 |
 | `providers/opencode-go/probe/bench_clean.py` | 干净串行基准，每模型 3 采样 | `bench_clean.json`（同上，需手动归档） | ❌ 一次性 |
 | `providers/opencode-go/probe/thinking-off-probe.js` | 逐模型试「关思考」参数 | 只打印 | ❌ 一次性 |
 | `providers/opencode-go/probe/archive/validate_zcode_models.py` | 校验 ZCode 已配模型与其 provider 协议是否一致 | 只打印 | ❌ 一次性（已归档） |
-| `providers/workbuddy/archive/workbuddy_probe_models.py` | 早期裸 body 探测（已被 `workbuddy_probe_zcode.py` 完全取代） | — | ❌ 已归档 |
+| `providers/workbuddy/archive/workbuddy_probe_models.py` | 早期裸 body 探测（已被 `workbuddy_probe.py` 完全取代） | — | ❌ 已归档 |
 | `providers/workbuddy/cache/wb_pricing.json` | 网关 56 个模型的倍率 / 上下文 / 输出上限 / effort 档位快照 | 由 `workbuddy_fetch_pricing.py` 生成 | ⚠️ 活数据 |
-| `providers/workbuddy/cache/wb_zcode_probe.json` | 探测结果缓存（status / variant / http / detail / rate） | 被 `workbuddy_zcode_sync.py` 读取 | ⚠️ 活数据 |
-| `providers/qoder/qoder_probe.json` | Qoder 模型探测结果（status / variant / http / detail） | 被 `qoder/qoder_zcode_sync.py --probe-file` 读取；`.gitignore` 排除 | ⚠️ 活数据 |
+| `providers/workbuddy/cache/wb_zcode_probe.json` | 探测结果缓存（status / variant / http / detail / rate） | 被 `workbuddy_sync.py` 读取 | ⚠️ 活数据 |
+| `providers/qoder/qoder_probe.json` | Qoder 模型探测结果（status / variant / http / detail） | 被 `qoder/qoder_sync.py --probe-file` 读取；`.gitignore` 排除 | ⚠️ 活数据 |
 | `providers/qoder/cache/qd_prices.json` | Qoder 实时倍率快照（`price_factor` + 峰谷） | 由 `tools/model_alias.py` 每次成功读到 8790 时写入；8790 停着时优先用它，**再退**硬编码 `<QD_PRICES>` | ⚠️ 活数据 |
 | `~/.zcode/v2/model_probe.json` | 三组统一探测结果（status / http / provider / ever_ok） | 被 `tools/model_alias.py --probe-file` 读取 | ⚠️ 活数据 |
 | `~/.zcode/v2/arena-leaderboard.json` | ArenaGalleri 榜单原始响应 + `_fetched_at` | 榜单接口不可用时的缓存；`--refresh` 覆盖 | ⚠️ 活数据 |
@@ -76,7 +77,7 @@
 > `tools/model_alias.py` 生成；下面的统一/分离模式是 WorkBuddy 旧数据采集口径，
 > 只作历史参考。当前命名与分组见 [MODEL-ALIAS.md](MODEL-ALIAS.md)。
 
-`workbuddy/workbuddy_zcode_sync.py` 有两种写法，**默认是统一模式**：
+`workbuddy/workbuddy_sync.py` 有两种写法，**默认是统一模式**：
 
 | 模式 | 怎么触发 | 结果 |
 |---|---|---|
@@ -98,7 +99,7 @@
 `owned_by=zgate`；`?scope=canonical|legacy|all` 分档，缺省只给 20 条统一名，口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §6），不再逐字节等于 OC 单家 catalog 透传；OC 独有裸 id 仍由 `routeFallback` 默认分支直穿 OC 兜底。
 
 **Qoder 经过统一路由**：模型 id 带 `qoder:` 前缀，7871 剥掉前缀后转给
-`127.0.0.1:8790`；ZCode 侧没有独立 `qoder` provider。模型矩阵见
+`127.0.0.1:8790`；兼容投影侧没有独立 `qoder` provider。模型矩阵见
 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.9，操作见 [QODER.md](QODER.md)。
 
 ---

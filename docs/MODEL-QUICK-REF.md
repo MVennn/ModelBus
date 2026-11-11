@@ -61,7 +61,7 @@
 | gpt-6-luna | 0.10 / 0.50 | $15 | 30M | 1.6–2.9s，~38 tok/s | OpenAI 风格推理 |
 | gpt-5.6-luna | 0.20 / 1.20 | $15 | 12.5M | 1.7–2.3s，~45 tok/s | 同上；额度最不经花 |
 
-> muse-spark 两个都只支持 `openai-responses` 协议，且带 `reasoning_effort` 会报错，ZCode 侧已配空 map 覆盖（不发送任何思考参数）。
+> muse-spark 两个都只支持 `openai-responses` 协议，且带 `reasoning_effort` 会报错，兼容投影侧已配空 map 覆盖（不发送任何思考参数）。
 > 「Contributor」= 贡献者档：用它的请求数据会拿去训练模型，所以只放不敏感的活。
 
 ---
@@ -75,7 +75,7 @@
 | glm-5.3-flash | 无 | `thinking:disabled` 400、`reasoning_effort:none` 400、`enable_thinking:false` 仍思考；给足 max_tokens 即可 |
 | beam-free | 不需要 | 天生带思考关不掉，但本身就是 1 秒级 |
 
-ZCode 侧已给 `beam-free`、`minimax-m3.1-flash-free`、`minimax-m3` 配了空 map 覆盖（不发送任何思考参数），这三个模型不再受 UI 思考等级影响。其他模型在 UI 里设"关闭"即可。
+兼容投影侧已给 `beam-free`、`minimax-m3.1-flash-free`、`minimax-m3` 配了空 map 覆盖（不发送任何思考参数），这三个模型不再受 UI 思考等级影响。其他模型在 UI 里设"关闭"即可。
 
 ## 一句话选择
 
@@ -97,8 +97,8 @@ ZCode 侧已给 `beam-free`、`minimax-m3.1-flash-free`、`minimax-m3` 配了空
 
 **鉴权头分协议**：`chat/completions` 和 `responses` 认 `Authorization: Bearer <apiKey>`；`anthropic/messages` 只认 `x-api-key: <apiKey>`（用 Bearer 会 401 `Go requires a credential`）。
 
-## 自动收录（每天 10:00）
+## 自动收录（每天 12:00）
 
-`providers/opencode-go/ops/go_model_sync.py --apply` 每天自动跑：拉 `/zen/go/v1/models` + 官方定价/弃用日期表 → 探测新模型的三种协议与思考参数兼容性 → 按成本档写进 `provider_config.json`（写前备份）→ 报告落到 `audit/go-model-sync-*.md`。
+`providers/opencode-go/ops/go_model_sync.py --apply` 每天自动跑：拉 `/zen/go/v1/models` + 官方定价/弃用日期表 → 探测新模型的三种协议与思考参数兼容性 → 按成本档写进 `provider_config.json`（写前备份）→ 报告落到 `evidence/go-model-sync/*.md`。
 
 收录门槛：上游未弃用、三协议至少一个 200、输出单价 ≤ $1.60（现有配置里最贵的 qwen3.7-plus）。主力组是人工精选，不自动进；价格查不到的模型只列候选不自动收录。

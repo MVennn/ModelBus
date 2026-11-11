@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""Pull the ArenaGalleri leaderboard and propose 主力 candidates.
+"""Pull the ArenaGalleri leaderboard and propose 主力 candidates
+
+Note: DSH (DeepSeek Harness) is this repo's primary host; the ~/.zcode/v2/ state
+files below are compatibility-projection landing points, not the host itself..
 
 The gallery at <https://gallery.arenaofbias.icu/#/leaderboard> is an SPA; its
 data comes from:
@@ -108,7 +111,7 @@ def fetch_leaderboard(cache: Path, refresh: bool, timeout: int) -> tuple[dict, s
             LEADERBOARD_URL,
             headers={
                 "Accept": "application/json",
-                "User-Agent": "ZCodeAIModels-arena/1.0",
+                "User-Agent": "ModelBus-arena/1.0",
             },
         )
         with urllib.request.urlopen(request, timeout=timeout) as response:

@@ -7,12 +7,12 @@ OpenCode Go 套餐模型自动收录同步脚本
 **这是 OpenCode-Go 侧的接入器**，不是通用框架 —— 数据源（文档页结构、端点路径、
 鉴权头）与分档口径都是这个供应商特有的。接别的供应商时照同样的结构另写一份：
 ① 换成你自己的目录接口；② 逐协议探测；③ 按你自己的计价口径分档；
-④ 写进 ZCode 配置的同三个落点（见 docs/MODEL-PROVIDERS.md §1）。
-**与供应商无关的部分**：ZCode 侧的写入方式、思考参数覆盖机制、探测必须用真实 body。
+④ 写进兼容投影配置的同三个落点（见 docs/MODEL-PROVIDERS.md §1）。
+**与供应商无关的部分**：兼容投影侧的写入方式、思考参数覆盖机制、探测必须用真实 body。
 
 用途
 ----
-每天跑一次，检测 Go 套餐是否新增模型，对符合收录标准的模型自动写进 ZCode 的
+每天跑一次，检测 Go 套餐是否新增模型，对符合收录标准的模型自动写进兼容投影的
 provider_config.json，并把变化写成报告。
 
 数据源（四个，必须取并集，任何一个都不完整）
@@ -53,7 +53,7 @@ import urllib.request
 BASE = "https://opencode.ai/zen/go/v1"
 GO_DOCS = "https://opencode.ai/v2/docs/console/go/"
 CATALOG_DOCS = "https://opencode.ai/v2/docs/console/models"
-# ZCode 客户端配置：默认按「当前用户主目录」推导，不要写死某个人的用户名。
+# 兼容投影配置：默认按「当前用户主目录」推导，不要写死某个人的用户名。
 # 换机器时用 --config 覆盖即可（本脚本不读 ZCODE_PERSONAL_PROVIDER_CONFIG_FILE）。
 DEFAULT_CONFIG = os.path.join(
     os.path.expanduser("~"), ".zcode", "v2", "provider_config.json"
@@ -184,7 +184,7 @@ def rows_of(html):
 def declared_efforts(models):
     """从实时 /models 里取上游声明的思考档位：capabilities.reasoning.effort。
 
-    这个字段是「上游说这个型号支持哪些档位」的唯一权威来源；ZCode 侧不写
+    这个字段是「上游说这个型号支持哪些档位」的唯一权威来源；兼容投影侧不写
     optionSpecs.reasoningLevel.values 就只会落到兜底的「思考/不思考」。
     """
     out = {}

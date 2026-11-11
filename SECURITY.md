@@ -26,9 +26,9 @@
   脚本里如果出现字面量 key，那是**缺陷**，请报上来。
 - 探测脚本会向供应商网关发真实请求。**探测有速率限制**，请遵守
   `docs/MAINTENANCE.md` 里的间隔要求 —— 打爆账号池会连累你正常用。
-- 探测会用 **ZCode 的真实请求体**（含思考参数）。这是本仓能测准的唯一原因，
+- 探测会用 **宿主生效请求体**（含思考参数，规则合并语义见 `providers/workbuddy/effective_body.js`）。这是本仓能测准的唯一原因，
   但也意味着探测本身会消耗额度。
-- `workbuddy_probe_zcode.py` 会写 `workbuddy/cache/` 下的缓存（**已被 gitignore**）。
+- `workbuddy_probe.py` 会写 `workbuddy/cache/` 下的缓存（**已被 gitignore**）。
   缓存里有账号池状态，不要提交。
 
 ## 凭据

@@ -1,12 +1,12 @@
 # Qoder（qoder2api-hub）
 
-> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入三组（主力/免费/低耗/高耗；2026-10-28 起低耗与高耗
-> 已并为「省钱」，共三组），经 `127.0.0.1:7871` 的 alias map 分流；WorkBuddy2API 与 OpenCode-Go 不动。
+> **一句话**：Qoder 由 qoder2api-hub 反代（`127.0.0.1:8790`）接入，模型以 `Q/积分/型号` 显示并并入三组（主力 / 免费 / 省钱；2026-10-28 起低耗与高耗
+> 已并为「省钱」），经 `127.0.0.1:7871` 的 alias map 分流；WorkBuddy2API 与 OpenCode-Go 不动。
 >
 > **2026-10-23 起**：下文 §4 的 `qoder:` 前缀与独立 provider 是上一版合并模式；
 > 当前命名/分组以 [MODEL-ALIAS.md](MODEL-ALIAS.md) 为准。统一探测/写入用
-> `tools/model_probe.py` + `tools/model_alias.py`；`qoder_probe_zcode.py` /
-> `qoder_zcode_sync.py` 仅作数据采集与兼容。
+> `tools/model_probe.py` + `tools/model_alias.py`；`qoder_probe.py` /
+> `qoder_sync.py` 仅作数据采集与兼容。
 
 ---
 
@@ -14,7 +14,7 @@
 
 本仓的接法是「每个上游一个专用反代 + ZCode provider」：
 
-| 上游 | 适配器 | 端口 | 在 ZCode 里的形态 |
+| 上游 | 适配器 | 端口 | 在兼容投影里的形态 |
 |---|---|---|---|
 | OpenCode-Go | 直连 / 统一路由 | — / 7871 | 三组（主力/免费/省钱；旧文档写的四组已并组） |
 | WorkBuddy | WorkBuddy2API Panel | 7863 | 模型并入三组（经 7871） |
@@ -22,7 +22,7 @@
 
 Qoder 走 7871：显示名是 `Q/积分/型号`，alias map 还原上游模型并转给 8790；
 旧的 `qoder:` 前缀只作为 legacy 回退。ZCode 的 provider 列表是三组，Qoder 只作为
-模型出现在主力/免费/低耗/高耗里。Agent2API 也评估过（多合一网关，功能更全），但它的
+模型出现在主力 / 免费 / 省钱里。Agent2API 也评估过（多合一网关，功能更全），但它的
 `/v1/models` 只吐 `credits`、不吐 Qoder 的 `price_factor` / 思考档位，且会把
 组合层吃进一个大项目里，与「加一个上游 = 加一个适配器」的目标相反。
 
@@ -77,14 +77,14 @@ Qoder 现在由 `gateways/zgate` 以 `always` 策略托管（见 [MAINTENANCE.md
 
 ## 4. ZCode provider
 
-`providers/qoder/qoder_zcode_sync.py` 默认是**合并模式**：不创建独立 provider，把模型加
+`providers/qoder/qoder_sync.py` 默认是**合并模式**：不创建独立 provider，把模型加
 `qoder:` 前缀后写入现有三个 chat 组：
 
 | `price_factor` | 目标 provider | 显示组 |
 |---|---|---|
 | `0` | `opencode-go-chat-free` | 免费 |
-| `0 < x ≤ 0.2` | `opencode-go-chat-fast` | 低耗 |
-| `> 0.2` | `opencode-go-chat-slow` | 高耗 |
+| `0 < x ≤ 0.2` | `opencode-go-chat-fast` | 省钱 |
+| `> 0.2` | `opencode-go-chat-slow` | 省钱 |
 
 `--separate` 才写独立的 `qoder` provider（旧模式，bare model id）。
 
@@ -132,25 +132,25 @@ Qoder 现在由 `gateways/zgate` 以 `always` 策略托管（见 [MAINTENANCE.md
 > （见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §6）。下面的 Qoder 专用命令只用于采集/兼容。
 
 **每天 12:00 的定时任务已包含 Qoder**（`automation-3e2f8a53-b408-4bf8-90ff-4a331a721f5c`）：
-先跑 `providers/qoder/qoder_probe_zcode.py --timeout 90 --sleep 3` 拉实时目录并逐个探测，再用
-`providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply` 并入 chat 组，
+先跑 `providers/qoder/qoder_probe.py --timeout 90 --sleep 3` 拉实时目录并逐个探测，再用
+`providers/qoder/qoder_sync.py --probe-file providers/qoder/qoder_probe.json --apply` 并入 chat 组，
 最后由 `tools/model_alias.py --slot auto --apply` 归一化成 `Q/积分/型号` 并分到三组。
 探测默认经 7871；路由不可用时定时任务会改用 `--direct` 直连 8790 重探。
 完整四段顺序见 [MAINTENANCE.md](MAINTENANCE.md) §6。
 
 ```bash
 # 1. 看当前目录与价格（dry run，不写）
-python providers/qoder/qoder_zcode_sync.py
+python providers/qoder/qoder_sync.py
 
-# 2. 用 ZCode 真实 body 探测（写入 providers/qoder/qoder_probe.json）
-python providers/qoder/qoder_probe_zcode.py
+# 2. 用宿主生效请求体探测（写入 providers/qoder/qoder_probe.json）
+python providers/qoder/qoder_probe.py
 
 # 3. 只保留探测 ok 的模型并写入（先备份）
-python providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply
+python providers/qoder/qoder_sync.py --probe-file providers/qoder/qoder_probe.json --apply
 
 # 单独重试排队的免费模型（例如晚上队列空了）
-python providers/qoder/qoder_probe_zcode.py --only Qwen3.8-Flash --timeout 180
-python providers/qoder/qoder_zcode_sync.py --probe-file providers/qoder/qoder_probe.json --apply
+python providers/qoder/qoder_probe.py --only Qwen3.8-Flash --timeout 180
+python providers/qoder/qoder_sync.py --probe-file providers/qoder/qoder_probe.json --apply
 ```
 
 默认是合并模式：写入现有三组，不建独立 provider；`--separate` 才写
@@ -185,7 +185,7 @@ git -C gateways/upstream/qoder pull --ff-only
   对官方客户端 OAuth 设备流的复用。账号风控/条款风险自担，只接自己的账号。
 - 国内版与国际版是两套账号、两套目录，凭证不通用；当前只接了 CN。
 - Qoder 的模型目录是**动态**的，还会出现 `Auto` / `Fast` 这类别名；不要把
-  「目录里出现」当成「可以收录」，一律先过 `qoder_probe_zcode.py`。
+  「目录里出现」当成「可以收录」，一律先过 `qoder_probe.py`。
 - Qoder 与 WorkBuddy 是两套账号池，不要用同一个 Qoder 账号再起第二个网关；
   也不要把 Qoder 的 token 塞进 WorkBuddy2API。
 - 合并模式下 Qoder 模型在三组里，必须保证 7871 路由在跑；Qoder hub

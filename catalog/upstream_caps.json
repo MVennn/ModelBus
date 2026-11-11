@@ -49,24 +49,6 @@
       "notes": ""
     },
     {
-      "display": "Gemini-3.8-Flash",
-      "channel": "HJ",
-      "base": "[福利]gemini-3.8-flash",
-      "context_window": 1048576,
-      "max_output_tokens": 65536,
-      "supports_tool_call": true,
-      "supports_image": true,
-      "field_sources": {
-        "context_window": "evidence:vendor-doc-gemini-3.8-flash-limits",
-        "max_output_tokens": "evidence:vendor-doc-gemini-3.8-flash-limits",
-        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
-        "supports_image": "evidence:vendor-doc+inline-png-probe"
-      },
-      "conflicts": [],
-      "cross": [],
-      "notes": "HJ 端点 /v1/models 需鉴权且未见能力字段；HJ /v1beta/models 的 input/outputTokenLimit 全为 null、/api/pricing 无 context 字段，本渠道没有 API 级能力元数据；值取自官方 3.8 Flash Token limits 与 Modalities 页，图像能力另用内联 2x2 PNG 实测（返回 \"Pink\"）。取证：evidence/agent-gemini-truth.md"
-    },
-    {
       "display": "Gemini-AIS",
       "channel": "GM",
       "base": "ais-gemini-3.8-flash",

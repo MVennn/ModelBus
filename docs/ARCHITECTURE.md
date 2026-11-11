@@ -43,13 +43,13 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 ---
 
-## 1. 现状（2026-10-23 19:19 实测）
+## 1. 历史快照（2026-10-23 19:19 实测；`zcode_gateway_watch.ps1` 已退役，现役生命周期由 `gateways/zgate` 托管）
 
 测量命令见 §9，数据单位 MB（WorkingSet）。
 
 | # | 进程 | 端口 | WS | 谁管它的生命周期 | 它挂了会怎样 |
 |---|---|---|---|---|---|
-| 1 | `powershell.exe`（`zcode_gateway_watch.ps1`） | — | **124.2** | 启动文件夹快捷方式 → `.vbs` | 网关/路由死了没人拉起；ZCode 关掉后网关不回收 |
+| 1 | `powershell.exe`（`zcode_gateway_watch.ps1`，已退役） | — | **124.2** | 启动文件夹快捷方式 → `.vbs` | 网关/路由死了没人拉起；ZCode 关掉后网关不回收 |
 | 2 | `node.exe tools/unified-router.js` | 7871 | **71.5** | #1 | **四组全挂**（路由在关键路径上） |
 | 3 | `python.exe qoder_proxy.py` | 8790 | **70.1** | `start-qoder-proxy.bat`（detached，24/7） | 只有 `qoder:` 模型不可用 |
 | 4 | `wb2api.exe` | 7863 | **27.6** | #1 | 只有 `cn:` / `global:` 模型不可用 |
@@ -248,7 +248,7 @@ ModelBus/
 ### P0 · 目录重构（0.5 天，零行为变化）
 
 - 做 §4.3 的移动 + 引用修正。
-- 验收：`check-docs` / `check-secrets` 通过；ZCode 四组模型列表不变；三个网关重启后可用。
+- 验收：`check-docs` / `check-secrets` 通过；兼容投影三组模型列表不变；三个网关重启后可用。
 
 ### P1 · Go 守护器顶掉 PowerShell（1 天，省 ~114 MB）
 
@@ -313,7 +313,7 @@ ModelBus/
 ### 6.3 回退
 
 - P0：`git revert` 一个提交（clone 是 untracked，搬回即可）。
-- P1：`zgate uninstall` → 重新 `zcode_gateway_watch.ps1 -Install`。
+- P1：`zgate uninstall` → 重新执行 `zgate install` 恢复自启（`zcode_gateway_watch.ps1` 已退役，不再作为回退）。
 - P2：`config.json` 里 `router.impl = "node"`，仍可回落 JS 版（保留一个版本）。
 - P3：`config.json` 里把通道改回 `always`，重启即恢复今天行为。
 
@@ -328,7 +328,7 @@ ModelBus/
 | 3 | 崩溃重启 | `Stop-Process` 掉子进程 → 5 s 内自动回来；`/health` 反映状态变化 |
 | 4 | 孤儿清理 | 强杀 zgate → 子进程随之退出（Job Object 生效） |
 | 5 | 心跳/日志 | 15 min 一条心跳；日志轮转正常，UTF-8 不乱码 |
-| 6 | 不回归 | 四组共 36 个模型的列表、`baseUrl` 与今天完全一致 |
+| 6 | 不回归 | 三组共 36 个模型的列表、`baseUrl` 与今天完全一致 |
 | 7 | 黄金回归 | `zgate replay` 全绿（§6.1） |
 | 8 | 流式 | 三个渠道各挑一个流式请求，首字时间与今天同量级，SSE 无截断 |
 | 9 | 工具调用 | 各渠道一个工具调用样本，参数 JSON 完整 |

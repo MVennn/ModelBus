@@ -3,7 +3,7 @@
 
 为什么需要它：千问的免费额度是「每模型 1M tokens」，用完就 403。池子里死跳越多，
 路由每请求就要多撞几次超时，用户体感就是首字极慢。定时任务每天跑一遍这个脚本，
-再用 `qwen_zcode_sync.py --write-pools --probe-file …` 把死跳剔掉。
+再用 `qwen_sync.py --write-pools --probe-file …` 把死跳剔掉。
 
 用法：
     python providers/qwen/qwen_pool_probe.py
@@ -137,7 +137,7 @@ def main() -> int:
     out = Path(args.output).expanduser()
     out.write_text(json.dumps(results, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
     print(f"已写入 {out.name}")
-    print("下一步：python providers/qwen/qwen_zcode_sync.py --write-pools "
+    print("下一步：python providers/qwen/qwen_sync.py --write-pools "
           f"--probe-file {out.name}")
     return 0
 

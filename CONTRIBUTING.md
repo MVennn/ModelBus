@@ -4,6 +4,8 @@
 
 ## 跑起来
 
+> 主宿主是 DSH：模型目录投影到 `~/.dsh/profiles/<profile>/cordis.patch.yml`，改完投影器跑 `python -B tools/dsh_sync.py --check` 验收。
+
 ```bash
 python3 providers/opencode-go/ops/go_model_sync.py            # 干跑（默认不写配置）
 python3 providers/opencode-go/ops/go_model_sync.py --apply     # 真写
@@ -27,8 +29,8 @@ python smoke_test.py                           # 四条通道各打一发（会�
 | `OPENCODE_GO_KEY` | OpenCode-Go 的 API key |
 | `WB_GATEWAY_KEY` | WorkBuddy 网关的 api_key |
 | `WB_GATEWAY_BASE` | 网关地址（默认 `http://127.0.0.1:7863`） |
-| `WB_PRICING_FILE` / `WB_ZCODE_PROBE_FILE` | 价格表 / 探测缓存路径 |
-| `ZCODE_BUILTIN` | ZCode 内置规则文件路径 |
+| `WB_PRICING_FILE` / `WB_PROBE_FILE`（旧名 `WB_ZCODE_PROBE_FILE` 仍兼容） | 价格表 / 探测缓存路径 |
+| `ZCODE_BUILTIN` | 兼容投影的内置规则文件路径（外部契约名，保持不变） |
 | `GO_SYNC_REPORT_DIR` | 同步报告输出目录 |
 
 ## 加一个新供应商
@@ -38,17 +40,17 @@ python smoke_test.py                           # 四条通道各打一发（会�
 
 1. 摸清它的**接口面** —— 模型清单在哪、价格怎么取、鉴权怎么带；
 2. **归一化**成统一的字段（`id` / `eff_rate` / `ctx` / `out` / `tool` / `img` / `efforts`）；
-3. 用 **ZCode 的真实请求体**探测哪些模型真能用（两条铁律见 `docs/PITFALLS.md`）；
-4. 按成本档写进 `provider_config.json`。
+3. 用 **宿主生效请求体**探测哪些模型真能用（两条铁律见 `docs/PITFALLS.md`）；
+4. 按成本档写进 `catalog/` 真源，再投影到 DSH `cordis.patch.yml` 与兼容投影 `provider_config.json`。
 
-**不用改**的是 ZCode 侧的三处落点与 `reasoningLevel.map` 的覆盖机制。
+**不用改**的是兼容投影侧的三处落点与 `reasoningLevel.map` 的覆盖机制。
 
 ## 硬规矩
 
 - **凭据只走环境变量。** 代码、文档、日志、缓存里都不许出现明文 key。
 - **探测要有间隔。** 详见 `docs/MAINTENANCE.md`。
-- 改 `providers/workbuddy/zcode_effective_body.js` 时要**对着上游源码**核对语义 ——
-  ZCode 已开源（Apache-2.0），vendored 副本在 `third-party/zcode/`，
+- 改 `providers/workbuddy/effective_body.js` 时要**对着 vendored 上游源码**核对语义 ——
+  上游已开源（Apache-2.0），vendored 副本在 `third-party/zcode/`，
   规则遍历顺序与合并语义见 `third-party/zcode/UPSTREAM.md`。
 - 不要改 `third-party/`（vendored 上游）。
 

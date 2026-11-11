@@ -1,15 +1,15 @@
 #!/usr/bin/env python3
-r"""Probe WorkBuddy gateway models with the EXACT body ZCode will send.
+r"""Probe WorkBuddy gateway models with the EXACT body the host will send.
 
 Scope
 -----
 **This is the WorkBuddy2API adapter, not a generic framework.**  It talks to a
 WorkBuddy2API gateway (`/v1/chat/completions`, OpenAI-compatible) and reads that
 gateway's account pool.  To onboard a *different* provider, write a sibling
-script with the same shape: reuse `zcode_effective_body.js` (vendor-neutral),
+script with the same shape: reuse `effective_body.js` (vendor-neutral),
 point the request at your own base URL, and keep the same status vocabulary.
 
-ZCode's builtin `modelConfigRules.modelApiRules` inject extra thinking fields
+The host's builtin `modelConfigRules.modelApiRules` inject extra thinking fields
 into every `openai-chat-completions` request (resources/config/provider/
 zcode-builtin.json):
 
@@ -27,13 +27,13 @@ zcode-builtin.json):
 
 The gateway forwards those fields verbatim upstream (it only rewrites
 reasoning_effort for models it knows), so a model that rejects one of them
-400s in ZCode while a plain curl works. This probe replays the body ZCode
+400s in the host while a plain curl works. This probe replays the body the host
 would send, then retries with slimmer variants to find a working shape.
 
 Writes a resumable JSON cache: model id -> {status, variant, http, detail}.
 
 Status:
-    ok        - HTTP 200 with the primary (ZCode-native) body
+    ok        - HTTP 200 with the primary (host-native) body
     fallback  - primary body failed, a slimmer body worked (map override needed)
     blocked   - upstream says the account type may not use this model
     unavailable - model not available upstream
@@ -41,8 +41,8 @@ Status:
     error     - anything else
 
 Usage:
-    python workbuddy_probe_zcode.py --sleep 20
-    python workbuddy_probe_zcode.py --only cn: --sleep 12
+    python workbuddy_probe.py --sleep 20
+    python workbuddy_probe.py --only cn: --sleep 12
 """
 from __future__ import annotations
 
@@ -64,26 +64,26 @@ CACHE_DIR = HERE / "cache"
 # 活数据（价格表 / 探测结果）统一放 cache/；可用环境变量覆盖
 STATUS_FILE = Path(
     os.environ.get(
-        "WB_ZCODE_PROBE_FILE",
-        CACHE_DIR / "wb_zcode_probe.json",
+        "WB_PROBE_FILE",
+        os.environ.get("WB_ZCODE_PROBE_FILE", CACHE_DIR / "wb_zcode_probe.json"),
     )
 )
 PRICING_FILE = Path(
     os.environ.get("WB_PRICING_FILE", CACHE_DIR / "wb_pricing.json")
 )
 
-EFFECTIVE_BODY_SCRIPT = HERE / "zcode_effective_body.js"
+EFFECTIVE_BODY_SCRIPT = HERE / "effective_body.js"
 
-# Cache of model id -> ZCode's effective thinking body, computed by replaying
-# the engine's own rule resolution (zcode_effective_body.js).
+# Cache of model id -> the host's effective thinking body, computed by replaying
+# the engine's own rule resolution (effective_body.js).
 _EFFECTIVE: dict[str, dict] = {}
 
 
 def load_effective_bodies(ids: list[str], max_tokens: int = 24) -> dict[str, dict]:
-    """Ask Node for the exact body ZCode sends for each model id.
+    """Ask Node for the exact body the host sends for each model id.
 
     max_tokens is passed through so that the `maxOutputTokens` scope variable in
-    ZCode's map expressions resolves to *our* request's value — upstream applies
+    The host's map expressions resolves to *our* request's value — upstream applies
     `optionSpecs.maxOutputTokens.map` too, and that rule reads that variable.
     """
     global _EFFECTIVE
@@ -107,8 +107,8 @@ def load_effective_bodies(ids: list[str], max_tokens: int = 24) -> dict[str, dic
     return _EFFECTIVE
 
 
-def zcode_body(model: str, max_tokens: int = 24) -> dict:
-    """Build the request body ZCode would send for this model."""
+def host_body(model: str, max_tokens: int = 24) -> dict:
+    """Build the request body the host would send for this model."""
     eff = load_effective_bodies([model], max_tokens).get(model, {})
     body: dict = {
         "model": model,
@@ -122,7 +122,7 @@ def zcode_body(model: str, max_tokens: int = 24) -> dict:
 
 
 def body_kind(model: str) -> str:
-    """Short label for the shape ZCode uses (for logging)."""
+    """Short label for the shape the host uses (for logging)."""
     eff = load_effective_bodies([model]).get(model, {})
     keys = set((eff.get("body") or {}).keys())
     if "enable_thinking" in keys and "reasoning" in keys:
@@ -147,7 +147,7 @@ def build_bare(model: str) -> dict:
 
 
 def build_body(model: str, kind: str, effort: str = "high") -> dict:
-    """Slimmer bodies tried when ZCode's native body is rejected."""
+    """Slimmer bodies tried when the host's native body is rejected."""
     body: dict = {
         "model": model,
         "messages": [{"role": "user", "content": "ok"}],
@@ -262,16 +262,16 @@ def main() -> int:
 
     for i, mid in enumerate(pending, 1):
         kind = body_kind(mid)
-        code, resp = http_json(zcode_body(mid))
+        code, resp = http_json(host_body(mid))
         st, detail = classify(code, resp)
-        used = "zcode"
+        used = "host"
         if st == "error" or code == 0:
-            # ZCode's native body was rejected - find a slimmer one that works.
+            # The host's native body was rejected - find a slimmer one that works.
             for alt in FALLBACK_ORDER:
                 c2, r2 = http_json(build_body(mid, alt) if alt != "bare" else build_bare(mid))
                 st2, det2 = classify(c2, r2)
                 if st2 == "ok":
-                    st, detail, used = "fallback", f"zcode body rejected; '{alt}' works", alt
+                    st, detail, used = "fallback", f"host body rejected; '{alt}' works", alt
                     break
                 if st2 == "blocked":
                     st, detail, used = "blocked", det2, alt
@@ -279,7 +279,7 @@ def main() -> int:
         cache[mid] = {
             "status": st,
             "variant": used,
-            "zcode_body": kind,
+            "host_body": kind,
             "http": code,
             "detail": detail,
             "rate": pricing[mid].get("eff_rate"),

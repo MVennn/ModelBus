@@ -1,6 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""同步报告：对比上一次快照，写出本次模型清单的变化，并可选提交推送。
+"""同步报告：对比上一次快照，写出本次模型清单的变化，并可选提交推送
+
+本仓以 DSH 为主宿主；状态文件落在兼容投影目录 ~/.zcode/v2/，DSH 侧投影由
+tools/dsh_sync.py 写 cordis.patch.yml，各类 agent 只读 catalog/ 真源。。
 
 用法：
     python tools/sync_report.py                      # 只打印摘要（dry run）

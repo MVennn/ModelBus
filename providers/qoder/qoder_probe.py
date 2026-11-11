@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Probe Qoder models with the exact body ZCode will send.
+"""Probe Qoder models with the exact body the host will send.
 
 Default mode probes through the unified router (127.0.0.1:7871) with the
-`qoder:` prefix, i.e. the same path ZCode uses after the merge. The catalog is
+`qoder:` prefix, i.e. the same path the host uses after the merge. The catalog is
 always read from qoder2api-hub (127.0.0.1:8790) so the candidate list includes
-models that are currently not in the ZCode config (e.g. the queued free
+models that are currently not in the host config (e.g. the queued free
 Qwen3.8-Flash can be retried and re-added).
 
-    ok            HTTP 200 with the ZCode-native body
+    ok            HTTP 200 with the host-native body
     fallback      native body failed, a slimmer body worked (needs a map rule)
     queued        upstream 10605 / isQueued (transient; retry later)
     rate_limited  429 / upstream rate limit
@@ -17,16 +17,16 @@ Qwen3.8-Flash can be retried and re-added).
     error         anything else
 
 Every record carries `ever_ok`: true once the model has answered 200 at least
-once. `qoder_zcode_sync.py --probe-file` keeps a previously working model
+once. `qoder_sync.py --probe-file` keeps a previously working model
 through a transient queue/timeout, while a model that has never answered is
 not added.
 
 Usage
 -----
-    python qoder/qoder_probe_zcode.py                  # via router, prefixed
-    python qoder/qoder_probe_zcode.py --direct         # via hub, bare ids
-    python qoder/qoder_probe_zcode.py --only Qwen3.8-Flash --timeout 180
-    python qoder/qoder_probe_zcode.py --sleep 3
+    python qoder/qoder_probe.py                  # via router, prefixed
+    python qoder/qoder_probe.py --direct         # via hub, bare ids
+    python qoder/qoder_probe.py --only Qwen3.8-Flash --timeout 180
+    python qoder/qoder_probe.py --sleep 3
 
 The API key comes from `--api-key`, `$QD_API_KEY`, or `qoder/.env.local`; it is
 never printed. Probes are charged like normal requests (the free models are
@@ -43,7 +43,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-from qoder_zcode_sync import (
+from qoder_sync import (
     DEFAULT_MAX_PRICE,
     fetch_models,
     resolve_api_key,
@@ -55,7 +55,7 @@ REPO = HERE.parent
 DEFAULT_HUB = "http://127.0.0.1:8790/v1"
 DEFAULT_PROBE = HERE / "qoder_probe.json"
 DEFAULT_PREFIX = "qoder:"
-EFFECTIVE_BODY = REPO / "workbuddy" / "zcode_effective_body.js"
+EFFECTIVE_BODY = REPO / "workbuddy" / "effective_body.js"
 
 
 def catalog_ids(catalog_base: str, key: str, max_price: float) -> list[str]:

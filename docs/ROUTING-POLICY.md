@@ -68,8 +68,8 @@
 | 5xx 软冷却 / 超时 5min / 地区受限 / 不可用 | 落 cool 表 | **不落表**，只打 Info |
 | 429 限流 / 额度耗尽 | 落表（限流 45s / 额度 24h） | **仍然落表** |
 
-理由：单跳链冷却一跳 = 把这个模型整体关掉。当天的现场就是 Gemini-3.8-Flash 从「偶尔慢」变成「连片 502」——
-那唯一一跳被本地判死埋了冷却，下一个请求连上游都没碰。反过来 429 与额度是上游**明确拒绝**，
+理由：单跳链冷却一跳 = 把这个模型整体关掉。2026-11-10 的现场就是一条单跳模型从「偶尔慢」变成「连片 502」——
+那唯一一跳被本地判死埋了冷却，下一个请求连上游都没碰（那个模型 2026-11-11 已下线，机制照旧对所有单跳链生效）。反过来 429 与额度是上游**明确拒绝**，
 继续打只会更糟，所以照旧冷却。
 
 ### 3.1 `hopBase`：base 只有一个事实来源
@@ -242,7 +242,7 @@ GM 下 7 个 Gemini Flash 档同价 0.11/次，但质量差三档：
 `tools/model_alias.py` 里的 `CHAIN_CAP = {"Gemini-AIS": 3}` 在 `family_entries` 组链时截断，
 被裁掉的跳写进该条目的 `dropped_hops` 并仍留在 `legacy_ids` 里 —— 老会话点名
 `ais-gemini-3.5-flash` 照样解析到 Gemini-AIS（不会 404），只是链不再真去打它。
-其余 19 个模型的 chain 逐条比对确认未变。
+其余模型的 chain 逐条比对确认未变。
 
 改的是**生成器**不是产物：以后重跑 `python -B tools/model_alias.py --apply` 仍然只出 3 跳；
 要恢复 7 跳，删掉这行常量再重跑。
@@ -255,7 +255,7 @@ GM 下 7 个 Gemini Flash 档同价 0.11/次，但质量差三档：
 3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard / upstream / hops 五段
    （`hops` 里 `GM|ais-gemini-3.8-flash` 的 `ok/try` 就是「3.8 最近到底行不行」）
    （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
-   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=20 / catalog_total=93`、`?scope=legacy` 应 `total=73`、`?scope=bad` 应 400。
+   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=19 / catalog_total=91`、`?scope=legacy` 应 `total=72`、`?scope=bad` 应 400（2026-11-11 下线一个模型后的实测值；`catalog_total` 随上游目录走，会自己变）。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。
 5. 回退：配置问题改 `zgate.json` 加 reload；代码问题 `git revert` 后跑同一条换版脚本。
 

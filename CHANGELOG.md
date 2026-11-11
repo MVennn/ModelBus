@@ -17,6 +17,19 @@
 
 ## [未发布]
 
+### DSH 主导架构：命名去 ZCode + 多 agent 只读投影（2026-11-11）
+
+> **一句话**：本仓从「给 ZCode 客户端写配置的脚本集」改成「DSH 主宿主 + 各类 agent 共用模型供给与路由策略」，ZCode 降为兼容投影；契约层路径 / env / schema / 商标一字不动，只改实现层命名与叙述。
+
+- **方向正本**：`docs/DSH-FIRST.md` §2 现状表与 §4 批次表改为当前架构（DSH 主宿主 + 会话 / 子代理 / headless / 服务插件各类 agent，共用 `gateways/zgate` 单一入口）；门面 `README.md` / `CONTRIBUTING.md` / `SECURITY.md` / `AGENTS.md` / `docs/README.md` 主语同步，18 个 `blob/main` 绝对链接改相对链接。
+- **命名去 ZCode（实现层）**：6 个脚本改名到中性名（`workbuddy_zcode_sync.py`→`workbuddy_sync.py`、`workbuddy_probe_zcode.py`→`workbuddy_probe.py`、`zcode_effective_body.js`→`effective_body.js`、`qoder_zcode_sync.py`→`qoder_sync.py`、`qoder_probe_zcode.py`→`qoder_probe.py`、`qwen_zcode_sync.py`→`qwen_sync.py`），`tools/dsh_sync.py` / `tools/model_probe.py` / `sync-models.ps1` 及 provider 自引用同步；4 组自造 env 新名优先旧名兜底（`WB_PROBE_FILE` / `MB_API_TYPE` / `MB_BASE_URL` / `MB_MAX_OUTPUT_TOKENS`），旧名仍可读。
+- **多 agent 只读投影**：新增 `tools/agent_profiles.py`（以 `catalog/model_caps.json` 为唯一能力真源，为 session / subagent / headless / service-plugin 四类 profile 生成只读投影，`--list` / `--check` / `--json`，不写任何现网配置）+ 14 项 unittest；`docs/TOOLS.md` 补索引。
+- **DSH 原生真源开关**：`tools/dsh_sync.py` 新增 `--source compat|dsh`（默认 compat 与改造前逐字节等价）、`--export-inventory`（导出零凭据清单 `modelbus-inventory/v1`）、`--no-catalog-caps`；dsh 源读 DSH 侧清单 + catalog 能力真值、不缩型号全集（避免主力组被摘导致会话卡死），`--check` 无凭据不再误报 exit 2；10 项等价性测试 + C3 修法。
+- **叙述层去 ZCode 专项表述**：第一方 `tools/`、legacy-router JS、`model_alias.py` / `make_social_preview.py`、`providers/` 的 docstring / 注释 / 报错文案 / User-Agent 改为「DSH 主宿主 / 兼容投影」口径；`gateways/zgate/` 下 Go 侧 11 行叙述性注释本轮不动（改 Go 注释会触发 zgate 受控换版，长驻网关禁止会话自动重启），列为后续演进。
+- **验收**：`unittest discover` Ran 158 / OK；`check-docs.py` 46 篇全过（链接 / 锚点 / 引言块 / 孤儿）；`check-project.py` 8 项全过；`dsh_sync.py --check` 模型表与凭据引用无变化；`model_caps.py --check` 的 10 条能力真值差异经 `git show HEAD:tools/model_caps.py` 基线复核为本轮前既有，非本次引入。
+- **收尾复跑与过期口径**：全部改动落盘后再跑六道门禁（日志 `.work/dsh-gate-20261111/gate-final.log`）—— unittest 158 OK / check-docs 46 篇 / check-project 8 项 / dsh_sync --check 模型表与凭据引用无变化 / py_compile EXIT=0；model_caps --check 仍为本轮前既有 10 条能力真值差异（HEAD 基线复核）。独立读现网配置取证（providerModelRules 19 条 / 空 map 0 条 / 3 组），收口 `docs/MODEL-PROVIDERS.md:739` 与 `docs/DSH-FIRST.md` §7 八处过期口径；汇总审查报告 `evidence/DSH-REVIEW-SUMMARY-2026-11-11.md`。
+- **回退**：门面/方向正本 `.work/dsh-first-20261111/`、改名 `.work/dsh-rename-20261111/`、DSH 源补丁 `.work/dsh-source-20261111/`（含 `dsh_sync.py.pre-patch.bak`）、tools 叙述层 `.work/dsh-tools-20261111/`、providers `.work/dsh-providers-20261111/` 均留原态备份；契约层未动，回滚只需还原备份并把 6 个新名改回旧名。
+
 ### 流式请求提前交卷：等上游响应头期间先回 200 + SSE 心跳（2026-11-10 22:00，需换二进制）
 
 > 判死权归上游之后还剩一个洞：上游要 60 秒才给响应头时，这 60 秒里客户端一个字节都收不到，自己就会判死重试 —— 本地不判死了，不代表客户端不判。

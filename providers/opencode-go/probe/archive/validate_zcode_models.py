@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Validate every model configured in ZCode against its provider protocol."""
+"""Validate every model configured in the compatibility projection against its provider protocol."""
 import json, os, time, urllib.request, urllib.error
 
-# ZCode 客户端配置：按「当前用户主目录」推导，不要写死某个人的用户名
+# 兼容投影配置：按「当前用户主目录」推导，不要写死某个人的用户名
 CFG = os.path.join(os.path.expanduser("~"), ".zcode", "v2", "provider_config.json")
 d = json.load(open(CFG, encoding="utf-8"))
 cfg = d["config"]
@@ -13,7 +13,7 @@ for p in cfg["providerConfigRules"]["providerRules"]:
     KEY = p["config"]["access"]["apiKey"]
     break
 
-UA = "zcode-validate/1.0"
+UA = "modelbus-validate/1.0"
 
 def call(model, api_type):
     headers = {"Content-Type": "application/json", "User-Agent": UA,

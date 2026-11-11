@@ -41,21 +41,21 @@ def try_chat(mid):
         "model": mid, "messages": [{"role": "user", "content": "Say OK"}],
         "max_tokens": 16, "stream": False,
     }, {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-        "User-Agent": "zcode-probe/1.0", "x-opencode-session": f"p-{mid}"})
+        "User-Agent": "modelbus-probe/1.0", "x-opencode-session": f"p-{mid}"})
 
 def try_messages(mid):
     return post("/messages", {
         "model": mid, "max_tokens": 16,
         "messages": [{"role": "user", "content": "Say OK"}],
     }, {"x-api-key": _key(), "anthropic-version": "2023-06-01",
-        "Content-Type": "application/json", "User-Agent": "zcode-probe/1.0",
+        "Content-Type": "application/json", "User-Agent": "modelbus-probe/1.0",
         "x-opencode-session": f"p-{mid}"})
 
 def try_responses(mid):
     return post("/responses", {
         "model": mid, "input": "Say OK", "max_output_tokens": 16,
     }, {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-        "User-Agent": "zcode-probe/1.0", "x-opencode-session": f"p-{mid}"})
+        "User-Agent": "modelbus-probe/1.0", "x-opencode-session": f"p-{mid}"})
 
 def summarize(raw):
     try:

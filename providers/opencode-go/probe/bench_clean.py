@@ -46,21 +46,21 @@ def stream_call(mid, proto, max_tokens=400):
     if proto == "chat":
         url = BASE + "/chat/completions"
         hdr = {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-               "User-Agent": "zcode-bench/1.0", "x-opencode-session": f"sb-{mid}",
+               "User-Agent": "modelbus-bench/1.0", "x-opencode-session": f"sb-{mid}",
                "Accept": "text/event-stream"}
         body = {"model": mid, "messages": [{"role": "user", "content": PROMPT}],
                 "max_tokens": max_tokens, "stream": True, "temperature": 0}
     elif proto == "messages":
         url = BASE + "/messages"
         hdr = {"x-api-key": _key(), "anthropic-version": "2023-06-01",
-               "Content-Type": "application/json", "User-Agent": "zcode-bench/1.0",
+               "Content-Type": "application/json", "User-Agent": "modelbus-bench/1.0",
                "x-opencode-session": f"sb-{mid}", "Accept": "text/event-stream"}
         body = {"model": mid, "max_tokens": max_tokens,
                 "messages": [{"role": "user", "content": PROMPT}], "stream": True}
     else:
         url = BASE + "/responses"
         hdr = {"Authorization": f"Bearer {_key()}", "Content-Type": "application/json",
-               "User-Agent": "zcode-bench/1.0", "x-opencode-session": f"sb-{mid}",
+               "User-Agent": "modelbus-bench/1.0", "x-opencode-session": f"sb-{mid}",
                "Accept": "text/event-stream"}
         body = {"model": mid, "input": PROMPT, "max_output_tokens": max_tokens,
                 "stream": True}

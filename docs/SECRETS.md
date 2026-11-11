@@ -31,7 +31,7 @@
 | **WorkBuddy 网关 key** | 本机 `wb2api` 网关自己的 `api_key`（网关面板 / 配置里） | 2 个 WorkBuddy 脚本从环境变量 **`WB_GATEWAY_KEY`** 读 | **不入库**。网关换账号池时一并轮换 |
 | **统一路由的上游 key** | 不新增凭据文件：OpenCode key 从 `provider_config.json` / `OPENCODE_GO_KEY` 读，WorkBuddy key 从 `gateways/upstream/workbuddy/config.json` / `WB_GATEWAY_KEY` 读 | `gateways/zgate` 启动时读取；只监听 `127.0.0.1`；`/health` 只返回 key 是否存在，不返回值 | **不入库**。轮换上游 key 后重启路由 |
 | **网关账号池凭据**（`auths/`，4 个号） | 本机 `gateways/upstream/workbuddy/auths/`（上游 clone 的运行目录）；`config.json` 里还有网关自己的 `api_key` | 整个 `gateways/upstream/workbuddy/` 被 `.gitignore` 排除；仓库里只出现 `WB_GATEWAY_KEY` 这个变量名 | **不入库**。换账号池时整目录一起换 |
-| **Qoder API key**（`qd-…`） | qoder2api-hub 的 `gateways/upstream/qoder/accounts/settings.json`；本地脚本与 7871 路由从 `providers/qoder/.env.local` 的 `QD_API_KEY` 读 | `providers/qoder/qoder_zcode_sync.py` / `qoder_probe_zcode.py` 只从环境变量或本地 `.env.local` 读；合并模式**不**把 key 写进 provider_config（separate 模式才写） | **不入库**。轮换后同步改 `settings.json` 与 `.env.local` |
+| **Qoder API key**（`qd-…`） | qoder2api-hub 的 `gateways/upstream/qoder/accounts/settings.json`；本地脚本与 7871 路由从 `providers/qoder/.env.local` 的 `QD_API_KEY` 读 | `providers/qoder/qoder_sync.py` / `qoder_probe.py` 只从环境变量或本地 `.env.local` 读；合并模式**不**把 key 写进 provider_config（separate 模式才写） | **不入库**。轮换后同步改 `settings.json` 与 `.env.local` |
 | **Qoder 面板密码** | `gateways/upstream/qoder/accounts/settings.json` 的 PBKDF2 摘要；初始值来自 `providers/qoder/.env.local` 的 `QD_PANEL_PASSWORD` | 本仓不出现值；`.env.local` 与整个 clone 都 gitignore | **不入库**。看板「设置」可改 |
 | **Qoder 账号凭据**（OAuth device token / refresh token） | `gateways/upstream/qoder/accounts/<uid>.json` | 整个 `gateways/upstream/qoder/` 被 `.gitignore` 排除 | **不入库**。换账号时整目录操作 |
 | **千问平台 API key**（`sk-ws-…`） | 控制台 `platform.qianwenai.com/home/api-keys`；本机写在 `providers/qwen/.env.local`（`.gitignore` 排除） | 脚本与 `zgate` 只从环境变量或该文件读；`/health` 只报 key 是否存在 | **不入库**。轮换后改 `.env.local` 并重启 zgate |
@@ -72,7 +72,7 @@ export OPENCODE_GO_KEY='<OpenCode-Go api_key>'
 ### 3.2 WorkBuddy 网关 key
 
 - **环境变量**：**`WB_GATEWAY_KEY`**。
-- **谁在读**：`providers/workbuddy/workbuddy_probe_zcode.py`、`providers/workbuddy/workbuddy_zcode_sync.py`
+- **谁在读**：`providers/workbuddy/workbuddy_probe.py`、`providers/workbuddy/workbuddy_sync.py`
   （历史脚本 `providers/workbuddy/archive/workbuddy_probe_models.py` 同样读它）。
 - **缺失时**：**本地不会报错** —— 脚本照常发请求，只是 `Authorization` 头带空值，
   网关回 **401**。这是本仓与 OpenCode-Go 侧的一个**行为差异**，排查时注意区分：
@@ -85,7 +85,7 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 ### 3.3 网关地址
 
 - **环境变量**：**`WB_GATEWAY_BASE`**，默认 `http://127.0.0.1:7863`。
-- **谁在读**：`providers/workbuddy/workbuddy_probe_zcode.py`、`providers/workbuddy/workbuddy_zcode_sync.py`。
+- **谁在读**：`providers/workbuddy/workbuddy_probe.py`、`providers/workbuddy/workbuddy_sync.py`。
 - 换成远端网关时用环境变量覆盖，不必改代码。
 
 ### 3.4 ZCode 配置文件路径
@@ -94,7 +94,7 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 |---|---|
 | 默认路径 | `~/.zcode/v2/provider_config.json`（Windows：`C:\Users\<用户名>\.zcode\v2\provider_config.json`） |
 | 覆盖方式 | 环境变量 **`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`** |
-| 谁在读 | `providers/workbuddy/workbuddy_zcode_sync.py` |
+| 谁在读 | `providers/workbuddy/workbuddy_sync.py` |
 
 > **已知缺口**：`providers/opencode-go/ops/go_model_sync.py` **不读**这个环境变量 ——
 > 它用 `--config` 参数，默认值按**当前用户主目录**推导
@@ -110,23 +110,23 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 | **`WB_GATEWAY_KEY`** | `providers/workbuddy/` 下 2 个现役脚本 + 1 个归档脚本 + `gateways/zgate`（缺省回退到网关 `config.json`） | 无（空串） | 不本地报错，表现为网关 **401**；路由对应上游 502 |
 | **`WB_GATEWAY_BASE`** | 同上 + `gateways/zgate` | `http://127.0.0.1:7863` | 用默认值 |
 | **`ZGATE_LISTEN`** / **`UNIFIED_ROUTER_PORT`**（旧） | `gateways/zgate` | `127.0.0.1:7871` | 用默认值；改了要同步改四组的 `baseUrl` |
-| **`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`** | `providers/workbuddy/workbuddy_zcode_sync.py` | `~/.zcode/v2/provider_config.json` | 用默认值 |
+| **`ZCODE_PERSONAL_PROVIDER_CONFIG_FILE`** | `providers/workbuddy/workbuddy_sync.py` | `~/.zcode/v2/provider_config.json` | 用默认值 |
 | `WB_PRICING_FILE` | `workbuddy/` 下 2 个脚本 | `providers/workbuddy/cache/wb_pricing.json` | 用默认值 |
 | `WB_ZCODE_PROBE_FILE` | 同上 | `providers/workbuddy/cache/wb_zcode_probe.json` | 用默认值 |
 | `GO_SYNC_REPORT_DIR` | `providers/opencode-go/ops/go_model_sync.py` | 本仓 `evidence/` | 用默认值 |
-| `ZCODE_BUILTIN` / `ZCODE_API_TYPE` | `providers/workbuddy/zcode_effective_body.js` | 见脚本 | 用默认值 —— **不是凭据**，是协议开关 |
+| `ZCODE_BUILTIN` / `ZCODE_API_TYPE` | `providers/workbuddy/effective_body.js` | 见脚本 | 用默认值 —— **不是凭据**，是协议开关 |
 | `OPENCODE_SESSION` | `providers/opencode-go/ops/opencode-header-proxy.js` | `local-client-session` | 用默认值 —— **不是凭据**，是会话标识 |
-| **`QD_API_KEY`** | `providers/qoder/qoder_zcode_sync.py`、`providers/qoder/qoder_probe_zcode.py`（缺省回退 `providers/qoder/.env.local`） | 无 | 明确报错退出（不静默） |
+| **`QD_API_KEY`** | `providers/qoder/qoder_sync.py`、`providers/qoder/qoder_probe.py`（缺省回退 `providers/qoder/.env.local`） | 无 | 明确报错退出（不静默） |
 | **`QD_GATEWAY_BASE`** | 同上 | `http://127.0.0.1:8790/v1` | 用默认值 |
 | `QD_PANEL_PASSWORD` | 首次启动 qoder2api-hub 时用；之后以 `accounts/settings.json` 的摘要为准 | 无 | 用已持久化的面板密码 |
-| **`QWEN_API_KEY`** | `providers/qwen/qwen_zcode_sync.py`、`gateways/zgate`（缺省回退 `providers/qwen/.env.local`） | 无 | 脚本明确报错退出；路由的千问渠道 502 |
-| **`QWEN_BASE`** | `providers/qwen/qwen_zcode_sync.py` | `https://maas.qianwenaiapi.com/apps/anthropic/v1` | 用默认值（**必须带 `/v1`**：桥会直接拼 `/messages`） |
+| **`QWEN_API_KEY`** | `providers/qwen/qwen_sync.py`、`gateways/zgate`（缺省回退 `providers/qwen/.env.local`） | 无 | 脚本明确报错退出；路由的千问渠道 502 |
+| **`QWEN_BASE`** | `providers/qwen/qwen_sync.py` | `https://maas.qianwenaiapi.com/apps/anthropic/v1` | 用默认值（**必须带 `/v1`**：桥会直接拼 `/messages`） |
 | **`QINIU_API_KEY`** | `gateways/zgate`（`QN` 上游的 `keyEnv`，给七牛云 AI 网关鉴权） | 无 | 明确报错退出；路由对应上游 502 |
 
 ### 3.6 Qoder（qoder2api-hub）
 
 - **环境变量**：`QD_API_KEY`（必填）、`QD_GATEWAY_BASE`（默认 `http://127.0.0.1:8790/v1`）。
-- **谁在读**：`providers/qoder/qoder_zcode_sync.py`、`providers/qoder/qoder_probe_zcode.py`、
+- **谁在读**：`providers/qoder/qoder_sync.py`、`providers/qoder/qoder_probe.py`、
   `gateways/zgate`（7871 用它给 Qoder 上游鉴权）。
 - **本机明文落点**：`providers/qoder/.env.local`（`QD_API_KEY` / `QD_PANEL_PASSWORD`），
   已被 `.gitignore` 排除；整个 `gateways/upstream/qoder/` clone 也被排除。

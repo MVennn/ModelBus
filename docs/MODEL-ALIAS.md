@@ -465,7 +465,7 @@ python tools/model_alias.py --no-arena --apply        # 回到纯人工主力（
 # 0. 重拉外部榜单，更新主力候选（候选没变时不会触发重写）
 python tools/arena_leaderboard.py --refresh --write
 
-# 1. 用真实 ZCode body 探测全部模型（经 7871，按 provider 套用 optionSpecs）
+# 1. 用宿主生效请求体探测全部模型（经 7871，按 provider 套用 optionSpecs）
 python tools/model_probe.py
 
 # 2. 生成三组 + alias map；只保留探测 ok（或曾 ok 的瞬时限流）的模型
@@ -496,7 +496,7 @@ python tools/model_alias.py --check --arena --scores \
   探测过期）。
 - 旧 ID（`cn:` / `global:` / `qoder:` / 裸 OC，以及旧的 `W/0.03/…` 显示名）会进
   alias map 的 `legacy`，老会话仍可路由；改名链会自动追到最终名字。
-- 旧的 `workbuddy_zcode_sync.py` / `go_model_sync.py` / `qoder_zcode_sync.py`
+- 旧的 `workbuddy_sync.py` / `go_model_sync.py` / `qoder_sync.py`
   现在只当**数据采集器**：它们写旧 ID，随后由 `model_alias.py` 归一化。不要
   在 `model_alias.py` 之后单独跑它们的 `--apply`，否则会临时把旧 ID 写回去
   （实测会把 `cn:*` 原始 id 混进分组的 `personalModelIds`，下一次生成的命名顺序
@@ -564,7 +564,7 @@ ZCode `optionSpecs.reasoningLevel.values` 只是第二层，之后还有请求�
 | 层 | 正本 | 断链现象 | 判据 |
 |---|---|---|---|
 | L2 | `values`（末位 = 默认档） | 下拉只有开关 | 读配置 values 是否为空 |
-| L3 | `map` 表达式 | 档位可选但不生效 | `node providers/workbuddy/zcode_effective_body.js <模型id>` |
+| L3 | `map` 表达式 | 档位可选但不生效 | `node providers/workbuddy/effective_body.js <模型id>` |
 | L4 | `tools/dsh_sync.py` `_reasoning()` | 客户端档位消失或只剩 Default | `python tools/dsh_sync.py --check` |
 
 L4 投影规则（顺序不可换）：`map` 为 `"{}"` → 直接给空档位；否则取 `DSH_LEVELS = {off,minimal,low,medium,high,xhigh,max}` 内的项；含 `disabled` 时加 `off → disabled`，若除 `off` 再无档位则补 `high → high`；仅当 `map` 含 `reasoning_effort` 才追加 `compat.thinkingFormat="deepseek"`（Gemini 系与「只有开关」的模型套 deepseek 格式会发上游不认的字段）。不在 `DSH_LEVELS` 又非 `disabled` 的档位名**静默丢弃**。
