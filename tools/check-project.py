@@ -191,9 +191,8 @@ def check_semantic(results: list) -> None:
         mt = read_text("docs/MAINTENANCE.md")
     except OSError:
         mt = ""
-    for task in ("ModelBus-zgate-hidden", "ModelBus-zgate-watchdog"):
-        if task not in mt:
-            results.append(("FAIL", "docs/MAINTENANCE.md: 缺现行计划任务名 " + task))
+    if "ModelBus-zgate-watchdog" not in mt:
+        results.append(("FAIL", "docs/MAINTENANCE.md: 缺现行计划任务名 ModelBus-zgate-watchdog"))
     indexed = False
     for rel in ("docs/README.md", "docs/MAINTENANCE.md"):
         try:

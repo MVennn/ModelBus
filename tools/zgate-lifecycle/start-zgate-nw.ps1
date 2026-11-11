@@ -1,5 +1,5 @@
 ﻿#requires -Version 5.1
-# 由 \ModelBus-zgate-hidden（Task Scheduler 父链）经 launch-zgate.vbs 调用。
+# 由 \ModelBus-zgate-watchdog 经 ensure-zgate.vbs 调用（2026-11-11 起 hidden 任务已合并删除）。
 # 起的是普通 serve（不带 -tray）：不设 ZGATE_PARENT_PID，superviseLauncher 直接返回，
 # 因此拉起脚本跑完退出后网关不会被自己停掉；父链在 Task Scheduler 而非 CMD/DSH 会话树。
 $ErrorActionPreference = 'Stop'

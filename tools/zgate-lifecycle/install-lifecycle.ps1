@@ -2,7 +2,7 @@
 <#
 .SYNOPSIS
   把 tools/zgate-lifecycle/ 的安全正本部署到 %LOCALAPPDATA%\ZCodeGateway，
-  校正两个计划任务的动作，并清除「会话里 Start-Process 拉起」的旧脚本。
+  校正计划任务动作（现行只有 ModelBus-zgate-watchdog；ModelBus-zgate-hidden 若存在则一并校正），并清除「会话里 Start-Process 拉起」的旧脚本。
 .DESCRIPTION
   只改本机启动链路，不动正在运行的网关；换二进制另跑 deploy-zgate.ps1 / restart-zgate.cmd。
   幂等：重复执行只覆盖脚本、仅当任务动作不符时才 Set-ScheduledTask。
@@ -73,23 +73,40 @@ function Fix-Task([string]$name, [string]$arg, [string]$kind) {
             $tr = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $st = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew -ExecutionTimeLimit ([TimeSpan]::Zero)
         } else {
-            $tr = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
+            # 2026-11-11 起单任务双触发器：登录即拉起 + 每分钟兜底
+            $tr = @()
+            $tr += New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 1)
+            $tr += New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME
             $st = New-ScheduledTaskSettingsSet -MultipleInstances IgnoreNew
         }
-        Register-ScheduledTask -TaskName $name -Action $a -Trigger $tr -Principal $p -Settings $st | Out-Null
+        try {
+            Register-ScheduledTask -TaskName $name -Action $a -Trigger $tr -Principal $p -Settings $st | Out-Null
+        } catch {
+            Write-Host ('[WARN] 注册 {0} 被系统拒绝（{1}）：需管理员权限，或手动 Register-ScheduledTask -Xml 备份文件' -f $name, $_.Exception.Message)
+            return
+        }
         Write-Host ('[OK] 注册计划任务 {0}' -f $name)
         return
     }
     $cur = $t.Actions[0].Arguments
     if ($cur -ne $arg) {
         $a = New-ScheduledTaskAction -Execute 'wscript.exe' -Argument $arg
-        Set-ScheduledTask -TaskName $name -Action $a | Out-Null
+        try {
+            Set-ScheduledTask -TaskName $name -Action $a | Out-Null
+        } catch {
+            Write-Host ('[WARN] 校正 {0} 被系统拒绝（{1}）：改计划任务需管理员权限' -f $name, $_.Exception.Message)
+            return
+        }
         Write-Host ('[OK] 校正 {0} 动作：{1} -> {2}' -f $name, $cur, $arg)
     } else {
         Write-Host ('[OK] {0} 动作已正确，未改动' -f $name)
     }
 }
-Fix-Task $HiddenTask $wantHiddenArg 'hidden'
+if (Get-ScheduledTask -TaskName $HiddenTask -ErrorAction SilentlyContinue) {
+    Fix-Task $HiddenTask $wantHiddenArg 'hidden'
+} else {
+    Write-Host ('[SKIP] {0} 不存在：2026-11-11 已合并进 {1}，重建需管理员' -f $HiddenTask, $WatchdogTask)
+}
 Fix-Task $WatchdogTask $wantWatchArg 'watchdog'
 Write-Host ''
 Write-Host '完成。启动链路全部走计划任务父链，关 CMD / 退出 DSH 不会带走网关。'

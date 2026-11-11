@@ -5,8 +5,8 @@
 .DESCRIPTION
   换 Go 代码必须换二进制：/admin/reload 只热加载 zgate.json 的策略/空闲/窗口
   （supervisor.go:473：New children need a restart，可执行与端口布局是启动期固定的）。
-  拉起一律走 schtasks /run /tn ModelBus-zgate-hidden：父链在 Task Scheduler 服务下，
-  不落进 CMD / DSH 会话的 Job Object，关 CMD、退出 DSH 都不会带走网关。
+  拉起一律走计划任务：默认 ModelBus-zgate-watchdog（管理员若恢复过 ModelBus-zgate-hidden 则优先用它）；
+  父链在 Task Scheduler 服务下，不落进 CMD / DSH 会话的 Job Object，关 CMD、退出 DSH 都不会带走网关。
   脚本跑完即退，不留常驻 powershell。
   用法：
     powershell -NoProfile -ExecutionPolicy Bypass -File deploy-zgate.ps1
@@ -82,6 +82,14 @@ function Invoke-ScheduledStart([string]$task) {
     if ($code -ne 0) { throw ('schtasks /run failed (exit={0}): {1}' -f $code, ($o -join ' ')) }
 }
 
+function Resolve-StartTask([string]$hiddenTask, [string]$watchdogTask) {
+    # 单一拉起入口：hidden（管理员若恢复过）> watchdog（现行唯一任务）。
+    # 2026-11-11：hidden 已合并进 watchdog 后删除；本机非提权无法重建（Access is denied）。
+    if (Get-ScheduledTask -TaskName $hiddenTask -ErrorAction SilentlyContinue) { return $hiddenTask }
+    if (Get-ScheduledTask -TaskName $watchdogTask -ErrorAction SilentlyContinue) { return $watchdogTask }
+    throw ('既没有 {0} 也没有 {1}：先跑 install-lifecycle.ps1（建任务需管理员）' -f $hiddenTask, $watchdogTask)
+}
+
 $dir = Resolve-ZgateDir $ZgateDir
 $exe = Join-Path $dir 'zgate.exe'
 $candidate = Join-Path $dir 'zgate.candidate.exe'
@@ -91,9 +99,8 @@ foreach ($f in @($buildPy, $cfg)) {
     if (-not (Test-Path $f)) { throw ('缺少 {0}' -f $f) }
 }
 Write-Log ('ZgateDir = {0}' -f $dir)
-if (-not (Get-ScheduledTask -TaskName $HiddenTask -ErrorAction SilentlyContinue)) {
-    throw ('计划任务 {0} 不存在，先跑 install-lifecycle.ps1' -f $HiddenTask)
-}
+$startTask = Resolve-StartTask $HiddenTask $WatchdogTask
+Write-Log ('拉起用计划任务：{0}' -f $startTask)
 
 $watchdogExisted = [bool](Get-ScheduledTask -TaskName $WatchdogTask -ErrorAction SilentlyContinue)
 $backup = ''
@@ -145,7 +152,13 @@ try {
     Write-Log ('已替换 {0}（备份：{1}）' -f $exe, $backup)
 
     # 5) 计划任务拉起：父链落在 Task Scheduler，脱离 CMD/DSH 会话树
-    Invoke-ScheduledStart $HiddenTask
+    #    用 watchdog 拉起时先把它从「换版暂停」状态恢复：禁用态下的手动 /run 不可靠。
+    if ($startTask -eq $WatchdogTask -and $watchdogPaused) {
+        Enable-ScheduledTask -TaskName $WatchdogTask -ErrorAction Stop | Out-Null
+        $watchdogPaused = $false
+        Write-Log ('已提前恢复 {0}，由它拉起新实例' -f $WatchdogTask)
+    }
+    Invoke-ScheduledStart $startTask
 
     # 6) 健康检查
     $ok = $false
@@ -174,7 +187,10 @@ catch {
     # 无论是否换版，网关都必须以某个可用二进制重新起来
     try {
         if (-not (Test-Health $HealthUrl)) {
-            Invoke-ScheduledStart $HiddenTask
+            if ($startTask -eq $WatchdogTask -and $watchdogPaused) {
+                try { Enable-ScheduledTask -TaskName $WatchdogTask -ErrorAction Stop | Out-Null; $watchdogPaused = $false } catch { }
+            }
+            Invoke-ScheduledStart $startTask
             for ($i = 0; $i -lt 15; $i++) {
                 if (Test-Health $HealthUrl) { break }
                 Start-Sleep -Seconds 1

@@ -103,4 +103,4 @@
 ## 6. zgate 换版硬规则
 
 - **改完 `gateways/zgate/` 下的 Go 代码后，agent 自动执行 `tools/zgate-lifecycle/restart-zgate.cmd` 完成编译候选 + 受控换版，不再要求用户手动重启**；换 Go 代码必须换二进制。`POST /admin/reload` 热加载 `zgate.json` 的策略 / 空闲 / 窗口 / 上游 base / 凭据（`keys.Load` 六通道 + `ApplyConfig(children)` + `aliases.Reload()`，`router.go:963-986`）；监听地址 / 新增子进程 / alias map 路径仍需换版重启。
-- **严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate** —— 它们落在 CMD/DSH 会话的 Job Object 里，会话结束整棵进程树被回收；拉起只走计划任务 `\ModelBus-zgate-hidden` 父链。机制与换版流程见 [docs/ZGATE-LIFECYCLE.md](docs/ZGATE-LIFECYCLE.md)。
+- **严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate** —— 它们落在 CMD/DSH 会话的 Job Object 里，会话结束整棵进程树被回收；拉起只走计划任务 `\ModelBus-zgate-watchdog` 父链（2026-11-11 起合并为单任务，登录即拉起（LogonTrigger）+ 每分钟兜底（PT1M））。机制与换版流程见 [docs/ZGATE-LIFECYCLE.md](docs/ZGATE-LIFECYCLE.md)。
