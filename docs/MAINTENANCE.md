@@ -305,7 +305,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 |---|---|
 | 看状态（服务是否在跑 / 子进程 / 端口 / 凭据有无） | `gateways/zgate/zgate.exe status` |
 | 前台启动（排错用；正常由登录自启拉起） | `gateways/zgate/zgate.exe serve` |
-| 注册登录自启（现行） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（写两个计划任务；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
+| 注册登录自启（现行） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（写计划任务；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 移除登录自启 | `gateways/zgate/zgate.exe uninstall` |
 | 热加载配置 / 上游 base / 凭据（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload`；监听地址 / 新增子进程 / alias map 路径 / Go 代码用 `restart-zgate.cmd` |
 | 健康检查 | `curl http://127.0.0.1:7871/health`（七段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
@@ -313,15 +313,15 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 只重启 Qoder 上游 | `taskkill /IM python.exe /F` 后用下面的 bat 兜底，或重启 zgate |
 | 重新构建 zgate | `python gateways/zgate/build.py` |
 | 编候选 exe（不覆盖运行中） | `python gateways/zgate/build.py --candidate` → `gateways/zgate/zgate.candidate.exe` |
-| 部署 / 校正本机安全脚本与两个计划任务动作 | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（脚本落到 `%LOCALAPPDATA%\ZCodeGateway`） |
+| 部署 / 校正本机安全脚本与计划任务动作 | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（脚本落到 `%LOCALAPPDATA%\ZCodeGateway`） |
 | **改完 Go 代码后自动换版（CMD 入口）** | `tools/zgate-lifecycle/restart-zgate.cmd`（转交 `deploy-zgate.ps1`；`-SkipBuild` 用已就绪候选） |
 | 换版正本（PowerShell） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1` |
 
-自启方式（**2026-11-09 起**）是**计划任务 `\ModelBus-zgate-hidden`**（AtLogOn，当前用户、Interactive、Limited，
-无需管理员）：`wscript //B //Nologo %LOCALAPPDATA%\ZCodeGateway\launch-zgate.vbs` →
-`start-zgate-nw.ps1`（用 `CreateNoWindow` 拉起 `zgate.exe serve`；端口已占用则写 `port already up, skip`
-直接退出；脚本跑完即退，**不留驻留进程**）。兜底看门狗 `\ModelBus-zgate-watchdog` 每 1 分钟
-→ `ensure-zgate.vbs` → 同一个 `start-zgate-nw.ps1`。
+自启方式（**2026-11-11 起**）是**单计划任务 `\ModelBus-zgate-watchdog`**（LogonTrigger 当前用户 + PT1M 兜底，Interactive、Limited）：
+登录即拉起，之后每 1 分钟 `wscript //B //Nologo %LOCALAPPDATA%\ZCodeGateway\ensure-zgate.vbs` →
+`ensure-zgate.ps1`（`/health` 不通才经 `start-zgate-nw.ps1` 用 `CreateNoWindow` 拉起 `zgate.exe serve`；端口已占用则写 `port already up, skip`
+直接退出；脚本跑完即退，**不留驻留进程**）。原 AtLogOn 任务 `\ModelBus-zgate-hidden`
+已于 2026-11-11 删除（登录触发职责已并入 watchdog 的 LogonTrigger；备份见 ZGATE-LIFECYCLE.md §2.3）。
 
 旧的启动文件夹快捷方式 `ModelBus zgate.lnk`、HKCU Run 的 `ZcodeAIModels-zgate-daemon`、以及
 直接跑 exe 的旧任务 `\ModelBus-zgate` 都已移除（2026-11-09；备份与回滚：
@@ -332,7 +332,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 > **2026-11-09 起改完 `gateways/zgate/` 下的 Go 代码由 agent 自动跑
 > `tools/zgate-lifecycle/restart-zgate.cmd` 换版，不再要求用户手动重启**。
 > 该入口编候选 → 暂停 watchdog → `Stop-Process zgate` → 备份 → 原子替换 →
-> `schtasks /run /tn \ModelBus-zgate-hidden` → `/health` 轮询 → 恢复 watchdog，失败自动回滚旧二进制。
+> `schtasks /run /tn ModelBus-zgate-watchdog` → `/health` 轮询 → 恢复 watchdog，失败自动回滚旧二进制。
 > `POST /admin/reload` 热加载策略 / 空闲 / 窗口 / 上游 base / 凭据（`keys.Load` 六通道 + `ApplyConfig(children)` + `aliases.Reload()`）；监听地址 / 新增子进程 / alias map 路径与 Go 代码变更必须换版
 > 重启（源码 `router.go:984` 的 note）。**严禁在会话里用 `Start-Process` /
 > `cmd /c` 直接拉起 zgate**（会落进会话 Job Object 被回收）。完整流程见

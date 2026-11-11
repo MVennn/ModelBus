@@ -338,15 +338,15 @@ gateways/zgate/zgate.exe status
 # 2) 看 zgate 日志（每个请求一行、子进程起停、错误；UTF-8）
 python -c "import os; p=os.path.join(os.environ['LOCALAPPDATA'],'ZCodeGateway','zgate.log'); print(open(p,encoding='utf-8').read()[-3000:])"
 
-# 3) 看开机自启在不在（现行是两个计划任务，不再是 Startup 快捷方式）
-schtasks /query /tn "ModelBus-zgate-hidden" /fo LIST; schtasks /query /tn "ModelBus-zgate-watchdog" /fo LIST
+# 3) 看开机自启在不在（现行是单个计划任务，不再是 Startup 快捷方式）
+schtasks /query /tn "ModelBus-zgate-watchdog" /fo LIST
 ```
 
 **原因 / 解法**（均为**【实例 B】**）
 
 | 原因 | 解法 |
 |---|---|
-| zgate 没在跑（没装自启 / 被杀） | 前台 `gateways/zgate/zgate.exe serve` 看报错；再跑 `tools/zgate-lifecycle/install-lifecycle.ps1` 校正两个计划任务，或 `schtasks /run /tn "ModelBus-zgate-hidden"` 立即拉起（`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
+| zgate 没在跑（没装自启 / 被杀） | 前台 `gateways/zgate/zgate.exe serve` 看报错；再跑 `tools/zgate-lifecycle/install-lifecycle.ps1` 校正计划任务，或 `schtasks /run /tn "ModelBus-zgate-watchdog"` 立即拉起（本机账户非提权时改任务会「拒绝访问」，只能 `/query`、`/run`；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 7871 被别的进程占着 | `zgate.exe serve` 会明确报「监听失败」；用 `netstat -ano \| findstr 7871` 找出占用者 |
 | 配置路径不对（`gateways/zgate/zgate.json`） | `zgate.exe status` 第一段会打印实际读到的配置、alias map 与日志路径 |
 | WorkBuddy 冷启动失败 | 看 `%LOCALAPPDATA%\ZCodeGateway\workbuddy.stderr.log`；确认 `gateways/upstream/workbuddy/wb2api.exe` 与 `config.json` 存在（clone 整目录被 `.gitignore` 排除，**克隆后不会自带**，重建见 [MAINTENANCE.md](MAINTENANCE.md) §8.4） |
@@ -499,7 +499,7 @@ ls -la gateways/zgate/zgate.exe
 | 产物是控制台程序，但 exe 正被占用改不动 | zgate 在运行时 Windows 会锁住文件。先停掉（zgate 没有 `stop` 子命令）：`Stop-Process -Id <pid> -Force`；再重编、再起 |
 | 快捷方式 `WindowStyle = 7` 没用 | 「最小化」只对有窗口的程序有效，对控制台子系统程序**不等于隐藏**。而且实测那个窗口既没最小化、也是可见的 —— 唯一解法是让产物本身是 GUI 子系统 |
 | 想确认没有别的控制台窗口 | `Get-Process conhost | Where-Object { $_.MainWindowTitle }`；无输出即没有 |
-| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。要让 Task Scheduler 当父进程才活得下来：`schtasks /run /tn "ModelBus-zgate-hidden"`，或等看门狗（PT1M）自动拉回；会话里直接 `Start-Process zgate.exe` 会被回收 |
+| 窗口没了但服务也没了 | zgate 被 agent 会话结束时连带清掉了（进程树回收）。要让 Task Scheduler 当父进程才活得下来：`schtasks /run /tn "ModelBus-zgate-watchdog"`，或等它下一轮（PT1M）自动拉回；会话里直接 `Start-Process zgate.exe` 会被回收 |
 
 > 机制解释见 [PITFALLS.md](PITFALLS.md) §20；构建命令与脚本见
 > [MAINTENANCE.md](MAINTENANCE.md) §8.1。
@@ -520,10 +520,10 @@ zgate.exe serve -tray
 - `serve -tray` 用 `DETACHED_PROCESS` 拉一个**无父进程**的副本：副本没有控制台，收不到关窗事件；拉起方退出后副本照常服务。
 - 拉起方通过环境变量把自身 PID 传给副本，副本每 2 秒查一次：拉起它的进程消失就自己退出，不留孤儿占端口。日志里是 `拉起方 <pid> 已退出，后台副本随之停止`。
 - 前台 `zgate serve` 现在打完启动横幅就 `FreeConsole` 解放控制台，避免留下半死的 `conhost`；输出仍写日志文件，重定向（`zgate status > out.txt`）不受影响。
-- **2026-11-09 起的现行自启不是快捷方式、也不是 `serve -tray`**：两个计划任务
-  `\ModelBus-zgate-hidden`（AtLogOn，Interactive/Limited → `wscript //B //Nologo launch-zgate.vbs`
-  → `start-zgate-nw.ps1` 起普通 `serve`）与 `\ModelBus-zgate-watchdog`（PT1M → `ensure-zgate.vbs`
-  → `ensure-zgate.ps1`）。`zgate install` / `uninstall` 只管旧的启动文件夹快捷方式，正常情况下不跑。
+- **2026-11-11 起的现行自启不是快捷方式、也不是 `serve -tray`**：单计划任务
+  `\ModelBus-zgate-watchdog`（LogonTrigger + PT1M，Interactive/Limited → `wscript //B //Nologo ensure-zgate.vbs`
+  → `ensure-zgate.ps1`，登录即拉起、之后每分钟兜底；`/health` 不通才经 `start-zgate-nw.ps1` 起普通 `serve`）。
+  `zgate install` / `uninstall` 只管旧的启动文件夹快捷方式，正常情况下不跑。
   `swap-zgate.ps1` / `start-zgate.bat` 已改为兼容薄包装转交计划任务，**不再用 `Start-Process`**。
   旧的 `\ModelBus-zgate` 任务、HKCU Run daemon、Startup 快捷方式均已移除。
 
@@ -548,7 +548,7 @@ curl http://127.0.0.1:7871/health
 
 **解法**：agent 改完 Go 代码后自动执行 `tools/zgate-lifecycle/restart-zgate.cmd`（CMD 入口，
 转交 `deploy-zgate.ps1`）：`build.py --candidate` 编到 `zgate.candidate.exe`（不覆盖运行中的 exe）
-→ 暂停 watchdog → `Stop-Process zgate` → 备份 → 替换 → `schtasks /run /tn ModelBus-zgate-hidden`
+→ 暂停 watchdog → `Stop-Process zgate` → 备份 → 替换 → `schtasks /run /tn ModelBus-zgate-watchdog`
 → `/health` 轮询 → 恢复 watchdog → 失败自动回滚。全过程不需要用户手动重启。
 
 **注意**：严禁在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate —— 它们落在 CMD/DSH 会话的

@@ -14,7 +14,7 @@
 
 | 场景 | 唯一正确做法 | 禁止做法 |
 |---|---|---|
-| 开机自启 | 计划任务 `\ModelBus-zgate-hidden`（AtLogOn）→ `launch-zgate.vbs` → `start-zgate-nw.ps1` | `Start-Process`、`cmd /c`、HKCU Run、Startup 快捷方式 |
+| 开机自启 | 计划任务 `\ModelBus-zgate-watchdog`（LogonTrigger 登录即拉起 + PT1M 每分钟兜底）→ `ensure-zgate.vbs` → `ensure-zgate.ps1` | `Start-Process`、`cmd /c`、HKCU Run、Startup 快捷方式 |
 | 进程掉线兜底 | 计划任务 `\ModelBus-zgate-watchdog`（每 1 分钟）→ `ensure-zgate.vbs` → `ensure-zgate.ps1` | 会话内起常驻 PowerShell 守护 |
 | 改了 `zgate.json` 策略 / 空闲 / 窗口 / 上游 base / 凭据 | `POST /admin/reload`（热加载配置与 `ApplyConfig(children)`，不换二进制） | 为了改策略去重启整个实例 |
 | 改了监听地址 / 新增子进程 / alias map 路径 | `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版 | 指望 `POST /admin/reload` 热加载这三项（源码 `router.go:984` 的 note 明确仍需重启） |
@@ -46,43 +46,43 @@ Task Scheduler 服务（`svchost.exe`）→ `wscript.exe` → 脚本 → `zgate.
 
 - **严禁**在会话里用 `Start-Process` / `cmd /c` 直接拉起 zgate。
 - **严禁**用 HKCU `Run` 项、Startup 快捷方式、常驻 PowerShell 守护脚本替代计划任务。
-- 拉起只走 `\ModelBus-zgate-hidden` 父链；改完 Go 代码由 agent 自动执行 `tools/zgate-lifecycle/restart-zgate.cmd`，
+- 拉起只走 `\ModelBus-zgate-watchdog` 父链（`schtasks /run /tn ModelBus-zgate-watchdog`）；改完 Go 代码由 agent 自动执行 `tools/zgate-lifecycle/restart-zgate.cmd`，
   不再要求用户手动重启。机器协议见仓库根 [AGENTS.md](../AGENTS.md) §6。
 
 ---
 
-## 2. 现行自启：两个计划任务
+## 2. 现行自启：单个计划任务
 
-### 2.1 主任务 `\ModelBus-zgate-hidden`
+### 2.1 唯一任务 `\ModelBus-zgate-watchdog`
 
 | 项 | 值 |
 |---|---|
-| 触发器 | AtLogOn（当前用户登录时） |
+| 触发器 | LogonTrigger（当前用户 `MVENN-PC\SansK`）+ 每 1 分钟（PT1M，StartBoundary 2026-11-06T22:14:00） |
 | 运行级别 | Interactive / Limited |
-| 动作 | `wscript.exe //B //Nologo launch-zgate.vbs` → `start-zgate-nw.ps1` |
+| 动作 | `wscript.exe //B //Nologo ensure-zgate.vbs` → `ensure-zgate.ps1`，`/health` 不通才拉起 |
 | 启动方式 | `ProcessStartInfo` + `UseShellExecute=$false` + `CreateNoWindow`，起**普通** `zgate.exe serve` |
 | 生命周期 | 脚本拉起后立即退出，**不留驻留 PowerShell 进程** |
 
 `start-zgate-nw.ps1` 只负责「无窗地起一次普通 serve」；它不做守护、不循环、不常驻。
 无窗还依赖产物 PE 头 `Subsystem = 2`（WINDOWS_GUI）与 Win11 默认终端不接管，机制见 [PITFALLS.md](PITFALLS.md) §20。
 
-### 2.2 看门狗 `\ModelBus-zgate-watchdog`
+### 2.2 登录与即时拉起
 
 | 项 | 值 |
 |---|---|
-| 触发器 | 每 1 分钟（PT1M） |
-| 动作 | `ensure-zgate.vbs` → `ensure-zgate.ps1` |
-| 行为 | 探 `http://127.0.0.1:7871/health`，不通就经计划任务父链重新拉起；通就立即退出 |
+| 登录后 | 立即由 §2.1 的唯一任务拉起（LogonTrigger）；漏跑由 PT1M 兜底 |
+| 换版 / 立即拉起 | `schtasks /run /tn ModelBus-zgate-watchdog`（父链 = Task Scheduler，脱离会话 Job Object） |
+| 备注 | 日常只用 `/query`、`/run`；改已有任务定义需提权（`Set-ScheduledTask` 在本机交互账户下报「拒绝访问」）。新建任务可 `Register-ScheduledTask` 带 `-Principal`（Interactive/Limited）直接注册；换触发器走「删 + 同名重新注册」（见 `~/.dsh/procedures/工具-Windows-非提权计划任务建改删权限边界.md`） |
 
 ### 2.3 已移除的旧链路
 
-旧任务 `\ModelBus-zgate`、HKCU `Run` 里的 `daemon` 项、Startup 快捷方式均已移除；
-`swap-zgate.ps1` / `start-zgate.bat` 改为兼容薄包装，转交计划任务，**不再**用 `Start-Process`。
+旧任务 `\ModelBus-zgate`、HKCU `Run` 里的 `daemon` 项、Startup 快捷方式均已移除；`\ModelBus-zgate-hidden`（AtLogOn）也已于 2026-11-11 删除
+（备份 `%USERPROFILE%\.dsh\backups\task-ModelBus-zgate-hidden-20261111-142620.xml`）；`swap-zgate.ps1` / `start-zgate.bat` 改为兼容薄包装，转交计划任务，**不再**用 `Start-Process`。
 
 ### 2.4 安全脚本落点
 
 `tools/zgate-lifecycle/install-lifecycle.ps1` 把 8 个生命周期脚本部署到 `%LOCALAPPDATA%\ZCodeGateway`，
-校正两个计划任务动作，并写入 `zgate-paths.ps1`（路径由环境变量推导，脚本里不硬编码本机绝对路径）。
+校正计划任务动作，并写入 `zgate-paths.ps1`（路径由环境变量推导，脚本里不硬编码本机绝对路径）。
 
 ---
 
@@ -111,7 +111,7 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
 3. **受控停机**：`Stop-Process -Name zgate`。
 4. **备份**：当前 `zgate.exe` → `zgate.exe.bak-<时间戳>`。
 5. **替换**：candidate 覆盖为 `zgate.exe`。
-6. **拉起**：`schtasks /run /tn \ModelBus-zgate-hidden`（父链 = Task Scheduler，脱离会话 Job Object）。
+6. **拉起**：`schtasks /run /tn ModelBus-zgate-watchdog`（父链 = Task Scheduler，脱离会话 Job Object）。
 7. **健康检查**：轮询 `http://127.0.0.1:7871/health`，`HealthRetries=40`。
 8. **恢复 watchdog**：重新启用 `\ModelBus-zgate-watchdog`。
 9. **失败回滚**：任一步失败 → 还原备份的旧二进制 → 恢复 watchdog → 重新 `schtasks /run`，停机窗口压到最短。
@@ -127,7 +127,7 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
 |---|---|---|
 | CMD 入口（agent 自动执行） | `tools/zgate-lifecycle/restart-zgate.cmd` | 改完 Go 代码后一键换版，转发 `deploy-zgate.ps1 %*` |
 | 换版正本（PowerShell） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/deploy-zgate.ps1` | 九步流程本体，支持 `-SkipBuild` |
-| 部署 / 校正（PowerShell） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1` | 部署脚本到 `%LOCALAPPDATA%\ZCodeGateway`、校正两个任务动作 |
+| 部署 / 校正（PowerShell） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1` | 部署脚本到 `%LOCALAPPDATA%\ZCodeGateway`、校正任务动作 |
 
 辅助：`python gateways/zgate/build.py --candidate`（编候选）、
 `python gateways/zgate/build.py --check`（校验 PE 子系统）、
@@ -149,11 +149,11 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
    Get-CimInstance Win32_Process -Filter "Name='zgate.exe'" | Select-Object ProcessId,ParentProcessId,CommandLine
    ```
 
-5. 看两个任务状态与上次运行时间：
+5. 看任务状态与上次运行时间：
 
    ```cmd
-   schtasks /query /tn \ModelBus-zgate-hidden /v
    schtasks /query /tn \ModelBus-zgate-watchdog /v
+   :: 现行只有这一个任务；若还看到 \ModelBus-zgate-hidden 说明有残留
    ```
 
 6. 端口监听：`netstat -ano | findstr 7871` 应有 LISTENING。
@@ -167,14 +167,14 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
 
 | 现象 | 根因 | 解法 |
 |---|---|---|
-| 会话里 `/health` 200，会话一关就 502 | 进程落在 CMD/DSH 会话 Job Object 里被整树回收 | 只走 `\ModelBus-zgate-hidden` 父链；见 §1 |
+| 会话里 `/health` 200，会话一关就 502 | 进程落在 CMD/DSH 会话 Job Object 里被整树回收 | 只走 `\ModelBus-zgate-watchdog` 父链；见 §1 |
 | `DETACHED_PROCESS` / `serve -tray` 仍不存活 | 只脱离控制台，不脱离 Job Object | 同上，改用计划任务；见 §1.2 |
 | 开机弹出 cmd 控制台窗口 | 产物 PE 头 `Subsystem = 3`（CONSOLE），或 Win11 默认终端接管 | 一律用 `gateways/zgate/build.py` 编（`-H windowsgui` + 校验 `Subsystem = 2`）+ `CreateNoWindow`；见 [PITFALLS.md](PITFALLS.md) §20 |
 | 裸 `go build .` 后无窗版变控制台版 | 单包模式把 exe 原地覆盖，产物在 `.gitignore` 里救不回 | 编译入口收口到 `build.py`；见 [PITFALLS.md](PITFALLS.md) §20 |
 | 改了 Go 代码但行为没变 | 只调了 `/admin/reload`，旧二进制没换 | 跑 `tools/zgate-lifecycle/restart-zgate.cmd`；见 §3 |
 | 换版后 `/health` 一直不通 | 新二进制启动失败 / 端口占用 | `deploy-zgate.ps1` 自动回滚旧二进制并恢复 watchdog；查日志与 `netstat -ano \| findstr 7871` |
 | watchdog 没恢复，掉线后不自愈 | 换版中断在停 watchdog 之后 | 重新启用任务，或用 `install-lifecycle.ps1` 校正动作 |
-| 两个计划任务动作被改坏 | 手工改过任务 / 脚本路径迁移 | 跑 `install-lifecycle.ps1` 重新部署并校正 |
+| 计划任务动作被改坏 | 手工改过任务 / 脚本路径迁移 | 跑 `install-lifecycle.ps1` 重新部署并校正 |
 | 编译候选把运行中的 exe 覆盖了 | 没带 `--candidate` | 一律 `python gateways/zgate/build.py --candidate`，产物名 `zgate.candidate.exe` |
 
 ---
@@ -274,7 +274,7 @@ python gateways/zgate/build.py --check
 |---|---|---|---|
 | 配置 | `gateways/zgate/zgate.json.bak-<purpose>-<ts>` | 覆盖后 `POST /admin/reload` | `/health` 的 chain / guard / upstream 与文件一致 |
 | 别名 | alias map 生成前的备份（生成脚本自带 `.bak-<ts>`） | 重跑生成（必要时 reload） | `/v1/models?scope=canonical` 的 `total` / `catalog_total` |
-| 二进制 | `zgate.exe.bak-<ts>`（`deploy-zgate.ps1` 失败自动回滚） | 暂停 watchdog → 覆盖 → `schtasks /run /tn \ModelBus-zgate-hidden` → 轮询 `/health` → 恢复 watchdog | 9.5 全套 |
+| 二进制 | `zgate.exe.bak-<ts>`（`deploy-zgate.ps1` 失败自动回滚） | 暂停 watchdog → 覆盖 → `schtasks /run /tn ModelBus-zgate-watchdog` → 轮询 `/health` → 恢复 watchdog | 9.5 全套 |
 | 代码 | 反向提交后重新走 §4 九步 | 换版 | 同上，并核 `vcs.revision` |
 
 原则三条：
@@ -294,7 +294,7 @@ python gateways/zgate/build.py --check
 | 配置生效 | `curl -s http://127.0.0.1:7871/health` | `ok:true`；`chain.budget_s` 与文件一致；`guard.mode` 是预期档位 |
 | 观测接上 | 同上，看 `hops` 段 | 真实请求后该跳 `try` 有增量；`silent` / `no_first_block` / `busy` 能看到失败形态 |
 | 目录对外 | `curl -s "http://127.0.0.1:7871/v1/models?scope=canonical"` | `total` 与 `catalog_total` 是两回事，别混读 |
-| 自启状态 | `schtasks /query /tn \ModelBus-zgate-hidden /v`、`...watchdog...` | 两个任务 Ready，上次运行时间对得上 |
+| 自启状态 | `schtasks /query /tn \ModelBus-zgate-watchdog /v` | 单任务 Ready，上次运行时间对得上 |
 | 父链 | `Get-CimInstance Win32_Process -Filter "Name='zgate.exe'"` | 父进程在 Task Scheduler 侧，不是某个终端 |
 | 日志 | `type "%LOCALAPPDATA%\ZCodeGateway\zgate.log"` | 有换版/加载行；没有反复的 `port already up` 或绑定冲突 |
 | 实请求 | 发一条真实流式请求，看日志 `(i/n)` 与首块 | 路由到预期跳，不是每次都落在兜底跳 |
@@ -304,7 +304,7 @@ python gateways/zgate/build.py --check
 
 ### 9.6 本节边界
 
-- 换版九步、两个计划任务、`install-lifecycle.ps1` 的动作校正：§2、§4、§5。
+- 换版九步、单计划任务、`install-lifecycle.ps1` 的动作校正：§2、§4、§5。
 - 参数为什么这么取值、逐跳怎么聚合、上游语义三分类： [ROUTING-POLICY.md](ROUTING-POLICY.md)。
 - 已知故障形态与现场处置： [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16、§18；坑的机制见 [PITFALLS.md](PITFALLS.md) §20、§41–§47。
 - 加渠道要改哪六处： [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0。

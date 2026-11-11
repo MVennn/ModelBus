@@ -92,7 +92,7 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 | `zgate serve` | 常驻：监听 7871，做 alias 分流 + 协议桥 + 子进程守护 |
 | `zgate serve -tray` | 同上，但以 `DETACHED_PROCESS` 拉起无父进程副本后立即返回；**实测不保证调用方整棵进程树被回收时存活**（`cmd /c`、`Start-Process` 结束后 2s 内子进程消失）。现行自启不用它，改走计划任务父链下的普通 `serve`（见 §10.2、[ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)） |
 | `zgate status` | 打印各通道/子进程/alias 条数/最近错误（`--json` 给脚本用） |
-| `zgate install` / `uninstall` | 注册 / 移除启动文件夹快捷方式 `ModelBus zgate.lnk`（不需要管理员）。现行自启已改为计划任务 `\ModelBus-zgate-hidden`（见 §10.2），这两个命令平时不用跑 |
+| `zgate install` / `uninstall` | 注册 / 移除启动文件夹快捷方式 `ModelBus zgate.lnk`（不需要管理员）。现行自启由单计划任务 `\ModelBus-zgate-watchdog` 兜底（见 §10.2），这两个命令平时不用跑 |
 | `zgate replay` | 拿录制的黄金样本回放，和 JS 路由的结果做逐字段比对（见 §6.1） |
 
 ### 3.2 进程模型
@@ -402,19 +402,19 @@ foreach ($p in 7863,7871,8790,8787) {
    PowerShell 守护器（124 MB），还顺手解决了「ZCode 关着时 WorkBuddy 定时任务不跑」的老问题 ——
    把 `children.workbuddy.policy` 设成 `always` 即可让它 24/7 跑。
 2. **自启用登录计划任务**。早期 `schtasks /create /sc ONLOGON` 在非管理员权限下返回「拒绝访问」，于是改用
-   启动文件夹快捷方式；2026-11-09 起收敛为计划任务 `\ModelBus-zgate-hidden`（AtLogOn、当前用户 Interactive，
-   `Register-ScheduledTask` 不需要提权）→ `wscript //B //Nologo launch-zgate.vbs` → `start-zgate-nw.ps1`
+   启动文件夹快捷方式；2026-11-11 起收敛为单计划任务 `\ModelBus-zgate-watchdog`（LogonTrigger 当前用户 + PT1M 兜底、Interactive）→
+   登录即拉起，之后每分钟由它经 `wscript //B //Nologo ensure-zgate.vbs` → `ensure-zgate.ps1` → `start-zgate-nw.ps1`
    （`CreateNoWindow` 拉起 `zgate serve`，端口已占则直接退出）。两条附加约束：产物必须是 **GUI 子系统**
    （否则 Win11 的 Windows Terminal 接管 console 照样弹窗，`-WindowStyle Hidden` 和 lnk 的 `WindowStyle=7` 都拦不住），
    且启动脚本跑完即退，不留常驻进程。
 3. ~~`scheduled` 窗口档没有实现~~ —— 2026-10-23 晚补上（见 §10.6）：它不是第三种 policy，
    而是给任意 child 加的 `windows` 列表，窗内按 `always` 处理。
 4. **旧 JS 路由保留**在 `gateways/legacy-router/`，作为回退；P3 验收通过后可删。
-5. **自启是双计划任务，换版走生命周期脚本**（2026-11-09）。除 `\ModelBus-zgate-hidden` 外，
-   还有 `\ModelBus-zgate-watchdog`（PT1M 跑一次 `ensure-zgate.vbs` → `ensure-zgate.ps1`，
-   `/health` 不通就拉回）。改完 `gateways/zgate/` 下的 Go 代码由 agent 自动执行
+5. **自启是单计划任务，换版走生命周期脚本**（2026-11-11）。只剩 `\ModelBus-zgate-watchdog`
+   （LogonTrigger 登录即拉起 + PT1M 每 1 分钟跑一次 `ensure-zgate.vbs` → `ensure-zgate.ps1`，
+   `/health` 不通就拉回；原 `\ModelBus-zgate-hidden` 已删除）。改完 `gateways/zgate/` 下的 Go 代码由 agent 自动执行
    `tools/zgate-lifecycle/restart-zgate.cmd` 换版：`build.py --candidate` 编候选 → 停 watchdog →
-   备份 → 替换 → `schtasks /run /tn ModelBus-zgate-hidden` → `/health` 轮询 → 恢复 watchdog，
+   备份 → 替换 → `schtasks /run /tn ModelBus-zgate-watchdog` → `/health` 轮询 → 恢复 watchdog，
    失败自动回滚；`POST /admin/reload` 只热加载 `zgate.json` 的策略 / 空闲 / 窗口
    （`gateways/zgate/internal/supervisor/supervisor.go:473`）。详见
    [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。

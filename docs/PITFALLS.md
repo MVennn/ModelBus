@@ -381,7 +381,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   （编到 `zgate.candidate.exe`，不覆盖运行中的 `zgate.exe`）+
   `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版；**禁止在会话里裸用 `Start-Process` /
   `cmd /c` 拉起 zgate** —— 这样起的进程落在 CMD/DSH 会话的 Job Object 里，会话结束整棵进程树
-  被回收（实测 2s 内消失）。换版流程、双计划任务自启与失败回滚正本见
+  被回收（实测 2s 内消失）。换版流程、单计划任务自启与失败回滚正本见
   [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)；`/admin/reload` 只热加载 `zgate.json` 的策略 /
   空闲 / 窗口，换 Go 代码必须重启实例（`gateways/zgate/internal/supervisor/supervisor.go:473`）。
 
@@ -545,7 +545,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
    > ⚠️ **警示（2026-11-09）**：上面的 `Start-Process` 仅作「手工前台排查」的历史示例，
    > **不是现行自启 / 换版入口**。会话里这样拉起的进程归属 CMD/DSH 会话树，父进程退出后
-   > 2s 内消失；现行自启走计划任务 `\ModelBus-zgate-hidden`，换版走
+   > 2s 内消失；现行自启走计划任务 `\ModelBus-zgate-watchdog`（2026-11-11 起已合并为单任务），换版走
    > `tools/zgate-lifecycle/restart-zgate.cmd`，正本见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
   起来后必须验证：`netstat -ano | grep 7871` 有 LISTENING，且

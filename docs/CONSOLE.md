@@ -66,7 +66,7 @@
 | 同步 | `%LOCALAPPDATA%/ModelBus/logs/sync-<stamp>.log`、`_last-sync.txt`、`current-models.json` | 五段流水线结果 | 30s |
 | 报告 | `docs/reports/MODEL-SYNC-<YYYYMMDD-HHMM>.md` | 每次同步的变化清单 | 300s |
 | 配置 | `gateways/zgate/zgate.json` | 上游 base、子进程、channelPolicy、reasoningGuard | 30s |
-| 计划任务 | `schtasks /query /tn \ModelBus-zgate-hidden` 等两个 | 自启与看门狗 | 60s |
+| 计划任务 | `schtasks /query /tn \ModelBus-zgate-watchdog` | 自启（单任务） | 60s |
 
 ### 2.3 不能破坏的契约
 
@@ -194,7 +194,7 @@ P3 保留一个桥：zgate 在 `Accept` 含 `text/html` 时对 `/health` 回 `30
 ### 6.8 运维
 
 - **配置只读视图**：`zgate.json` 结构化成四块 —— 监听与路径、7 个 upstreams 的 `base`、两个 child 的 `exe/port/health`、`channelPolicy` 与 `reasoningGuard` 的参数表；只读，不提供编辑框（改配置走 `deploy-zgate.ps1` 流程）
-- **计划任务**：`\\ModelBus-zgate-hidden`、`\\ModelBus-zgate-watchdog` 的状态与下次运行时间（`schtasks /query /fo LIST` 解析）
+- **计划任务**：`\\ModelBus-zgate-watchdog` 的状态与下次运行时间（`schtasks /query /fo LIST` 解析）
 - **门禁**：`check-project.py` / `check-docs.py` / `check-secrets.py` 最近一次结果（exit code + 首行摘要），结果缓存在 `.work/console/gates.json`
 - **动作区**（都要二次确认）：热加载（`POST 7871/admin/reload`）、跑门禁（P2）、跑探针（P2）、跑同步（P2）
 - **同步历史**：`docs/reports/` 文件名列表 + `_last-sync.txt` 内容
