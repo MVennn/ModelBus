@@ -1489,7 +1489,7 @@ func (s *Server) health(w http.ResponseWriter) {
 	payload["guard"] = s.guardView()
 	if s.hops != nil {
 		// hops 是每跳的 try/ok/busy/e5xx/silent/no_first_block 计数，键与冷却表同格式。
-		// 回答的是 /health.race 回答不了的问题：串行链（AIS 的 7 跳）里首选到底行不行。
+		// 回答的是 /health.race 回答不了的问题：串行链（AIS，11-11 起 3 跳）里首选到底行不行。
 		payload["hops"] = s.hops.view()
 	}
 	writeJSON(w, 200, payload)
@@ -1696,7 +1696,7 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 	accept := func(status int, head []byte) bool {
 		if poolDown(status, head) {
 			// 池空是渠道级故障：暂停渠道，并把上游这句原文直接回给客户端
-			// （不然客户端只能看到 7 跳撞完后的 502，不知道到底为什么）。
+			// （不然客户端只能看到整条链撞完后的 502，不知道到底为什么）。
 			if d := s.markChannelOffFor(hop.Channel, poolCooldown); d > 0 {
 				s.log.Warnf("[router] %s 上游 key 池为空（HTTP %d），渠道 %s 暂停 %v",
 					hopKeyForLog(hop), status, hop.Channel, d)

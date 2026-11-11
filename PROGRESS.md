@@ -3556,4 +3556,19 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 候选二进制 `gateways/zgate/zgate.candidate.exe`；换版由用户执行 `tools/zgate-lifecycle/restart-zgate.cmd`，会话不自动重启（自身流量经过 7871）。
 - 换版后待看：`/health.hops` 是否开始累积、`timeoutCooldownSeconds` 是否让 504 冷却从 5min 降到 20s、500 是否只重试一次。
 
+## 2026-11-11 11:56 换版生效与首批观测（用户执行换版）
+
+### 实测
+- 进程 pid 23196，启动 11:56:26；`zgate.exe` sha256 = `ae66a618…`，与 `zgate.candidate.exe` 同一文件 → 跑的就是本轮构建。
+- `/health` 新增两段已出现：`hops` = {GM|3.8: try 5 / ok 2、GM|3.7: try 1 / ok 0、HJ|福利3.8: try 1 / e5xx 1、WB|deepseek-v4.1: try 24 / ok 24}；`upstream` 四项全 0。
+- `chain.budget_s = 0`（0 = 不限，对应 `chainBudgetSec: -1`），不是异常。
+- `/v1/models?scope=legacy` 返回 73 条，`gem:ais-gemini-3.5-flash` 仍在且 `canonical_id=Gemini-AIS`、`chain_hops=3` → 裁链后老 id 不 404，PITFALLS §48 判据实测通过。
+
+### 首批数据说明了什么
+- 3.8 有失败（try 5 → ok 2），3.7 被真实调用过 1 次且没成功（ok 0），HJ 福利档出现过 1 次 5xx —— 这些以前在 `/health` 里完全看不到，只能翻日志。
+- 冷却 20s / 500 重试一次的行为要等下一次 504/500 才看得到，本轮只验证了字段与计数接线。
+
+### 注释口径
+- 代码里 5 处「AIS 7 跳」的历史注释跟到 3 跳（hop_stats.go / hop_stats_test.go / router.go 两处 / race.go / model_alias.py 两处），行为未变。
+
 [[TASK_ALL_DONE]]

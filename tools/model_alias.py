@@ -150,7 +150,7 @@ MAIN_ORDER = [
     # 先给「能用的 3.8」再给「会降级的 3.8」，点名候选也按这个先后。
     "chat:hjm:[福利]gemini-3.8-flash",
     # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
-    # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链 7 跳**。
+    # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链**（默认 7 跳，CHAIN_CAP 可截短）。
     # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
     # （_pick_rank 命中链上第一跳就返回，链首恒为 3.8，见 HOP_PRIORITY）。
     # 另外 6 个必须一并列出：MAIN_ORDER 是「组内顺序 + 点名候选」的唯一权威，
@@ -386,7 +386,7 @@ ABBR = {
     # 不是谷歌型号的一部分，显示名里去掉。
     # 上游 /v1/models 实返 7 个 Gemini Flash 档（3.8 / 3.7 / 3.6 / 3.5 / 3.5-lite /
     # 3.1-lite / 3-preview），七个 id 是同一家的同一系列，全部收进同一个显示名
-    # **Gemini-AIS**：组里只留一条「Gemini-AIS」，7 个上游变成这条链的 7 跳
+    # **Gemini-AIS**：组里只留一条「Gemini-AIS」，7 个上游成为这条链的跳，长度受 CHAIN_CAP 限制
     # （跳序由 HOP_PRIORITY 决定，见 family_entries 的排序键）。
     # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
     # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。

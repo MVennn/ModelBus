@@ -7,7 +7,7 @@ package router
 //   - /health.hops：每跳 try/ok/busy/e5xx 计数，用来回答「首选跳最近到底行不行」。
 //
 // 背景：AIS 按次计费，冷却期就是强制降级期；而 /health.race 只覆盖竞速跳，
-// 串行链（AIS 的 7 跳）过去一行观测都没有。
+// 串行链（AIS）过去一行观测都没有。
 
 import (
 	"io"
