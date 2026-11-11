@@ -577,7 +577,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 7. **每个请求都要先空等十几秒才出字**：正常流被 `probeSeconds` 误判成静默了。看日志有没有 `内没有可判定的思考信号（上游静默）` —— 有就说明探针没等到首块。先量正常流的首字节耗时（`tools/model_stream_check.py` 的 TTFB），把 `reasoningGuard.probeSeconds` 调到明显大于它（现配置 15，明文实测最高 13.5 秒）；窗口期把 `maxRetries` 调大的做法无效，重抽几乎必然落回同一后端，只会让用户多等。想完全关掉这套探测就把 `probeSeconds` 设负数并把 `maxRetries` 设 0。
 8. **新模型也这样怎么办**：先看 `/health.guard` 的 `mode` 与 `channels` —— `auto` 覆盖「客户端声明要思考」的所有流式请求；`channels` 只覆盖带 `guardReasoning` 的渠道（现网只有 `OC`），模型名仍要进 `models` 白名单（现为 Iceman 两条）；真要停手只把 `giveUpAfter` / `giveUpForSeconds` 调小调大。适配规则见 [PITFALLS.md](PITFALLS.md) §41「同类模型免配置适配」与 [MODEL-STREAM.md](MODEL-STREAM.md) §10。
 
-**原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层只动 `reasoningDisplay`（刷新 GUI 即生效），`ui-chat` 折叠三键属于用户偏好，不动；
+**原因 / 解法**：根因与三层避法以 [PITFALLS.md](PITFALLS.md) §42 为正本；探针口径见 [MODEL-STREAM.md](MODEL-STREAM.md) §3。展示层只动 `reasoningDisplay`（刷新 GUI 即生效），`ui-chat` 折叠三键属于用户偏好，不动；
 
 ---
 
@@ -614,7 +614,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 4. **反代后台没记录本身就是证据**：反代要开始回包时才记账，请求停在「连接建好、响应头没发」这一段不会留痕；配合客户端零字节，指向的是上游首字节沉默，而不是「请求根本没发出去」。
 5. **换版后复验**：`curl -s http://127.0.0.1:7871/health` 的 `segments` 里应出现 `hajimi`；再打一次目标模型，日志应有 `[race] 发出 1/8` 与最终赢家那一跳。
 
-**原因 / 解法**：正本见 [PITFALLS.md](PITFALLS.md) §42，机制见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.3 第 7 条。两件事都要做：① 换二进制（§16.2）；② 确认 `/health` 列出 `hajimi`（没列就是还在旧进程）。
+**原因 / 解法**：正本见 [PITFALLS.md](PITFALLS.md) §43，机制见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.3 第 7 条。两件事都要做：① 换二进制（§16.2）；② 确认 `/health` 列出 `hajimi`（没列就是还在旧进程）。
 
 ### 18.1 换版之后有输出了，但一次请求仍要 3-4 分钟（2026-11-10 19:45 实测）
 

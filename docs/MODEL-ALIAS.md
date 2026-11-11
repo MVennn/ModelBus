@@ -248,6 +248,13 @@ DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
 - WB 价格表超过 **48 小时**未刷新会打 WARN；`--probe-file` 的探测结果默认超过
   **72 小时**按「未知」处理（`--probe-max-age-hours` 可调，0 = 不设限）。
   过期的 `ok` 会留住已下架的模型，过期的 `blocked` 会删掉还能用的模型，两个方向都错。
+- `--probe-file` **不删主力组成员**（2026-11-11）：状态非 ok 的主力条目一律保留，
+  只在 stderr 打 `WARN: 主力组成员本轮探测不健康…`；只有上游明确 `unavailable / 404`
+  才照删。理由：DSH 的 `zcode-main` 型号表由这份配置直接投影，缺一条不是降级而是
+  硬失败（`pi-ai provider "zcode-main" has no configured model "…"`），整场会话报废。
+- 探活要给足输出预算：默认 `--max-tokens 256`。32 在「先思考再出字」的模型
+  （Gemini / Doubao 档）上会被思考预算吃光，上游回 400，模型被误判成死型号
+  （[PITFALLS.md](PITFALLS.md) §39）。
 - `--check`：把重算结果与现有 alias map 比对，有漂移就以退出码 1 结束，不写盘。
   建议挂进定时任务 —— `sync_report.py` 比的是「上一版产物 vs 这一版」，
   一个稳定存在的偏差在它眼里永远是「无变化」。

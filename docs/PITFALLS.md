@@ -753,7 +753,31 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **验证**：`python tools/model_alias.py --check --arena --scores --probe-file …` →
   「无漂移」；去掉 `--arena` 就复现那两行漂移。
 
-## 39. DSH 的 edit 工具会剥掉 UTF-8 BOM：改了带 BOM 的 .ps1 就变乱码 【通用】
+## 39. 探活参数把「思考吃满预算」判成死型号，主力组被整条摘掉，DSH 会话硬失败 【实例 A】
+
+- **现象**：2026-11-11 用一次 AIS 之后，整个 DSH 会话卡在
+  `pi-ai provider "zcode-main" has no configured model "Gemini-AIS"`，之后不管发什么
+  都是这句；模型选择器里 Gemini-AIS 与 Gemini-3.8-Flash 都不见了。
+- **根因**：三层叠加。
+  1. `model_probe.py` 默认 `--max-tokens 32`。GM（catiecli）的 Gemini 是「先思考再出字」，
+     32 token 全被思考预算吃掉，上游回 400 / 或超时，记录写成 `status=timeout|error`
+     且 `ever_ok` 为空 —— **能用的模型被记成死型号**。
+  2. `model_alias.py --probe-file` 摘除时不区分主力组，`timeout` 且无 `ever_ok` 直接 skip。
+  3. `tools/dsh_sync.py` 把 `modelOrder/personalModelIds` 原样投影成 zcode-main 的型号
+     清单，**缺型号不降级、直接硬失败**，于是清单少一条 = 整场会话报废。
+  另外 Gemini-3.8-Flash 当时走的是 HJ `[福利]gemini-3.8-flash`，该档在 gemai.cc 已断供
+  （`model_not_found / No available channel`），zgate 记 `fallback (none)` → 502。
+- **解法**：
+  - 「先思考再出字」的模型探活必须给足预算：默认提到 256，`sync-models.ps1` 显式传
+    `--max-tokens 256 --timeout 90`。
+  - 探活过滤里**主力组成员只报不删**：状态非 ok 时保留并打
+    `WARN: 主力组成员本轮探测不健康…`，真下架（unavailable / 404）照删。
+  - `dsh_sync.py` 维护 `~/.dsh/profiles/<profile>/zcode-model-ledger.json`，投影时比对
+    上一次清单，少条就 WARN 点名 —— 静默少一条是这次最难查的地方。
+- **验证**：探活三个主力全 `ok http=200`；`unittest discover -s tests` 135 tests OK；
+  `model_alias --check` exit 0「无漂移」。
+
+## 40. DSH 的 edit 工具会剥掉 UTF-8 BOM：改了带 BOM 的 .ps1 就变乱码 【通用】
 
 - **现象**：用 `edit_file` / `edit` 改 `sync-models.ps1`（HEAD 版本是
   `EF BB BF` 开头的 UTF-8 BOM），改完 `head -c 3 | xxd` 变成 `23 52 65`（`#Re`），
@@ -766,7 +790,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   判据是 `head -c 3 | xxd` 必须显示 `efbbbf`。`.py` / `.sh` 不要 BOM，别顺手加。
 
 
-## 40. 去掉 Default 伪档位后，省略 reasoning_effort 会让 Iceman 丢思考、正文聚成整块 【实例 A】
+## 41. 去掉 Default 伪档位后，省略 reasoning_effort 会让 Iceman 丢思考、正文聚成整块 【实例 A】
 
 - **现象**：`dsh-claude-style` 0.20.1 的 `lib/client.js` 在模型没显式指定默认档位时，
   往档位列表最前面塞一个 `id=undefined / name="Default"` 占位；用户不选档就选中它，
@@ -784,9 +808,9 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   本节只记坑，不重复定义机制。
 - **验证**：补测后 Iceman 414 块 / 1733 字思考 / 103 字正文 / 11 最大块间隔，PASS；
   `--check` 复查 `ALREADY_PATCHED (no write)`。改带 BOM 的 `sync-models.ps1` 挂探针钩子时
-  按 §39 补回 `EF BB BF`，否则计划任务里 PS5.1 按 GBK 读会乱码跑挂。
+  按 §40 补回 `EF BB BF`，否则计划任务里 PS5.1 按 GBK 读会乱码跑挂。
 
-## 41. 上游同一别名随机只给加密思考，Iceman 界面看不到思考 【实例 A】
+## 42. 上游同一别名随机只给加密思考，Iceman 界面看不到思考 【实例 A】
 
 - **现象**：显式 `reasoning_effort: high` 也会随机只回正文 + `reasoning_details[type=reasoning.encrypted]`，`reasoning_content` 零增量；30 次交错采样里 B 与请求参数、耗时都无关（2.02s–86.36s 都有），GUI 思考块空白、正文一节一节出。
 - **根因**：`iceman-contributor-free` 上游双后端分流：A 吐明文 `reasoning_content`（pi-ai 转 `thinking_delta`）；B 只吐 opaque replay blob。宿主 `@earendil-works/pi-ai/dist/api/openai-completions.js:172-173,416-428` 把 `reasoning_details` 当 replay 元数据，只写 `block.thinkingSignature`、不写 `block.thinking`、不推 delta；UI `blockIsVisible` 跳过空 reasoning。叠加 `transcriptView: standard / collapseTiming: completion / foldedReplies: final` 整轮折叠与 `reasoningDisplay: stepped` 两行步进。C2 负证据：查不到解密或强制明文的请求参数，8 类参数 ×5 轮全部照样命中 B。
@@ -800,12 +824,14 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **三次修复（2026-11-10 傍晚）：守卫压根没上场**。换版后用户复测仍「看不到思考 + 一节一节」，而 zgate.log 里那两条请求**一个守卫行都没有** —— 不是重抽失败，是触发条件不成立：guardApplies 首行 !reasoningExpectsThinking(body)，而 DSH 的模型选择器没有逐模型默认档位（catalog 的 reasoning.defaultEffort 为空 → 选的是 Default 伪档位），真实请求体只有 provider/model/maxTokens，**不带 reasoning_effort**。诊断入口：会话 session.v4.jsonl.zstd 的 request/header 记录里看 config 字段，没有 reasoningEffort 就实锤。修法：reasoningGuard.forceEffort + forceEffortModels，由 injectThinkingEffort 在转发前补档（日志「客户端未声明思考档位，按配置补 reasoning_effort=high」），补档后原有「换连接+换会话重抽」才会真正生效。**不要**再走给 dsh-claude-style/lib/client.js 打补丁的老路：该文件 2026-11-10 12:35 被重建后 11-09 的 effort 补丁整段消失（patch-claude-style-effort.mjs --check 报 NEEDS_REVIEW，六条锚点全归零），profile 每次重建都会重演。补档只影响「客户端没说话」的情况：显式 off / thinking 原样透传。
 - **四次修复（2026-11-10 傍晚）：探针把用户的等待放大了**。三次修完后守卫确实上场，但每个请求要空等 85 秒（用户手动点停止）。代码级原因有三层：① `probeReasoningStream` 只在**第一个正文 delta** 时返回 `streamEncrypted`，而加密那一路思考阶段整段静默（无明文 `reasoning_content`、无正文），于是"判定"的延迟就等于那一次尝试的整段思考时长（`zgate.log` 实测两次判定隔 61 秒）；② 重抽预算花完的最后一发仍用无上限探针，再叠一段空等；③ 跳过期命中就续期，窗口过去也探不回来。现网口径：`probeSeconds`（缺省 12）到点换连接重抽；重抽预算花完或处于跳过期时**不探测、直接放行上游原始流**并插一条按成因写的提示（超时说"探测超时"、`reasoning.encrypted` 才说"只回加密"）；`guardInSkip` 到期清计数再复探，进跳过表改成"自上一条明文以来连续 N 轮失败"。**诊断入口**：日志里出现 `内没有可判定的思考信号（上游静默）` = 探针超时在换连接，`连续 N 次探测超时` = 已放弃探测直接放行；两者都在 `probeSeconds` 附近出现即说明修复在位。参数联动：`probeSeconds` 要大于正常流的首字节耗时（明文实测最高 13.5 秒 → 配置 15），小了会把慢流误判成静默；`maxRetries` 大于 1 在窗口期纯属白等（12:01 连续 3/3、13:20 连续 2/2 都落回同一后端）。
 
-## 42. 配置加了渠道、进程没重载：整条降级链静默退回串行 【通用】
+## 43. 配置加了渠道、进程没重载：整条降级链静默退回串行 【通用】
 
 > **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；现在 `Gemini-AIS` 是 7 跳全 GM，
-> 哈基米福利 3.8 已拆成独立模型 `Gemini-3.8-Flash`（单跳 `HJ`、排在 AIS 前面）。
+> 哈基米 3.8 已拆成独立模型 `Gemini-3.8-Flash`（排在 AIS 前面）。
+> **再更新（2026-11-11 13:35）**：HJ「福利」档断供，这一族改成 `[满血A]` 同站三跳
+> （3.8 → 3.7 → 3.6，各 0.05），见 §39。
 > `(1/8)` 这类日志按历史读，`channelPolicy` 少一个渠道就会退回串行的结论仍然成立。
-> **链长再变（2026-11-11 11:03）**：AIS 只留 3 跳，日志变 `(x/3)`；裁掉的四跳记 `dropped_hops` 并留在 `legacy_ids`，见 §43。
+> **链长再变（2026-11-11 11:03）**：AIS 只留 3 跳，日志变 `(x/3)`；裁掉的四跳记 `dropped_hops` 并留在 `legacy_ids`，见 §44。
 
 - **现象**：某个模型一次请求一分钟零字节，客户端只能手动停止；网关日志里只有一行派发 `model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)`，之后没有任何 `[race]`、没有冷却、没有 fallback、没有 502；上游反代面板一条记录都没有。同一时刻其他模型正常。
 - **根因**：三层叠一起，缺一层都不会这样静默。
@@ -832,7 +858,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   - **口径**：本地只做两件事 —— 「并排多问一家」（对冲，只多开一路、不取消前一路）与「按上游回话冷却」（429 / 5xx / 403）。**上游没说我死了，就不替他下死亡通知**；慢是常态，阈值给多少都是赌，赌错一次要付一次重试 + 一次重跑。
   - **判据**：`grep -c '没给响应头' zgate.log` 与 `grep -c '503' zgate.log` 放一起看 —— 前者远大于后者就说明判死是本地造的。详见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18.4。
 
-## 43. 上游「忙」被当成渠道故障：一个过载的 3.8 把同渠道能用的 3.6 一起带走 【实例 A】
+## 44. 上游「忙」被当成渠道故障：一个过载的 3.8 把同渠道能用的 3.6 一起带走 【实例 A】
 
 - **现象**：用户侧两条互相矛盾的反馈 —— ①「跑着跑着就截断了，然后说模型使用人数过多需要重跑」；②「错误码 HTTP_503，此模型当前需求量较大」，`503 都是这样`。直连取证（Bearer `GEMINI_API_KEY` 打 catiecli）：短问四跳全 200（3.8 = 7.2s / 3.7 = 5.2s / 3.6 = 2.6s / 3.5-flash-lite = 10.8s）；同样的 1200 字长提示四跳全 503，耗时 3.4s / 10.3s / 22.4s / 4.3s。**这不是链路坏了，是模型忙**，且 503 来得慢（最长 22 秒），会白占看门狗窗口。
 - **根因**（两层，都在网关侧）：
@@ -845,35 +871,35 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
 ---
 
-## 44. 竞速排序的记忆有保鲜期，`/health.race` 却还在报旧账 【实例 A】
+## 45. 竞速排序的记忆有保鲜期，`/health.race` 却还在报旧账 【实例 A】
 
 - **现象**：三种误判同一个根 —— ① 看 `/health` 里 `race.hops` 的 `3.8 = {"verdict":"Service Unavailable","at":"21:56"}`，断定「它还被压在队尾」，可下一轮请求其实已经按声明顺序先试它了；② 以为 `POST /admin/reload` 能重置排序，reload 后 `at` 纹丝不动，转头怀疑「配置没生效」；③ 在单发串行的链上盯 `race.hops` 一行都不更新，怀疑观测坏了。
 - **根因**：观测的**保鲜期只作用于发车顺序，不作用于展示**。`rankedChain()` 用 `snap.stale(now)` 把过期条目当「没测过」重新给机会（失败保鲜短、成功保鲜长，常量 `raceFailTTL` / `raceOKTTL`），而 `raceSnapshot()` 原样拷贝全表、`/health.race.hops` 因此永远是「最近一次观测」的原始账本；`/admin/reload` 只做 config / keys / `ApplyConfig` / `aliases.Reload`，不清 `raceStat`；更要紧的是 `rankedChain` 只在 `raceChain`（对冲路径）里调用，串行链走 `attemptChain`，压根不产生这类观测。
 - **处置**：判「为什么又是兜底跳出字」用 `/health.hops` 的逐跳计数（`try` / `ok` / `busy` / `e5xx` / `silent` / `no_first_block`，串行链也有），不要读 `race.hops` 的 `at` 当下结论；要清零观测只能重启进程；怀疑排序固化时先看 `try` 有没有增量 —— 有增量就说明它已经被试过，问题不在排序。
 - **证据**：`internal/router/router.go` 的 `hopStatSnap.Seen` 与 `stale()`、`raceFailTTL` / `raceOKTTL` 常量、`raceSnapshot()` 无过滤、`reload()` 不清 `raceStat`；`internal/router/race.go` 的 `rankedChain` 分支 `case !ok || snap.stale(now)`；`internal/router/race_test.go` 的 `TestRankedChainRetriesStaleObservations`（新鲜 / 过期 / 成功过期三态）；`internal/router/hop_stats.go` 注释「/health.race 只记竞速跳（at != nil）的首块耗时，串行链一行都看不到」。
 
-## 45. 用 md5 核对 zgate 版本，永远对不上 【通用】
+## 46. 用 md5 核对 zgate 版本，永远对不上 【通用】
 
 - **现象**：重编后 md5 与线上不一致，判成「部署没生效」，于是再编、再换、还是不一致；另一种反向误判 —— md5 一致就以为「源码也是最新的」。
 - **根因**：构建时工作区不干净会把 `vcs.modified=true` 编进 buildid，同一份源码的字节就不可复现；不同 ldflags 组合（`-H windowsgui`、`-s -w`、带与不带 `-trimpath`）也会各出一份哈希。md5 能证明的只有「备份 → 替换 → 校验这一段搬的是同一份字节」，与「是不是最新代码」无关。
 - **处置**：版本只认 `go version -m <exe>` 的 `vcs.revision`；再跑 `git log <vcs.revision>..HEAD -- gateways/zgate` 判欠账，为空才算追平；md5 保留在部署三步里做搬运校验。判据与命令见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) §9.1。
 - **证据**：同一次排查里四种 ldflags 组合全部对不上，当时的 buildinfo 带 `vcs.modified=true`；`git log <该提交>..HEAD -- gateways/zgate` 为空，证明「源码没欠账、只是字节不可复现」。
 
-## 46. 反代面板时间比 zgate 日志晚一百秒出头，对齐前别下结论 【实例 A】
+## 47. 反代面板时间比 zgate 日志晚一百秒出头，对齐前别下结论 【实例 A】
 
 - **现象**：把面板的 `21:56` 与日志的 `21:30` 拼成一条时间线，得出「3.8 失败后十五分钟一次没被碰过」「面板零记录 = 网关没发请求」；同一条请求，两边各自看都很正常，合起来就是错案。
 - **根因**：两个时间基准不同源。面板记的是它自己落账的时刻，实测恒定滞后一百秒出头（104–106 s，非固定偏移的部分来自面板落账延迟），跨源比对不做校正就会把因果方向拼反。
 - **处置**：唯一时间轴用 `zgate.log` 的 `[race] 发出 i/n`、首块、冷却三类行；面板只用来数「上游到底被调用了几次」；确实要跨源对齐时，先取**同一条请求**在两端的时间戳算出偏移，再逐条平移后比对。`/health.race.hops` 里的 `at` 是网关本地时间（`now.Format("15:04:05")`），与面板同样不同源。
 - **证据**：源文档样本 —— 日志 `21:30:21` 发出 1/7、`21:30:36` 503 冷却 1m0s、`21:30:54` 发出 3/7，面板同段恒定晚 104–106 s；`/health` 抓取时刻 `21:59` 而 `race.hops` 内 `at` 已到 `21:58:50`。
 
-## 47. 只改 `zgate.json` 加渠道：请求在 key 覆盖名单外被静默跳过 【通用】
+## 48. 只改 `zgate.json` 加渠道：请求在 key 覆盖名单外被静默跳过 【通用】
 
 - **现象**：新渠道的别名配好了、`/v1/models` 也能看到，请求却稳定 502 `all upstreams failed: <hop>`，日志里没有任何上游响应；另一种形态是上游回 401「未提供API Key」，像是凭据没配。
 - **根因**：渠道集合在 Go 里枚举（`internal/keys` 的 `Set.For(channel)` 按渠道硬编码），`zgate.json` 里的 `keyEnv` 已是废弃字段、写了也不生效；只加别名不改代码时，请求会在 router 的渠道判定处被静默跳过，表现成「上游从未被调用」的 502；另一处是 key 覆盖名单没补新渠道，空 Bearer 被原样透传，于是拿到 401。
 - **处置**：按 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的六处改动（`internal/keys`、`internal/config` + `main.go`、`internal/router` 的 key 覆盖名单、`tools/model_alias.py` 的渠道常量、`providers/<name>/.env.local`）一次改齐，然后**必须换二进制** —— `/admin/reload` 只能热加载 base 与 key，改不了编译期登记的渠道；换完先看 `/health` 是否出现该渠道的 `{state:"up",key:true}`。
 - **证据**：源文档实测 —— 不改 Go 时请求在 `router.go` 的渠道判定处被静默跳过，最终单跳 502 且日志无上游响应；补上 key 覆盖名单后 401 消失；GM 接入后 `/health` 出现 `gemini:{state:"up",key:true,child:""}`。
 
-## 48. 给链加长度上限时只截 `chain`：老 id 静默 404 【通用】
+## 49. 给链加长度上限时只截 `chain`：老 id 静默 404 【通用】
 
 - **现象**：给 `tools/model_alias.py` 加 `CHAIN_CAP = {"Gemini-AIS": 3}` 后 `--apply`，别名表 legacy 从 73 条掉到 69 条，模型总数 93 掉到 89；老会话点名 `ais-gemini-3.5-flash` 这类 id 直接 404，选择器里也少了四条。
 - **根因**：`family_entries()` 只用 `chain` 建链，而 `_consistent_legacy_ids()` 反过来拿「全量 hops 的 upstream ∪ 链上跳」校验 legacy 映射 —— 被裁掉的四跳既不在链上、又没有别的登记点，四条 `gem:ais-*` 映射就被当脏数据过滤了。

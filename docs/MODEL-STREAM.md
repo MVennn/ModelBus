@@ -12,7 +12,7 @@
 ## 1. 背景与要解决的问题
 
 `Default` 伪档位让请求不带 `reasoning_effort`，推理模型因此丢思考、正文聚成整块；
-根因、补丁与实测对照以 [PITFALLS.md](PITFALLS.md) §40 为正本，这里不重复定义。
+根因、补丁与实测对照以 [PITFALLS.md](PITFALLS.md) §41 为正本，这里不重复定义。
 准入机制只保留上游文档给出的真实档位（`disabled / low / medium / high / xhigh / max`
 等，按宿主 `THINKING_LEVELS` 固定序），effort 为空时取 `model.reasoning.efforts` 末位
 并显式写进请求。
@@ -69,7 +69,7 @@ provider 以 `zcode-` 开头的模型表。`tools/dsh_sync.py --apply` 从 ZCode
 `reasoning_details[type=reasoning.encrypted]`。A 格式尾部也会带一条 replay detail，
 所以 B 分流的判据是「零明文思考（`THINK=0`）且 `ENC>0`」：此时理由写明
 「上游加密思考分流」，不再含糊标成「声明 deepseek 思考但 reasoningChars=0」。
-上游分流根因、展示层与网关层避法以 [PITFALLS.md](PITFALLS.md) §41 为正本，
+上游分流根因、展示层与网关层避法以 [PITFALLS.md](PITFALLS.md) §42 为正本，
 这里只记探针口径，不重复定义机制。
 
 产物是 `.work/model-stream/report-<UTC>.json` 与 `latest.json`（真实项目内，
@@ -126,6 +126,7 @@ Windows 计划任务 `\ModelBus 模型同步` 是唯一自动驱动，daily 12:0
 | 上游限流 | 网关把排队 / 额度包成 `HTTP 200` + `{"error":{...}}` 的 SSE 首帧（如 10605 / RESOURCE_LIMIT）；探针识别后记 `SKIP`，不能判成「上游空 completion」 |
 | 未实测 | 增量模式（`--changed` / `--model`）下契约里没轮到实测的模型补 `SKIP` 占位行，保证 `models` 条数恒等于 `contractCount`；占位行不带 `fingerprint`，次日仍会被选中补测 |
 | 空正文 | 首选档思考占满预算 → 同档位 8192 补测；补测拿到正文且无其它问题 → `PASS` |
+| 空 completion | `HTTP 200` 但正文与思考都是 0（回包里只有 `role` / `finish_reason`）→ `SKIP`，和 429/5xx 同档：不计 `FAIL`，但次日 `--changed` 必点名复测。判 `WARN` 等于把一次真实断流折成备注，没人会看（2026-11-11 起） |
 | 思考 | 仅 `reasoning_deepseek` 强制要求思考字数 > 0 |
 | 加密分流 | `THINK=0` 且 `ENC>0` → `WARN`，理由写明「上游加密思考分流」；离线守卫复核该标注没丢 |
 | 并发 | 默认 2（实测 6 会把网关打出假阴性） |
@@ -156,7 +157,7 @@ Claude-Haiku-5.5（403，`http!=403` 复通）。上游修好后无需人工改�
 
 - 活体探针只在本机每日同步链尾跑；CI / pre-commit 只跑离线守卫。
 - 报告与证据是中间产物，落在真实项目 `.work/` 内，不进版本库。
-- 改带 BOM 的 `sync-models.ps1` 必须保留 `EF BB BF` + LF，见 [PITFALLS.md](PITFALLS.md) §39。
+- 改带 BOM 的 `sync-models.ps1` 必须保留 `EF BB BF` + LF，见 [PITFALLS.md](PITFALLS.md) §41。
 - 网关守卫是 Go 代码，必须换 `zgate.exe` 才生效；`/admin/reload` 只热加载 `zgate.json`，流程见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16.2。
 - 文档规则（单一正本、索引、孤儿、体量）见 [DOC-RULES.md](DOC-RULES.md)。
 
