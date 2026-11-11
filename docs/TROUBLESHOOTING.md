@@ -588,6 +588,8 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 > **口径更新（2026-11-10 22:27）**：`Gemini-AIS` 现在是 **7 跳全 GM** 链，哈基米福利 3.8 已拆成独立模型
 > `Gemini-3.8-Flash`（单跳 `HJ`）。本节及 §18.1-§18.3 里出现的 `(x/8)` 与 HJ 跳都是当晚的历史日志，
 > 排障时按 `(x/7)` 对照，别把「链里没有 HJ」当成回归。见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.11.5。
+>
+> **再度收窄（2026-11-11 11:03）**：`Gemini-AIS` 只留 3 跳（3.8 → 3.7 → 3.6），后四跳记 `dropped_hops` 但仍留在 `legacy_ids`；新日志按 `(x/3)` 读，见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8.3。
 
 
 **一句话结论**：降级链上多了一个新渠道，运行中的 `zgate.exe` 内存里没有对应的 `channelPolicy` → 整条链静默退回串行 → 首跳把连接挂住却不给响应头，而串行链没有首块超时，于是两头都静默。
@@ -644,7 +646,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 
 ### 18.4 后台明明在跑 token、本地却断开了又重跑一次（2026-11-10 21:30 定位，同一晚第三次改方向）
 
-**现象**：用户一句话发出去，反代后台（上游那边）在正常吐 token，本地却先「无响应」再直接重试、又跑一遍，最后断开；连发两句时两分钟里大半时间都花在撞已知慢跳上。模型是 `Gemini-3.8-Flash`（HJ 单跳）和 `Gemini-AIS`（GM 七跳）。
+**现象**：用户一句话发出去，反代后台（上游那边）在正常吐 token，本地却先「无响应」再直接重试、又跑一遍，最后断开；连发两句时两分钟里大半时间都花在撞已知慢跳上。模型是 `Gemini-3.8-Flash`（HJ 单跳）和 `Gemini-AIS`（GM 链，11-11 11:03 起 3 跳）。
 
 **判据**（只读日志，零真实调用）：
 
@@ -662,7 +664,7 @@ Job Object 里，会话结束整棵进程树被回收（实测 2s 内子进程�
 | 项 | 改法 | 理由 |
 |---|---|---|
 | `channelPolicy.HJ` | 整段收敛为 `{"headerTimeoutSec": -1}` | 单跳链没有备胎，本地判死只会把下一个请求也饿死；它就是 `QN` 同级的普通供应商，上游自己做得很好 |
-| `channelPolicy.GM.headerTimeoutSec` | `-1`（不设看门狗） | 同上，7 跳里「慢」的那几跳本来就有 `hedgeAfterMs` 兜着 |
+| `channelPolicy.GM.headerTimeoutSec` | `-1`（不设看门狗） | 同上，链里「慢」的那几跳本就有 `hedgeAfterMs` 兜着（当年 7 跳，现 3 跳） |
 | `channelPolicy.GM.firstBlockMs` / `silenceCooldownSeconds` | `0` / `0` | 不再把「200 之后不出正文」当失败，也不再埋冷却 |
 | `channelPolicy.GM.hedgeAfterMs` | `500` → `18000` | 对冲只**多开一路**、不取消前一路，是「加速」不是「判死」；18s 后还慢就并排跑，让先出字的赢 |
 | `upstreamHeaderTimeoutSec` | `12` → `45` | 全局兜底只兜「真的挂了」的渠道（WB / OC / QD / QN 等没有 policy 的） |

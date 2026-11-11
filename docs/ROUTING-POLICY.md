@@ -34,7 +34,7 @@
 | `rateLimitBackoffMs` | 被尝试的那一跳 | -1 = 429 直接换跳；0 / 正数 = 就地等一会儿再重试 |
 | `authFailCooldownHours` | 被尝试的那一跳 | key 失效类 403 → 整渠道停多久 |
 
-**为什么改**：原来 `racePolicyFor` 读 `Chain[0]`，一条链上只有链首渠道说了算 —— Gemini-AIS 七跳全 GM，
+**为什么改**：原来 `racePolicyFor` 读 `Chain[0]`，一条链上只有链首渠道说了算 —— Gemini-AIS 当时七跳全 GM（现 3 跳），
 于是「给 OC / QD / WB 补策略」在当时等于白补（配了也读不到）。改成逐跳聚合之后，任意混合链
 （例：GM 慢 + HJ 快）不必再为每个组合手工建模型，链自己就能得到「慢的那跳并排问快的那跳」。
 

@@ -805,6 +805,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 > **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；现在 `Gemini-AIS` 是 7 跳全 GM，
 > 哈基米福利 3.8 已拆成独立模型 `Gemini-3.8-Flash`（单跳 `HJ`、排在 AIS 前面）。
 > `(1/8)` 这类日志按历史读，`channelPolicy` 少一个渠道就会退回串行的结论仍然成立。
+> **链长再变（2026-11-11 11:03）**：AIS 只留 3 跳，日志变 `(x/3)`；裁掉的四跳记 `dropped_hops` 并留在 `legacy_ids`，见 §43。
 
 - **现象**：某个模型一次请求一分钟零字节，客户端只能手动停止；网关日志里只有一行派发 `model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)`，之后没有任何 `[race]`、没有冷却、没有 fallback、没有 502；上游反代面板一条记录都没有。同一时刻其他模型正常。
 - **根因**：三层叠一起，缺一层都不会这样静默。
@@ -871,3 +872,12 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **根因**：渠道集合在 Go 里枚举（`internal/keys` 的 `Set.For(channel)` 按渠道硬编码），`zgate.json` 里的 `keyEnv` 已是废弃字段、写了也不生效；只加别名不改代码时，请求会在 router 的渠道判定处被静默跳过，表现成「上游从未被调用」的 502；另一处是 key 覆盖名单没补新渠道，空 Bearer 被原样透传，于是拿到 401。
 - **处置**：按 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的六处改动（`internal/keys`、`internal/config` + `main.go`、`internal/router` 的 key 覆盖名单、`tools/model_alias.py` 的渠道常量、`providers/<name>/.env.local`）一次改齐，然后**必须换二进制** —— `/admin/reload` 只能热加载 base 与 key，改不了编译期登记的渠道；换完先看 `/health` 是否出现该渠道的 `{state:"up",key:true}`。
 - **证据**：源文档实测 —— 不改 Go 时请求在 `router.go` 的渠道判定处被静默跳过，最终单跳 502 且日志无上游响应；补上 key 覆盖名单后 401 消失；GM 接入后 `/health` 出现 `gemini:{state:"up",key:true,child:""}`。
+
+## 48. 给链加长度上限时只截 `chain`：老 id 静默 404 【通用】
+
+- **现象**：给 `tools/model_alias.py` 加 `CHAIN_CAP = {"Gemini-AIS": 3}` 后 `--apply`，别名表 legacy 从 73 条掉到 69 条，模型总数 93 掉到 89；老会话点名 `ais-gemini-3.5-flash` 这类 id 直接 404，选择器里也少了四条。
+- **根因**：`family_entries()` 只用 `chain` 建链，而 `_consistent_legacy_ids()` 反过来拿「全量 hops 的 upstream ∪ 链上跳」校验 legacy 映射 —— 被裁掉的四跳既不在链上、又没有别的登记点，四条 `gem:ais-*` 映射就被当脏数据过滤了。
+- **正解**：截链时把裁掉的跳记进 `entry["dropped_hops"]`，并在 `_consistent_legacy_ids()`、脏映射清理循环、`alias_models` 写盘三处把 `dropped_hops` 计入 upstream 集合。改完 legacy 回到 73、旧 id 仍解析到 `Gemini-AIS`，只是链不再真去打它们。
+- **判据**：`--apply` 后立刻核 `models==20`、`legacy==73`、`len(AIS.chain)==3`、`len(AIS.dropped_hops)==4`；单测 `test_ais_chain_is_three_gm_hops_in_version_order` 同时锁链长、dropped 与 legacy 覆盖。
+- **同类**：任何「先按名字聚合成一条链、再按上限裁剪」的生成器（工具清单、provider 目录、路由表）都有这个陷阱 —— 裁的是执行路径，不是身份。
+

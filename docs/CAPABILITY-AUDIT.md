@@ -374,7 +374,7 @@ HJ 与 GM 都不会告诉你能力字段（HJ `/v1beta/models` 的 `inputTokenLi
 | 模型 | 关键证据 | 采用的结论 |
 |---|---|---|
 | Gemini-3.8-Flash（HJ 单跳） | 官方 Token limits / Modalities 页；内联 2×2 PNG 返回文本（`promptTokenCount` 2553，纯文本 1454） | ctx 1048576 / max 65536 / tool ✓ / img ✓ |
-| Gemini-AIS（GM 七跳） | GM `/v1beta/models` 七跳全部 `inputTokenLimit=1000000`、`outputTokenLimit=65536`；厂商文档同族 1048576 | ctx 1000000（取中继自报）/ max 65536 / tool ✓ / img ✓ |
+| Gemini-AIS（探测时 GM 七跳，现链 3 跳） | GM `/v1beta/models` 七跳全部 `inputTokenLimit=1000000`、`outputTokenLimit=65536`；厂商文档同族 1048576 | ctx 1000000（取中继自报）/ max 65536 / tool ✓ / img ✓ |
 
 两条原文兜底值都错在一起：`max_output_tokens=128000`（真值 65536，虚高约一倍）、`supports_image=false`（实际收图）。改完 DSH 侧 `maxTokens: 65536`、`input: [text, image]` 都已投影。
 
