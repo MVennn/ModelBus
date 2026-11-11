@@ -78,6 +78,12 @@ type Server struct {
 	// 提前交卷本身是「对客户端撒谎：先说 200」，没有计数就没人能回答「它到底起了几次作用」
 	// —— 这是 2026-11-10 复盘里唯一一项「全量生效却零观测」的功能。
 	early *earlyStats
+	// hops 是每跳的结果计数（try/ok/busy/e5xx/silent/no_first_block），只供 /health 看。
+	// 与 /health.race 的区别：race 只覆盖竞速跳，hops 覆盖所有跳（串行链也有）。
+	hops *hopStats
+	// sem 是「上游语义」这一层的计数：忙了几次、剥思考参数重发几次、补了几次
+	// 截断收口。这些分支都是 2026-11-11 新加的，没有计数就只能靠日志猜。
+	sem *upstreamStats
 }
 
 // hopCooldown 是死跳的默认冷却时长；与额度窗口同一量级的短周期，够跨过一轮使用。
@@ -91,6 +97,11 @@ const rateLimitCooldown = 45 * time.Second
 // rateLimitBackoff 是收到 429 后的就地退避：先睡一小会儿重试同一跳，
 // 限流窗口通常不到 1 秒，这样多数突发根本不会让你看到失败。
 const rateLimitBackoff = 700 * time.Millisecond
+
+// statusRetryDelay 是上游回 500 后原地重试同一跳前的等待。
+// 500 是上游自己的内部错，不需要像 429 那样等限流窗口过去；800ms 只是让
+// 「瞬时抖动」那一类有足够时间恢复，又不至于把首字推后太多。
+const statusRetryDelay = 800 * time.Millisecond
 
 // transportRetryDelay 是「传输层失败」后重试同一跳前的等待。
 // 这类失败（EOF / TLS 握手超时 / 连接被重置）说明请求多半没被上游受理，
@@ -332,7 +343,8 @@ func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervi
 	return &Server{cfg: cfg, keys: ks, aliases: am, sup: sup, client: client, log: log,
 		started: time.Now(), cool: map[string]time.Time{}, silence: map[string]time.Time{},
 		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{},
-		serialAt: map[string]time.Time{}, early: newEarlyStats()}
+		serialAt: map[string]time.Time{}, early: newEarlyStats(), sem: newUpstreamStats(),
+		hops: newHopStats()}
 }
 
 // headerTimeout 解析「等上游响应头」的实际容忍上限，优先级：测试/显式字段 >
@@ -494,8 +506,12 @@ func (s *Server) coolBridgeFailure(ctx context.Context, hop alias.Hop, result br
 	case 429:
 		s.coolHop(ctx, hop, rateLimitCooldown, coolWhyRateLimit)
 	case 504:
-		s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
-		s.coolHop(ctx, hop, timeoutCooldown, "静默超时")
+		d := s.timeoutCooldownFor(hop.Channel)
+		if d <= 0 {
+			return
+		}
+		s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), d)
+		s.coolHop(ctx, hop, d, "静默超时")
 	}
 }
 
@@ -950,12 +966,18 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	txRetry := 0
 	retry429 := 0
 	guardRetries := 0 // reasoningGuard：同一跳透明重抽次数（上游加密思考分流）
+	// sanitizeTried：思考档位枚举不合法（400）时剥掉参数重发同一跳的次数，最多一次。
+	// 剥完还 400 就是别的问题，再剥只会掩盖真错误。
+	sanitizeTried := 0
 	// guardTimeoutRounds：其中有多少次是「探针到点都没有可判定信号」（上游思考阶段整段静默）。
 	// 放行时要按原因给不同提示：加密分流说「只回加密」，静默超时说「探测超时」，别混为一谈。
 	guardTimeoutRounds := 0
 	// 竞速模式下渠道可以关掉「429 就地退避」：白等 700ms 只把首字往后推，
 	// 直接换下一跳更快。非竞速路径 inPlace429 恒为 true，行为与老版本一致。
 	inPlace429 := !(at != nil && at.policy.RateLimitBackoffMs < 0)
+	// statusRetry：上游 HTTP 500 的原地重试次数。只在渠道开了 retry500Once 时用，
+	// 且只重试一次 —— 500 是「上游自己出错」，连撞两次还 500 就说明不是抖动。
+	statusRetry := 0
 	// 首块看门狗：配了 firstBlockMs 之后，2xx 的 SSE 若在该时长内没出现真实内容
 	// delta，就判这一跳失败并把机会让给下一跳。它专治「200 + 空流」——
 	// 实测 3.6 有一次 14.24 s 里只有心跳没有正文，串行链会把这种跳当成功干等。
@@ -969,6 +991,9 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		if err != nil {
 			writeJSON(w, 502, errorBody("unified-router upstream error: "+err.Error(), "proxy_error"))
 			return
+		}
+		if hop != nil {
+			s.hopTry(*hop)
 		}
 		req.Header = headers.Clone()
 		if guardRetries > 0 {
@@ -1007,6 +1032,11 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				}
 				s.log.Warnf("[router] %s（channel=%s model=%s）上游 %v 内没给响应头，判这一跳沉默并换跳",
 					base, channel, requestModel(body), applied)
+				if hop != nil && !budgetHit {
+					// 只统计「这一跳自己的沉默」：预算耗尽（budgetHit）说明是整条链
+					// 的时间用完了，记到最后一跳头上会让人误判它不行。
+					s.hopSilent(*hop)
+				}
 				if budgetHit {
 					// 预算耗尽不是这一跳的错：给它静默冷却会让下一个请求又从死跳起手，
 					// 而且再换跳也只是把剩下的预算耗在一模一样的等待上。直接收工并说清楚。
@@ -1064,6 +1094,45 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			// single-Read partial-segment trap on error bodies.
 			if resp.StatusCode >= 400 {
 				head, _ = io.ReadAll(io.LimitReader(resp.Body, 8192))
+			}
+			if sanitizeTried == 0 && invalidThinkingParam(resp.StatusCode, head) {
+				// Gemini 的 ThinkingLevel 只认 minimal/low/medium/high，客户端把
+				// high/max/off（甚至占位串 BOGUS）直接塞进 thinking_level 就会 400。
+				// 请求体其余部分完全合法，剥掉这个参数同一跳就能过 —— 把 400 原样
+				// 冒泡给用户，用户只会看到 INVALID_REQUEST 而不知道自己在哪个档位上出错。
+				if stripped, ok := stripThinkingParams(body); ok {
+					sanitizeTried++
+					if s.sem != nil {
+						s.sem.invalid.Add(1)
+					}
+					s.log.Infof("[router] %s 上游 400 不接受思考档位（%s），剥掉思考参数后重试同一跳",
+						base, retryHint(head))
+					_, _ = io.Copy(io.Discard, resp.Body)
+					resp.Body.Close()
+					body = stripped
+					continue
+				}
+			}
+			// 500 原地重试一次。老行为里 500 落到 accept 的 default 分支（true），
+			// 原样透给客户端 —— 既不重试也不换跳，是全表唯一一处。catiecli 的 500
+			// 多是上游瞬时内部错，按次计费下重试一次远便宜于降级到弱模型。
+			if resp.StatusCode == 500 && statusRetry == 0 && s.retry500For(channel) {
+				statusRetry++
+				if hop != nil {
+					// 这次 500 没进 accept（直接重试了），但它是实打实的一次上游出错，
+					// /health.hops 少记这一笔会让 e5xx/try 的比率偏低。
+					s.hopE5xx(*hop)
+				}
+				s.log.Infof("[router] %s 上游 HTTP 500（%s），%v 后重试同一跳",
+					base, retryHint(head), statusRetryDelay)
+				_, _ = io.Copy(io.Discard, resp.Body)
+				resp.Body.Close()
+				select {
+				case <-time.After(statusRetryDelay):
+				case <-r.Context().Done():
+					return
+				}
+				continue
 			}
 			if !accept(resp.StatusCode, head) {
 				_, _ = io.Copy(io.Discard, resp.Body)
@@ -1184,6 +1253,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			buffered, ok := peekFirstContent(streamSrc, firstBlock, r.Context())
 			if !ok {
 				resp.Body.Close()
+				s.hopNoFirstBlock(at.hop)
 				s.noteRaceHop(at.hopTag, 0, "no-first-block")
 				s.log.Infof("[router] %s 模型 %q %v 内没有真实内容首块，判这一跳失败并让位",
 					target, model, firstBlock)
@@ -1203,7 +1273,13 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
-		if isEventStreamGuard(resp) {
+		sse := isEventStreamGuard(resp)
+		// tracker 只对事件流有意义：普通 JSON 没有 finish_reason 概念，给它补帧会毁掉响应体。
+		var tracker *streamTracker
+		if sse {
+			tracker = &streamTracker{}
+		}
+		if sse {
 			// 事件流一律交给 net/http 按 chunked 重新分帧。上游 SSE 可能自带
 			// Content-Length（实测 200 + CL 的假上游就能打出来），而守卫会丢弃首段、
 			// 插入可读提示、掺空闲心跳，长度必然与原值不同 —— 保留旧 CL 会让写端报
@@ -1228,7 +1304,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		buf := make([]byte, 32*1024)
 		heartbeat := time.Duration(s.Config().StreamIdleHeartbeatSeconds) * time.Second
-		if heartbeat > 0 && !isEventStreamGuard(resp) {
+		if heartbeat > 0 && !sse {
 			// 心跳只对 SSE 有意义：往普通 JSON 报文里插注释行会直接毁掉响应体，
 			// 所以非事件流一律走原来的同步转发。
 			heartbeat = 0
@@ -1237,6 +1313,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			for {
 				n, readErr := streamSrc.Read(buf)
 				if n > 0 {
+					tracker.feed(buf[:n])
 					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
 						return
 					}
@@ -1245,6 +1322,9 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 					}
 				}
 				if readErr != nil {
+					// 上游断流时先看这条流有没有 finish_reason/[DONE]：没有就补帧收口，
+					// 否则客户端拿到的是「200 + 半截正文 + 安静关闭」。
+					s.closeTruncated(w, flusher, model, true, tracker)
 					return
 				}
 			}
@@ -1281,6 +1361,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			select {
 			case rr := <-ch:
 				if len(rr.data) > 0 {
+					tracker.feed(rr.data)
 					if _, writeErr := w.Write(rr.data); writeErr != nil {
 						return
 					}
@@ -1289,6 +1370,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 					}
 				}
 				if rr.err != nil {
+					s.closeTruncated(w, flusher, model, true, tracker)
 					return
 				}
 				resetTimer(timer, heartbeat)
@@ -1396,11 +1478,20 @@ func (s *Server) health(w http.ResponseWriter) {
 	// 以前这一整块是黑盒（文件里 0 个日志调用、/health 0 个字段），
 	// 「它有没有在干活」只能靠用户体感猜。
 	payload["early"] = s.early.view(s.earlyCommitWindow(), s.earlyKeepalive())
+	// upstream 段：上游语义分类的计数。2026-11-11 起 503 high demand 不再按
+	// 普通 5xx 埋软冷却、thinking 参数不合法的 400 会剥参数重发、被截断的流
+	// 会补一帧 error 收口 —— 这三件事有没有发生，只能从这里看。
+	payload["upstream"] = s.sem.view()
 	// chain 段：链层首字节预算（0 = 不限）。判死权交回上游之后，
 	// 这是「一次请求最多等多久」的唯一出处。
 	payload["chain"] = map[string]any{"budget_s": int(s.chainBudget().Seconds())}
 	// guard 段：思考守卫的档位、带能力位的渠道、正在被跳过的模型。
 	payload["guard"] = s.guardView()
+	if s.hops != nil {
+		// hops 是每跳的 try/ok/busy/e5xx/silent/no_first_block 计数，键与冷却表同格式。
+		// 回答的是 /health.race 回答不了的问题：串行链（AIS 的 7 跳）里首选到底行不行。
+		payload["hops"] = s.hops.view()
+	}
 	writeJSON(w, 200, payload)
 }
 
@@ -1612,6 +1703,27 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			}
 			return true
 		}
+		if busyExhausted(status, head) {
+			// 上游说「忙」不是这条链坏了：只跳过这一跳，绝不按整渠道故障处理。
+			s.hopBusy(hop)
+			// 冷却取 busyCooldownSeconds（GM 20s），比 softCooldownSeconds（60s）
+			// 短得多 —— 高峰窗口本来就是秒级到几十秒，埋一分钟等于把空档期也封了。
+			if s.sem != nil {
+				s.sem.busy.Add(1)
+			}
+			if d := s.busyCooldownFor(hop.Channel); d > 0 {
+				if s.sem != nil {
+					s.sem.busySkip.Add(1)
+				}
+				s.log.Infof("[router] %s 上游 HTTP %d 表示需求量高峰（busy），跳过该跳 %v 后自动回链",
+					hopKeyForLog(hop), status, d)
+				s.coolHop(r.Context(), hop, d, "需求高峰")
+			} else {
+				s.log.Infof("[router] %s 上游 HTTP %d 表示需求量高峰（busy），不埋冷却直接换跳",
+					hopKeyForLog(hop), status)
+			}
+			return false
+		}
 		if s.disableOnAuthFailure(hop, status, head) {
 			return false
 		}
@@ -1634,12 +1746,20 @@ func (s *Server) attemptChain(w http.ResponseWriter, r *http.Request, body []byt
 			s.log.Infof("[router] %s 上游静默超时，冷却 %v", hopKeyForLog(hop), timeoutCooldown)
 			s.coolHop(r.Context(), hop, timeoutCooldown, "静默超时")
 		}
+		if status >= 500 {
+			// 5xx 单独计一次（含 503/504）：busy 已单独计过，这里再计一次是刻意的 ——
+			// 「上游出错几次」和「其中几次是忙」是两个不同的问题，除以 try 就是比率。
+			s.hopE5xx(hop)
+		}
 		if d := s.softCooldownFor(hop.Channel); d > 0 && status >= 500 {
 			// 5xx 不在 chainAccept 的冷却名单里：老行为是「每个请求都先撞一遍」。
 			// 对 503 high demand 这种分钟级窗口，冷却 d 让后续请求直接跳过它，
 			// 到期自动回链，不需要人工介入。
 			s.log.Infof("[router] %s 上游 HTTP %d（暂时不可用），冷却 %v 后自动回链", hopKeyForLog(hop), status, d)
 			s.coolHop(r.Context(), hop, d, "软冷却")
+		}
+		if status < 400 {
+			s.hopOK(hop)
 		}
 		return chainAccept(status, head)
 	}

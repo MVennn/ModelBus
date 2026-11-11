@@ -128,6 +128,15 @@ type ChannelPolicy struct {
 	// AuthFailCooldownHours：403 若是「key 无效 / 被封 / 无权限」类错误，整渠道禁用多久。
 	// 0 = 老行为（403 原样回给客户端）。这是「403 自动禁用」的落点。
 	AuthFailCooldownHours int `json:"authFailCooldownHours"`
+	// BusyCooldownSeconds：上游明确说「忙」（503 high demand / 需求量较大）后，
+	// 这一跳跳过多久。0 = 沿用 SoftCooldownSeconds（老行为：503 当普通 5xx 处理）；
+	// 负数 = 不冷却（立刻可再派车）。
+	//
+	// 为什么要单独一档：忙不是坏。catiecli 的 Gemini 链在高峰期几分钟里反复回
+	// 「This model is currently experiencing high demand」，实测四跳全忙、每跳 3-22s
+	// 才回话；按 60s 软冷却埋掉，一小时里能用的跳会被轮流封死。20s 足够跨过
+	// 一次高峰抖动，又不至于把空档期的车全停掉。
+	BusyCooldownSeconds int `json:"busyCooldownSeconds"`
 	// HeaderTimeoutSec：这一渠道「等上游响应头」的容忍上限（秒），覆盖全局
 	// upstreamHeaderTimeoutSec。0 = 用全局的那一档；负数 = 这一渠道不设看门狗。
 	// 按渠道给窗口的两轮历史：20:05 想让「慢」的哈基米活下来（HJ 25s）、让「死」的
@@ -135,6 +144,17 @@ type ChannelPolicy struct {
 	// 503 的只占 5.3%，HJ 判死 32 次有一半与 502 同秒。本地判死 → 502 → 客户端重试 →
 	// 上游重跑，这才是「后台在跑 token、本地已断开」的来源。判死权归上游，两个渠道都 -1。
 	HeaderTimeoutSec int `json:"headerTimeoutSec"`
+	// TimeoutCooldownSeconds：上游判「静默超时」（504）后这一跳跳过多久。
+	// 0/缺省 = 老行为 5 分钟（timeoutCooldown 常量）；正数 = 该秒数；负数 = 不冷却。
+	//
+	// 为什么要可配：按次计费的链里，冷却期就是「强制降级期」—— 3.8 被判超时
+	// 冷藏 5 分钟，这段时间所有请求都落到 3.7/3.6 上，还照付一次额度。5 分钟
+	// 是给「真挂了的上游」留的，AIS 这种「上游在思考但慢」的场景只需要跨过一轮抖动。
+	TimeoutCooldownSeconds int `json:"timeoutCooldownSeconds"`
+	// Retry500Once：上游回 500 时先在原地重试一次，再走原有的 500 处理。
+	// 默认 false（老行为：500 原样透给客户端，既不重试也不换跳）。
+	// catiecli 的 500 多为上游瞬时内部错，重试一次的成本远低于降级到弱模型。
+	Retry500Once bool `json:"retry500Once"`
 }
 
 // Config is the whole file.

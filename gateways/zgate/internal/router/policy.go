@@ -151,6 +151,53 @@ func policyRaceFields(p config.ChannelPolicy) []string {
 	return out
 }
 
+// busyCooldownFor 解析「上游说忙」之后这一跳跳过多久。
+// 0 = 沿用 softCooldownSeconds（老行为：503 就是普通 5xx）；负数 = 不冷却。
+func (s *Server) busyCooldownFor(channel string) time.Duration {
+	cfg := s.Config()
+	if cfg == nil {
+		return 0
+	}
+	p := cfg.ChannelPolicy[channel]
+	if p.BusyCooldownSeconds < 0 {
+		return 0
+	}
+	if p.BusyCooldownSeconds > 0 {
+		return time.Duration(p.BusyCooldownSeconds) * time.Second
+	}
+	return s.softCooldownFor(channel)
+}
+
+// timeoutCooldownFor 解析「上游判静默超时（504）」之后这一跳要冷藏多久。
+// 0/缺省 = 老行为 timeoutCooldown（5 分钟）；正数 = 该秒数；负数 = 不冷却。
+//
+// 按次计费的链上，冷却期就是强制降级期：3.8 被 5 分钟冷却时，所有请求都会落到
+// 3.7/3.6 上还照付一次额度。所以这条要能被渠道单独调小（GM 配 20 秒）。
+func (s *Server) timeoutCooldownFor(channel string) time.Duration {
+	cfg := s.Config()
+	if cfg == nil {
+		return timeoutCooldown
+	}
+	p := cfg.ChannelPolicy[channel]
+	if p.TimeoutCooldownSeconds < 0 {
+		return 0
+	}
+	if p.TimeoutCooldownSeconds > 0 {
+		return time.Duration(p.TimeoutCooldownSeconds) * time.Second
+	}
+	return timeoutCooldown
+}
+
+// retry500For 报告这个渠道是否要在上游 500 时先原地重试一次。
+// 默认关：多数渠道的 500 就是真错，透给客户端比连撞两次更快。
+func (s *Server) retry500For(channel string) bool {
+	cfg := s.Config()
+	if cfg == nil {
+		return false
+	}
+	return cfg.ChannelPolicy[channel].Retry500Once
+}
+
 // PolicyNote 是一条启动自检结论。Fatal=true 表示这条配置一定是废话且会误导人，
 // 进程不该带着它起来；否则只是「在这些模型上不生效」的提示。
 type PolicyNote struct {

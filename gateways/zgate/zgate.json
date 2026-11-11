@@ -11,7 +11,7 @@
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
   "upstreamHeaderTimeoutSec": 45,
-  "chainBudgetSec": 90,
+  "chainBudgetSec": -1,
   "channelPolicy": {
     "WB": {
       "softCooldownSeconds": 0,
@@ -41,14 +41,17 @@
       "headerTimeoutSec": 0
     },
     "GM": {
-      "softCooldownSeconds": 60,
+      "softCooldownSeconds": 15,
       "silenceCooldownSeconds": 0,
       "rateLimitBackoffMs": -1,
       "firstBlockMs": 0,
-      "hedgeAfterMs": 18000,
-      "maxParallel": 2,
+      "hedgeAfterMs": 0,
+      "maxParallel": 1,
       "authFailCooldownHours": 24,
-      "headerTimeoutSec": -1
+      "busyCooldownSeconds": 10,
+      "headerTimeoutSec": -1,
+      "timeoutCooldownSeconds": 20,
+      "retry500Once": true
     },
     "HJ": {
       "headerTimeoutSec": -1
