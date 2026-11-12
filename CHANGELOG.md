@@ -15,7 +15,29 @@
 
 ---
 
-## [未发布]
+## [0.7.0] — 2026-11-12
+
+### 本版汇总：控制台落地、DSH 主宿主定稿、zgate 自启与探活修复（2026-11-12）
+
+> **一句话**：本版把控制台做成可用的只读后台（8 页看住网关 / 目录 / 价格 / 流量 / 日志），把主宿主口径定到 DSH（ZCode 降为兼容投影），把 zgate 自启收敛成单个计划任务并按实况修正探活与上游判死，模型能力与价格改成一份真源多处投影。
+
+- **新增（tools/console/）**：控制台独立进程（`server.py` / `sources.py` / `actions.py` / `start-console.ps1` + `static/`），`pwsh tools/console/start-console.ps1` 起在 `127.0.0.1:7872`，8 页（总览 / 模型 / 价格 / 健康 / 流量 / 账号 / 日志 / 运维）。
+- **新增（路由）**：17 条只读路由 —— 13 个 `/api/*` + `/healthz` + SSE 日志流 + `/api/actions/jobs`；写面只有 `POST /api/actions/reload`（必带同源 `Origin`，无 Origin 返回 403，只转发 zgate 的 `/admin/reload`，不启停任何进程）。
+- **新增（catalog/model_caps.json）**：19 个模型的上下文 / 输出上限 / 图片 / 工具 / 档位逐条带出处，配 `tools/model_caps.py`（`--check` 逐字段差异 exit 1）与 `tools/caps_upstream.py` + `catalog/upstream_caps*.json` 做上游取证，能力字段不再由通配规则兜成 1M / 128k。
+- **新增（tools/agent_profiles.py）**：以 `catalog/model_caps.json` 为唯一能力真源，为 session / subagent / headless / service-plugin 四类 profile 生成只读投影（`--list` / `--check` / `--json`），不写任何现网配置。
+- **新增（/health.hops）**：每跳 `try` / `ok` / `busy` / `e5xx` / `silent` / `no_first_block` 计数，串行链也能看出哪一跳最近不行；只观测、不参与决策，进程重启清空。
+- **新增（思考与流式准入）**：网关侧思考守卫按白名单补档位、对加密思考流做探测 → 重绘 → 降级通知；`tools/model_stream_check.py` 增量探针（`--changed` 按改动型号选档、`--soft` 只报告不阻断）配 `tools/model_stream_exemptions.json` 豁免清单。
+- **调整（自启）**：zgate 自启收敛成单个计划任务 `\ModelBus-zgate-watchdog`（登录即拉起 + 每 1 分钟兜底双触发器，`StartBoundary 2026-11-06T22:14:00`），换版拉起与失败回滚统一走同一入口，不再有第二套拉起点法。
+- **调整（tools/dsh_sync.py）**：新增 `--source compat|dsh`（默认 compat 与改造前逐字节等价）、`--export-inventory`、`--no-catalog-caps`；6 个脚本改中性名，旧自造 env 新名优先旧名兜底。
+- **调整（路由策略）**：`CHAIN_CAP` 给按次计费族设 3 跳上限，`Gemini-AIS` 从 7 跳收窄到 3 跳；推理档位在 `model_alias.py` 与 `dsh_sync.py` 保活，不再被下游默认值盖掉；竞速参数按跳取值、按链聚合。
+- **调整（价格缓存）**：`providers/qoder/cache/qd_prices.json` 中 `Qwen3.8-Max` 0.5 → 0.2、`Qwen3.8-Flash` 0.1 → 0.04，夜间档由 `off_peak.active=false` 改为 `true`。
+- **修复（探活）**：`sync-models.ps1` 探活请求体给足 `--max-tokens 256`，思考吃满预算的型号不再被误判成死型号；空 completion 判 SKIP，模型从清单里消失前先告警。
+- **修复（上游判死）**：`503` / `529` 带 `high demand` / `需求量较大` 这类忙标记时判忙就地换跳、不埋软冷却；`400` 点到 thinking 字段时剥掉该参数重发同一跳；单跳链不埋软性冷却（429 与额度耗尽除外）。
+- **修复（冷却窗口）**：额度耗尽类 4xx 冷却一整天、不再每 30 分钟重撞同一跳；地区受限 403 冷却该跳，不再每个请求白撞直连出口。
+- **修复（流式）**：流式请求等上游响应头期间先回 200 + SSE 心跳，客户端不再提前判死；`supervisor.stopChild` 在 Stop 时同步关闭子进程日志句柄，Windows 下删日志目录不再撞文件占用。
+- **修复（控制台）**：健康页 502 显示「网关不可达」、总览页在线不再恒显不可达；非预期异常返回统一 JSON 错误包；`/health` 用 5s 服务端缓存合并多标签轮询，日志只流式读尾部。
+- **优化（资产与文档）**：控制台外壳为 Tabler 1.7.4 单 CSS 本地离线（零 CDN / 零 npm / 零构建），手写静态 41,816 B（预算 200 KB）、vendor 单文件 686,736 B 单独计；新增 `docs/DSH-FIRST.md`（方向与批次正本）、`docs/CONSOLE.md`（控制台正本）、`docs/ROUTING-POLICY.md`（逐跳等待与判死规则），README 补「可视化后台」与「文档」两段，`docs/SECRETS.md` 补 `GEMINI_API_KEY` / `HJM_API_KEY`。
+- **移除（third-party/cliproxyapi/）**：CLIProxyAPI 上游镜像全量移除（6 文件 2191 行），`tools/model_probe.py` 去掉 CP 分支，上游口径收敛为 6 个 upstreams（OC / WB / QD / QW / QN / GM）与 2 个本地网关子进程（7863 / 8790）。
 
 ### DSH 主导架构：命名去 ZCode + 多 agent 只读投影（2026-11-11）
 
