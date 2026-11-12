@@ -1,0 +1,91 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light" data-bs-theme="light">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="referrer" content="no-referrer">
+  <title>ModelBus 控制台</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+  <!-- Tabler 1.7.4 · MIT · 42,052 stars · 本地 vendor 单文件，零 CDN、零外链 -->
+  <link rel="stylesheet" href="/vendor/tabler.min.css">
+  <!-- Fluent 2 语义令牌 → Tabler 变量桥接层；后加载覆盖 -->
+  <link rel="stylesheet" href="/app.css">
+</head>
+<body>
+  <div class="page">
+    <!-- Tabler 官方竖向侧栏：navbar-vertical -->
+    <aside class="navbar navbar-vertical navbar-expand-md" aria-label="主导航">
+      <div class="container-fluid">
+        <button class="navbar-toggler" type="button" id="nav-toggle" aria-label="展开导航">
+          <span class="navbar-toggler-icon"></span>
+        </button>
+        <a class="navbar-brand navbar-brand-autodark" href="#/overview">
+          <span class="rail-mark" aria-hidden="true">MB</span>
+          <span class="rail-name">ModelBus</span>
+        </a>
+        <div class="collapse navbar-collapse" id="navbar-menu">
+          <ul class="navbar-nav pt-lg-3" id="nav"></ul>
+          <div class="rail-foot mt-auto">
+            <span class="status-dot" id="gw-dot" aria-hidden="true"></span>
+            <span id="gw-text">网关检测中</span>
+          </div>
+        </div>
+      </div>
+    </aside>
+
+    <div class="page-wrapper">
+      <!-- Tabler 官方页头：page-header + container-xl -->
+      <div class="page-header d-print-none">
+        <div class="container-xl">
+          <div class="row g-2 align-items-center">
+            <div class="col">
+              <div class="page-pretitle">控制台</div>
+              <h2 class="page-title" id="page-title">总览</h2>
+              <div class="text-secondary" id="page-sub">网关与数据面一眼可见</div>
+            </div>
+            <div class="col-auto ms-auto d-print-none">
+              <span class="stamp text-muted" id="stamp">—</span>
+              <button class="btn btn-outline-secondary" id="btn-refresh" type="button" title="刷新当前页">刷新</button>
+              <button class="btn btn-outline-secondary" id="btn-theme" type="button" title="切换明暗">主题</button>
+              <button class="btn btn-primary" id="btn-reload" type="button" title="转发网关热重载">重载网关</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div class="page-body">
+        <div class="container-xl">
+          <main class="view" id="view" tabindex="-1" aria-live="polite">
+            <div class="empty"><div class="empty-icon"><span class="spinner-border text-primary" role="status"></span></div><p class="empty-title">正在读取本地数据源…</p></div>
+          </main>
+        </div>
+      </div>
+
+      <footer class="footer footer-transparent d-print-none">
+        <div class="container-xl">
+          <div class="row text-center align-items-center flex-row-reverse">
+            <div class="col-lg-auto ms-lg-auto"><span id="foot-meta">—</span></div>
+            <div class="col-12 col-lg-auto mt-3 mt-lg-0">只读后台 · 绑 127.0.0.1 · 网关响应保持原样 · 凭据值不出进程</div>
+          </div>
+        </div>
+      </footer>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <div class="modal-back" id="modal" hidden>
+    <div class="modal-dialog modal-dialog-centered" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-content">
+        <div class="modal-header"><h5 class="modal-title" id="modal-title">确认重载网关</h5></div>
+        <div class="modal-body">这会把 <code>POST /admin/reload</code> 转发给 <span id="modal-gw">—</span>，网关重新读取配置。不会重启进程、不会改写任何文件。</div>
+        <div class="modal-footer">
+          <button class="btn btn-outline-secondary" id="modal-cancel" type="button">取消</button>
+          <button class="btn btn-primary" id="modal-ok" type="button">确认重载</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="/app.js" defer></script>
+</body>
+</html>

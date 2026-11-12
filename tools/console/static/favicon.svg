@@ -1,0 +1,4 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="ModelBus">
+  <rect x="2" y="2" width="60" height="60" rx="14" fill="#0F6CBD"/>
+  <path d="M14 46V18h8l10 16 10-16h8v28h-8V31l-10 15-10-15v15z" fill="#fff"/>
+</svg>

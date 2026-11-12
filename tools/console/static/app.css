@@ -1,0 +1,194 @@
+/* ModelBus 控制台 · Tabler 1.7.4 外壳 + Fluent 2 设计规则
+ * > 一句话：Tabler 负责成熟后台组件与布局，Fluent 2 语义令牌负责色彩 / 间距 / 圆角 / 阴影。
+ * 本文件在 vendor/tabler.min.css 之后加载，只做两件事：
+ *   1) 把 --mb-*（Fluent 2）桥接到 --tblr-*（Tabler :root 源头变量），light/dark 由 [data-theme] 切换；
+ *      Tabler 组件局部变量多以 var(--tblr-*) 引用它们，运行时自动跟随，无需逐组件重写。
+ *   2) 补 Tabler 未覆盖的项目专有类（KPI / 网格 / 代码块 / 键值表 / 遮罩 / toast 定位）。
+ * 组件基础样式（.btn/.card/.table/.badge/.empty/.alert/.modal/.toast/.nav-link…）一律走 Tabler 原生类。
+ * 设计规则：层次优先、每个值来自系统、4px 间距刻度、4/6/8px 圆角、上方光阴影、颜色永不作为唯一信号。
+ */
+:root {
+  /* ---- Fluent 2 · Neutral ---- */
+  --mb-bg-canvas:      #F5F5F5;
+  --mb-bg-1:           #FFFFFF;
+  --mb-bg-2:           #FAFAFA;
+  --mb-bg-3:           #F0F0F0;
+  --mb-bg-subtle:      #F5F5F5;
+  --mb-stroke-1:       #D1D1D1;
+  --mb-stroke-2:       #E0E0E0;
+  --mb-stroke-focus:   #0F6CBD;
+  --mb-fg-1:           #242424;
+  --mb-fg-2:           #616161;
+  --mb-fg-3:           #8A8A8A;
+  --mb-fg-onbrand:     #FFFFFF;
+  --mb-fg-disabled:    #BDBDBD;
+
+  /* ---- Fluent 2 · Brand ---- */
+  --mb-brand-1:        #0F6CBD;
+  --mb-brand-hover:    #115EA3;
+  --mb-brand-pressed:  #0C3B5E;
+  --mb-brand-tint:     #EBF3FC;
+  --mb-brand-stroke:   #77B2EB;
+
+  /* ---- Fluent 2 · Status（文字与描边，色块只做辅助） ---- */
+  --mb-success-fg:     #0E700E;
+  --mb-success-bg:     #F1FAF1;
+  --mb-warning-fg:     #8A6100;
+  --mb-warning-bg:     #FFF9E6;
+  --mb-danger-fg:      #B10E1C;
+  --mb-danger-bg:      #FDF2F3;
+  --mb-info-fg:        #0F6CBD;
+  --mb-info-bg:        #EBF3FC;
+  --mb-neutral-bg:     #F0F0F0;
+  --mb-neutral-fg:     #616161;
+
+  /* ---- Fluent 2 · Radius / Spacing / Type / Shadow ---- */
+  --mb-radius-s:       4px;
+  --mb-radius-m:       6px;
+  --mb-radius-l:       8px;
+  --mb-radius-pill:    999px;
+  --mb-sp-1:           4px;
+  --mb-sp-2:           8px;
+  --mb-sp-3:           12px;
+  --mb-sp-4:           16px;
+  --mb-sp-5:           20px;
+  --mb-sp-6:           24px;
+  --mb-sp-8:           32px;
+  --mb-font:           "Segoe UI Variable", "Segoe UI", system-ui, -apple-system, "Microsoft YaHei", sans-serif;
+  --mb-mono:           "Cascadia Mono", "Consolas", ui-monospace, monospace;
+  --mb-shadow-2:       0 1px 2px rgba(0,0,0,.08), 0 0 1px rgba(0,0,0,.06);
+  --mb-shadow-8:       0 4px 8px rgba(0,0,0,.10), 0 0 2px rgba(0,0,0,.05);
+  --mb-shadow-16:      0 8px 16px rgba(0,0,0,.12), 0 0 2px rgba(0,0,0,.06);
+
+  /* ---- Fluent 2 → Tabler 变量桥接（app.css 后加载覆盖 vendor 的 :root 定义） ---- */
+  --tblr-primary:                   var(--mb-brand-1);
+  --tblr-primary-fg:                var(--mb-fg-onbrand);
+  --tblr-primary-darken:            var(--mb-brand-hover);
+  --tblr-primary-lt:                var(--mb-brand-tint);
+  --tblr-primary-rgb:               15, 108, 189;
+  --tblr-link-color:                var(--mb-brand-1);
+  --tblr-body-bg:                   var(--mb-bg-canvas);
+  --tblr-bg-surface:                var(--mb-bg-1);
+  --tblr-bg-surface-primary:        var(--mb-bg-1);
+  --tblr-body-color:                var(--mb-fg-1);
+  --tblr-heading-color:             var(--mb-fg-1);
+  --tblr-emphasis-color:            var(--mb-fg-1);
+  --tblr-secondary-color:           var(--mb-fg-2);
+  --tblr-code-color:                var(--mb-fg-1);
+  --tblr-border-color:              var(--mb-stroke-2);
+  --tblr-border-color-translucent:  var(--mb-stroke-2);
+  --tblr-border-radius:             var(--mb-radius-m);
+  --tblr-border-radius-sm:          var(--mb-radius-s);
+  --tblr-border-radius-lg:          var(--mb-radius-l);
+  --tblr-border-radius-pill:        var(--mb-radius-pill);
+  --tblr-font-sans-serif:           var(--mb-font);
+  --tblr-shadow-card:               var(--mb-shadow-2);
+  --tblr-green:                     var(--mb-success-fg);
+  --tblr-red:                       var(--mb-danger-fg);
+  --tblr-yellow:                    var(--mb-warning-fg);
+  --tblr-blue:                      var(--mb-info-fg);
+  --tblr-secondary:                 var(--mb-neutral-fg);
+}
+
+:root[data-theme="dark"] {
+  --mb-bg-canvas:      #171717;
+  --mb-bg-1:           #1F1F1F;
+  --mb-bg-2:           #242424;
+  --mb-bg-3:           #292929;
+  --mb-bg-subtle:      #202020;
+  --mb-stroke-1:       #444444;
+  --mb-stroke-2:       #333333;
+  --mb-stroke-focus:   #479EF5;
+  --mb-fg-1:           #F5F5F5;
+  --mb-fg-2:           #C8C8C8;
+  --mb-fg-3:           #9A9A9A;
+  --mb-fg-onbrand:     #FFFFFF;
+  --mb-fg-disabled:    #616161;
+  --mb-brand-1:        #479EF5;
+  --mb-brand-hover:    #62AFF7;
+  --mb-brand-pressed:  #2886DE;
+  --mb-brand-tint:     #17293B;
+  --mb-brand-stroke:   #2B6CB0;
+  --mb-success-fg:     #6CCB6C;
+  --mb-success-bg:     #16281A;
+  --mb-warning-fg:     #E0B454;
+  --mb-warning-bg:     #2A2315;
+  --mb-danger-fg:      #F1707B;
+  --mb-danger-bg:      #2B1618;
+  --mb-info-fg:        #62AFF7;
+  --mb-info-bg:        #17293B;
+  --mb-neutral-bg:     #2B2B2B;
+  --mb-neutral-fg:     #C8C8C8;
+  --mb-shadow-2:       0 1px 2px rgba(0,0,0,.40), 0 0 1px rgba(0,0,0,.30);
+  --mb-shadow-8:       0 4px 8px rgba(0,0,0,.46), 0 0 2px rgba(0,0,0,.35);
+  --mb-shadow-16:      0 8px 16px rgba(0,0,0,.52), 0 0 2px rgba(0,0,0,.40);
+  --tblr-primary-rgb:   71, 158, 245;
+}
+
+/* ---- 基础（其余 body / 排版 / 焦点全部由 Tabler 承担） ---- */
+html, body { min-height: 100%; }
+body { background: var(--mb-bg-canvas); -webkit-font-smoothing: antialiased; }
+:focus-visible { outline: 2px solid var(--mb-stroke-focus); outline-offset: 2px; border-radius: var(--mb-radius-s); }
+code, .num, .mono { font-family: var(--mb-mono); font-variant-numeric: tabular-nums; }
+.num, th.num, td.num, .kpi-value { font-variant-numeric: tabular-nums; }
+
+/* ---- 侧栏（Tabler navbar-vertical 骨架上的项目专有件） ---- */
+.navbar-vertical .navbar-brand { display: inline-flex; align-items: center; gap: var(--mb-sp-2); }
+.rail-mark { display: grid; place-items: center; width: 32px; height: 32px; border-radius: var(--mb-radius-m); background: var(--mb-brand-1); color: var(--mb-fg-onbrand); font-weight: 600; font-size: 12px; letter-spacing: .02em; }
+.rail-name { font-size: 16px; font-weight: 600; letter-spacing: -.01em; color: var(--mb-fg-1); }
+/* Tabler 在 4 个断点媒体查询里把 .nav-link-icon 隐藏，这里强制显示侧栏图标 */
+.navbar-vertical .nav-link-icon { display: inline-grid !important; place-items: center; width: 1.5rem; height: 1.5rem; font-size: 1rem; }
+.navbar-vertical .navbar-nav .nav-link.active { color: var(--mb-brand-1); background: var(--mb-brand-tint); font-weight: 600; border-radius: var(--mb-radius-s); }
+#navbar-menu { flex: 1 1 auto; min-height: 0; }
+.rail-foot { margin-top: auto; display: flex; align-items: center; gap: var(--mb-sp-2); padding: var(--mb-sp-3) var(--mb-sp-4); border-top: 1px solid var(--mb-stroke-2); color: var(--mb-fg-2); font-size: 12px; }
+
+/* ---- 页头 ---- */
+.stamp { font-size: 12px; font-variant-numeric: tabular-nums; margin-right: var(--mb-sp-2); }
+.page-header .btn + .btn { margin-inline-start: var(--mb-sp-2); }
+
+/* ---- 视图 / 分组 / 网格 ---- */
+.view { min-height: 260px; }
+.view > .empty { min-height: 200px; }
+.grid { display: grid; gap: var(--mb-sp-4); }
+.grid.kpi { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
+.grid.two { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+
+/* ---- KPI 卡（.card / .card-body / .subheader 由 Tabler 提供） ---- */
+.kpi-value { font-size: 28px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; color: var(--mb-fg-1); }
+.kpi-value .badge { font-size: 12px; font-weight: 600; vertical-align: middle; }
+.kpi-note { color: var(--mb-fg-2); font-size: 12px; }
+.kpi-label { color: var(--mb-fg-2); font-size: 12px; font-weight: 600; }
+.card.flat { --tblr-card-box-shadow: none; }
+
+/* ---- 状态徽章：颜色 + 文字 + 圆点（Fluent 2 双编码） ---- */
+.view .badge::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: currentColor; flex: none; }
+
+/* ---- 表格里的项目专有件 ---- */
+.cell-clip { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
+.table td .sub { display: block; color: var(--mb-fg-3); font-size: 12px; margin-top: 2px; }
+
+/* ---- 代码块 / 键值表 ---- */
+.code-block { font-family: var(--mb-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: var(--mb-bg-2); border: 1px solid var(--mb-stroke-2); border-radius: var(--mb-radius-s); padding: var(--mb-sp-3); max-height: 420px; overflow: auto; color: var(--mb-fg-1); }
+.kv { display: grid; grid-template-columns: minmax(140px, auto) 1fr; gap: var(--mb-sp-2) var(--mb-sp-4); font-size: 13px; margin: 0; }
+.kv dt { color: var(--mb-fg-2); }
+.kv dd { margin: 0; word-break: break-all; }
+
+/* ---- Toast（Tabler 提供 .toast 表面与 :not(.show){display:none}，这里补定位与渐隐） ---- */
+.toast { position: fixed; right: var(--mb-sp-6); bottom: var(--mb-sp-6); z-index: 1090; max-width: 420px; padding: var(--mb-sp-3) var(--mb-sp-4); background: var(--mb-bg-1); color: var(--mb-fg-1); border: 1px solid var(--mb-stroke-1); border-radius: var(--mb-radius-m); box-shadow: var(--mb-shadow-16); font-size: 13px; pointer-events: none; opacity: 0; transform: translateY(8px); transition: opacity .16s ease, transform .16s ease; }
+.toast:not(.show) { display: block; }
+.toast.show { opacity: 1; transform: translateY(0); }
+.toast.bad { border-left: 3px solid var(--mb-danger-fg); }
+.toast.good { border-left: 3px solid var(--mb-success-fg); }
+
+/* ---- 确认弹层（Tabler 提供 .modal-dialog / .modal-content / .modal-header/body/footer） ---- */
+.modal-back:not([hidden]) { position: fixed; inset: 0; z-index: 1080; display: flex; align-items: center; justify-content: center; padding: var(--mb-sp-4); background: rgba(0,0,0,.36); }
+.modal-back .modal-dialog { width: 100%; max-width: 440px; margin: 0; }
+.modal-back .modal-body { color: var(--mb-fg-2); font-size: 13px; line-height: 1.6; }
+
+/* ---- 窄屏（<768px 时 Tabler 自动把 navbar-vertical 折成汉堡菜单） ---- */
+@media (max-width: 767.98px) {
+  .page-header .col-auto { flex-wrap: wrap; justify-content: flex-end; }
+  .stamp { display: none; }
+  .grid.two { grid-template-columns: 1fr; }
+  .grid.kpi { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+}
