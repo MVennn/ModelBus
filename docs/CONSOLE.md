@@ -16,7 +16,7 @@
 | 前端 | 4 个手写静态文件 **41,816 B** + 本地 vendor `tabler.min.css` **686,736 B**（MIT）+ `LICENSE-tabler.txt` 1,247 B；零 npm / 零 CDN / 零构建链 / 零加载型外链，vendor 单文件 **25 个** `url()` 全是内联 `data:image/svg+xml` |
 | UI 库 | **Tabler 1.7.4**（`tabler/tabler` 42,052★ / MIT / pushed 2026-11-10 / `@tabler/core@1.7.4`）；官方竖向骨架 + 组件类，`app.css` 只做令牌桥接与少量专有类 |
 | 页面 | 8 个：总览 / 模型 / 价格 / 健康 / 流量 / 账号 / 日志 / 运维 |
-| 数据 | 13 个只读 `/api/*` + `/healthz` + SSE 日志流；写操作只有 `reload` |
+| 数据 | 13 个只读 `/api/*` + `/healthz` + SSE 日志流 + 只读 `/api/actions/jobs`，共 17 条路由；写操作只有 `reload` |
 | 网关改动 | **零改动**；P3 的 302 桥未实施 |
 | 依赖 | Python 3.12 标准库（`http.server` / `json` / `pathlib` / `urllib` / `re` / `shutil`） |
 

@@ -122,6 +122,8 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 | **`QWEN_API_KEY`** | `providers/qwen/qwen_sync.py`、`gateways/zgate`（缺省回退 `providers/qwen/.env.local`） | 无 | 脚本明确报错退出；路由的千问渠道 502 |
 | **`QWEN_BASE`** | `providers/qwen/qwen_sync.py` | `https://maas.qianwenaiapi.com/apps/anthropic/v1` | 用默认值（**必须带 `/v1`**：桥会直接拼 `/messages`） |
 | **`QINIU_API_KEY`** | `gateways/zgate`（`QN` 上游的 `keyEnv`，给七牛云 AI 网关鉴权） | 无 | 明确报错退出；路由对应上游 502 |
+| **`GEMINI_API_KEY`** | `gateways/zgate`（`GM` 上游的 `keyEnv`；缺省回退 `providers/gemini/.env.local`，再回退 `provider_config.json` 里 catiecli 基址那条规则） | 无 | 不本地报错，表现为上游 401；路由对应上游 502 |
+| **`HJM_API_KEY`** | `gateways/zgate`（`HJ` 上游的 `keyEnv`；缺省回退 `providers/hajimi/.env.local`，再回退 `provider_config.json` 里 gemai.cc 基址那条规则） | 无 | 不本地报错，表现为上游 401；路由对应上游 502 |
 
 ### 3.6 Qoder（qoder2api-hub）
 

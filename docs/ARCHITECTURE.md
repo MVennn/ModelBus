@@ -9,6 +9,8 @@
 7 个 upstream（OC / WB / QD / QW / QN / GM / HJ）与 2 个 child（workbuddy :7863、qoder :8790）；接入层是 `providers/`。落地差异与实测数据见 §10，日常操作见
 [MAINTENANCE.md](MAINTENANCE.md) §8，自启与换版见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
+**路径快照**：§0–§5 里出现的 `tools/unified-router.js`、`tools/protocol_bridge.js` 是 2026-10 迁移前的路径，这两个文件现已不存在；路由与协议桥的正本是 `gateways/zgate`（`internal/router`、`internal/bridge/bridge.go`），旧 Node 实现留在 `gateways/legacy-router/` 作回退（清单见 [TOOLS.md](TOOLS.md) §1，现役日常操作见 [MAINTENANCE.md](MAINTENANCE.md) §8）。§1 与 §4.3 的表格按当时实测原样保留。
+
 ---
 
 ## 0. 结论

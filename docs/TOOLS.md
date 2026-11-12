@@ -15,7 +15,7 @@
 
 | 项 | 要求 | 说明 |
 |---|---|---|
-| Python | 3.x，**只用标准库**（无第三方依赖） | 除 `tools/make_social_preview.py`（门面资源重生成，需 numpy + Pillow）和 `tools/dsh_sync.py`（读 DSH profile，需 PyYAML）外的所有 `.py` 脚本 |
+| Python | 3.x，**只用标准库**（无第三方依赖） | 除 `tools/make_social_preview.py`（门面资源重生成，需 numpy + Pillow）、`tools/dsh_sync.py`（读 DSH profile，需 PyYAML）与 `tools/model_stream_check.py`（流式准入探针，读 `cordis.patch.yml`，需 PyYAML）外，其余所有 `.py` 脚本 |
 | Node.js | 18+ | 跑 `.js` 脚本（探测、统一路由、思考字段映射） |
 | 凭据 | **只走环境变量** | 变量名与取值见 [SECRETS.md](SECRETS.md) §3.5 |
 | 客户端 | ZCode 桌面端（Windows） | 脚本读它的 `provider_config.json`，路径见 [SECRETS.md](SECRETS.md) §3.4 |
