@@ -255,6 +255,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | **每次新增 / 删除文档** | 同步 [docs/README.md](README.md) 索引（孤儿文档零容忍） |
 | **每次踩新坑** | 写进 [PITFALLS.md](PITFALLS.md)；有对应排错条目的同步 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | **每次发版** | 按 [VERSIONING.md](VERSIONING.md) §1 定版本号，写 [CHANGELOG.md](../CHANGELOG.md) + `docs/release-notes/<版本>.md` |
+| **起 / 自检可视化后台** | `python tools/console/server.py --port 7872` 前台起；`python tools/console/server.py --check` 只自检不监听（逐源读一遍 + 断言 `static/` ≤ 200 KB + 探网关 `/health`）；隐藏窗口后台起用 `powershell -File tools/console/start-console.ps1 -Detach`，stdout/stderr 落 `.work/console.stdout.log` / `.work/console.stderr.log`。默认绑 `127.0.0.1:7872`，`MODELBUS_GATEWAY` 可覆盖网关地址（默认 `http://127.0.0.1:7871`）。后台只读，唯一写动作是页面点 `reload` 转发 `POST /admin/reload`，不启停 zgate。见 [CONSOLE.md](CONSOLE.md) §10、§12 |
 
 ---
 
@@ -433,6 +434,7 @@ Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒）�
 | Qoder 的端口、账号、同步与探测 | [QODER.md](QODER.md) |
 | 排障步骤 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |
 | 网关父链 / 计划任务 / 换版流程 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) |
+| 可视化后台的页面 / 数据源 / Fluent 2 规则 / 验收 | [CONSOLE.md](CONSOLE.md) |
 
 ---
 
@@ -440,6 +442,7 @@ Qoder 由 zgate 托管（默认 `ondemand`，签到/保活窗口自动唤醒）�
 
 | 日期 | 做了什么 | 结果 |
 |---|---|---|
+| 2026-11-12 | 落地 Fluent 2 可视化后台 `tools/console/`（独立 Python 服务 127.0.0.1:7872，网关零改动），改写 `docs/CONSOLE.md` 正本从 MD3 设计稿为已落地实现，补 [PITFALLS.md](PITFALLS.md) §51 / [TOOLS.md](TOOLS.md) / 本节 | `server.py --check` exit 0；`py_compile` exit 0；`check-project.py` exit 0；范围 `check-docs.py` exit 0；端到端 36 项 PASS；脱敏单测 13 项 PASS |
 | 2026-11-01 | 收尾大扫除：清 9 处 `__pycache__` 与 5 份过期定价备份；按 §3「历史报告只留首版与最近版」裁剪 go-model-sync 报告 25→7、MODEL-SYNC 报告 11→5（被 CHANGELOG/PROGRESS 引用者保留），同步报告索引 | `python tools/check-docs.py` 通过 |
 | 2026-10-23 | 统一模型命名：四组（主力/免费/低耗/高耗）、`渠道/积分/型号`、alias map、协议桥接 | 43 个模型 / 4 个 provider；37 ok，5 个 WB GB 因池冷却暂为瞬时限流 |
 | 2026-10-23 | 接入 Qoder：qoder2api-hub clone 到 `gateways/upstream/qoder`（8790）、OAuth 账号、独立 `qoder` provider、同步/探测脚本与文档 | 7 个模型探测 200；免费 `DeepSeek-Flash` 1.1s；`Qwen3.8-Flash` 因 10605 排队暂不收录 |

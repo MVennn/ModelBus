@@ -3595,3 +3595,104 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 回滚备份：`.work/dsh-first-20261111/`、`dsh-rename-20261111/`、`dsh-source-20261111/`、`dsh-tools-20261111/`、`dsh-providers-20261111/`、`dsh-final-20261111/`。
 
 [[TASK_ALL_DONE]]
+
+
+## 批次：2026-11-12 Fluent 2 可视化后台 + 全仓审查与占用盘点
+
+### 起手与委派
+- 用户当轮指令（m00001）："对ModelBus项目进行审查，主要为优化功能实现 占用 为modelbus构建后台。后台设计规则为fluent2"。
+- §7/§14 四条件判定：≥3目标=是 / ≥3处同类=是 / ≥10次工具=是 / 多视角=是 → 命中，先派后做；同批 3 路（endpoints / fluent2 / audit），cwd=仓根。
+- 加载 5 技能：modelbus-console-design / delegation-enforcement / subagent-delegation / progress-visibility / refactoring-ui；踩坑库 error_lessons_search 命中 Lmwbx8hl7 / Lmwbsnx5i / Lmwbtqv7j 与两张经验卡。
+- 真实 git 根用 git -C 解析；`_merged/DeepseekHarness` 视图根是普通目录（`cmd /c dir /A:L` 与 `Get-ChildItem -Attributes ReparsePoint` 均无联接），穿透到真实根读写。codegraph_status=stale → codegraph_sync 81 changed files / 2210 nodes in 1.5s。
+- 基线避让：`docs/reports/README.md`(M)、`docs/reports/MODEL-SYNC-20261112-1209.md`(??)、`evidence/go-model-sync-20261112-120012.md`(??) 是用户既有未提交改动，只记录不碰。
+
+### 落地清单
+- 后台 8 文件（`tools/console/`）：`server.py` / `sources.py` / `actions.py` / `start-console.ps1` + `static/` 的 `index.html` / `app.css` / `app.js` / `favicon.svg`。Python 3.12 标准库、零第三方依赖、零 CDN、零构建链；独立监听 `127.0.0.1:7872`，网关 `7871` 零改动。
+- 设计规则 = Microsoft Fluent 2（替换 v1 稿的 MD3 / Beer CSS）：语义令牌 `colorNeutral*` / `colorBrand*` / `shadow*`、4px 间距刻度、radius 4/6/8/pill、光从上方、状态色+文字双编码、45–75 字符列宽、单一主操作、light/dark 双主题。官方事实卡落 `docs/CONSOLE.md` §4.1（查证 2026-11-12 16:37）。
+- 8 页 hash 路由（总览/模型/价格/健康/流量/账号/日志/运维）；13 个只读 `/api/*` + `/healthz` + SSE + 唯一写动作 `POST /api/actions/reload`；统一包 `{ok,generated_at,ttl_ms,data}`；TTL 5s–300s；`sources._tail_bytes` 流式读日志不整文件入内存；`scrub()` 凭据语境脱敏；`ops()` 只读汇总占用热点。
+- 三缺陷修复：① 缺 `Origin` 的 POST reload 放行 → 写操作必须带同源 Origin，缺一律 403；② 前端 reload 用 GET → 改同源 POST；③ `do_HEAD` 写 body 且绕 Host 校验 → `_head` 标志复用 `do_GET`，只发头不写体。
+- 第四缺陷（脱敏口径）：`SECRET_NAME` 含裸 `token` 把 `*_tokens` 业务计量抹成 `<redacted>` → 改凭据语境精确匹配 + 值形状单独正则，补行为等价单测。
+- 文档变更矩阵（按 `docs/DOC-RULES.md:124/:129`）：`docs/CONSOLE.md` 整篇从「MD3 设计稿 v1 未落地」改写为「Fluent 2 已落地 v2」（361 行 / 25886 B）；`docs/README.md:33` 索引同步；`docs/PITFALLS.md` §51；`docs/TOOLS.md:71` 工具行；`docs/MAINTENANCE.md:258/:437/:445` 启动自检 / 相关文档 / 维护记录。均按原换行符插入，非整文件重写。
+
+### 验收
+- `.work/test-redaction.py` 13 项 PASS（凭据全抹 / `*_tokens` 全保留）；`server.py --check` PASS 0 failures，static 41649 B（预算 200KB；修正前 44105 B 因 `/` 与 `/index.html` 双计）；`py_compile` exit 0；`check-project.py` 8 项 exit 0。
+- 端到端（`.work/e2e-console.py`，隐藏窗口起服务，测完停进程）：36 项 PASS —— 20 条 GET 全 200、3 条 HEAD 200 body=0B、Host `evil.example` 403、`GET /api/nope` 404、`GET reload` 404、`POST reload` 无 Origin 403 / 跨站 Origin 403 / 同源 200 ok=true、7 项脱敏断言（strict + shapes 双口径）。`E2E_RESULT=PASS failures=0 E2E_EXIT=0`。
+- 范围门禁 `python tools/check-docs.py docs/CONSOLE.md docs/README.md docs/PITFALLS.md docs/TOOLS.md docs/MAINTENANCE.md` → `[OK] 5 篇文档全部通过（链接 / 锚点 / 引言块 / 孤儿）`、`SCOPED_DOCS_EXIT=0`。
+- 全仓 `check-docs.py` exit 1 的唯一原因与本轮无关：`docs/reports/README.md:7` 链接到用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md`；HEAD 版无该链接、`git ls-files` 无目标、`git diff` 只新增这一行。
+- 网关契约复核：`GET /health` 仍 `HTTP/1.1 200` + `application/json; charset=utf-8` + 2738 B（v1 稿 1166 B 已过期）；7 段 upstream `state`/`key`(bool)/`child`/`base`；A 路分片独立复验 `curl -s -D -` 结果一致。
+- 子代理验收（按磁盘核对，self-report 不当结论）：路1 endpoints（6c5a4451）`evidence/agent-endpoints.md` 38012 B / 319 行 / SHA256 `22A00B6B…C70C9B`，12 个 §，inactive；路3 audit（f4210afc）`evidence/agent-audit.md` 37908 B / 419 行 / SHA256 `0BF7ED72…878D`，11 个 §（1153 文本文件 / 45,225,871 B、H1–H10 占用热点、2 条行为等价已证候选、P0=0 / P1=6 / P2=8），inactive，主线 17:11 独立复现 `zgate.exe.bak-*` 64514048 B / `provider_config.json.bak-*` 49 份 849378 B / `%SystemDrive%/` 1332016 B 三项一致；路2 fluent2（3ae7ccfb）`.work/fluent2-research/` 下 tarball 实取 `@fluentui/web-components@3.2.1` MIT，结论域由主线 web_search 官方令牌 + C 路 `gh api` 一手版本锚点写进 `docs/CONSOLE.md` §4.1 与 §13，分片未单独落盘；17:14 `interrupt_agent` returned `accepted=true`，按 §14 回退由主线独立证据正式结案（Fluent 2 官方令牌事实卡 + C 路 `gh api` 一手版本锚点已进 `docs/CONSOLE.md` §4.1，`.work/fluent2-research/` 三个 tarball 为其中间产物，保留在 .work/ 内）。17:14 用 `start-console.ps1 -Detach` 隐藏窗口把后台拉到 127.0.0.1:7872 pid=29672，`/healthz` 200；7871 网关 pid=17336 未动。
+
+### 功能与占用审查结论（主线独立实测，写进 `docs/CONSOLE.md` §13）
+- 占用热点只读汇总，本轮不删不动：`gateways/` 约 165MB（6 份 ~10.7MB `zgate.exe.bak-deploy-*` + 18.8MB `wb2api.exe`）；`gateways/upstream/workbuddy/data/request-logs/requests-2026-11-*.jsonl` 单日 2.95–6.73MB 无清理上限；`.work/` 333 文件 23963775 B；`%LOCALAPPDATA%/ZCodeGateway/` 日志合计 ~26.8MB（`workbuddy.stdout.log` 18353059 B 最大）；`%SystemDrive%` 字面量目录 5 文件 1332016 B，仓内代码零引用，属外部 spawnSync 历史垃圾；`~/.zcode/v2/tasks-index.sqlite` 7933952 B + ~50 个 `provider_config.json.bak-*` 本机备份。
+- 功能优化落点（行为等价、可回滚）：后台只读可视化 + reload 单一写面；`/health` 每次触发 `aliases.Reload()` → 后台轮询 ≥5s（`polling_hint_ms=5000`）不加重网关；统一 TTL 缓存避免重复读 4.4MB `zgate.log` 与 18MB stdout 日志；静态预算 41649 B 远低于 200KB；删 `tools/console/` 即完全回退，网关进程与配置零变更。
+- 长驻网关 7871（zgate.exe pid 17336）全程未重启，7872 端口经 `Get-NetTCPConnection` 确认空闲才起服务，测完 `Stop-Process`。
+
+### 踩坑沉淀
+- `error_lessons_add` 3 条：`Lmwdbr7mn`（scrub 裸 token 误抹业务计量）、`Lmwdbr7mp`（run_code 局部变量命名 `tools` 与 SDK 保留绑定冲突）、`Lmwdbr7mr`（Start-Process `-ArgumentList` 反斜杠被吞）。
+- 中间产物只进 `.work/`（`test-redaction.py` / `e2e-console.py` / `console.stdout.log` / `console.stderr.log`）；未 `git add` / `commit` / `push`；未改用户三个既有改动。
+
+[[TASK_ALL_DONE]]
+
+## 批次：2026-11-12 接管前任未完成后台（v3 收尾闭环）
+
+### 起手与委派
+- 用户当轮指令（m00001）："ModelBus刚刚我在让模型做他的后台，做着做着就死了，你接管他的任务"。目标 = 接管并做到 7872 可访问、v3 验收通过、文档与实测一致、进度与门禁闭环。
+- §7/§14 四条件判定：≥3目标=是 / ≥3处同类=是 / ≥10次工具=是 / 多视角=是 → 命中，先派后做；同批 3 路（console-impl 静态审 / console-verify 门禁验 / console-progress 进度还原），cwd=仓根。
+- 加载 4 技能：modelbus-console-design / delegation-enforcement / subagent-delegation / progress-visibility；踩坑库 error_lessons_search 命中 Lmwde54vj（server.py 真实位置在 tools/console/，与 static/ 同级）/ Lmwbukdaw / Lmwbp7phv。
+- 真实根按 git -C 解析（`_merged/DeepseekHarness` 是 junction 视图，穿透读写）；全程未重启 7871（zgate pid=17336）、未 git add/commit/push、未改用户三份既有未跟踪改动（docs/reports/README.md 及两份报告）。
+
+### 死因定位（实况证据，不靠猜）
+- docs/CONSOLE.md 已是「已落地 v3（Tabler 1.7.4）」390 行，但 PROGRESS.md 末批次仍停在 v2（Fluent 2 全手写，36 项 E2E）；grep `Tabler|v3` 只命中 v2 批次标题，无任何 v3 批次。
+- 时间戳：static/app.js 2026/11/12 10:55:51 晚于 server.py/app.css/index.html 的 10:34:09 与 .work/e2e-console.py 的 10:50:21；而 .work/console-e2e.stdout.log 停在 8:55:36（v2 的 36 项、无 vendor 行），console.stdout.log 9:14:18。
+- 结论：前任在 v3 最后一轮改完前端后，没重跑 E2E、没更新文档字节数、没补 PROGRESS.md、没把 7872 重新拉起就中断。代码本身无缺陷（本轮自检 0 failures 佐证）。
+
+### 落地清单
+- 修 docs/CONSOLE.md 六处过期体积（按磁盘实测回写）：手写资产 41,441 → **41,719 B**（index.html 4328 + app.css 10717 + app.js 26427 + favicon.svg 247）、app.js 26,149 → **26,427 B**；:16 / :158 / :297 / :326 / :329 / :358 全部对齐；:330 把 /health 体积口径从写死 2,738 B 改为「约 2.7 KB 动态浮动，本轮实测 2,741 B」（sources.py:171 health_bytes 用 json.dumps 长度，uptime_s 位数增长会使字节浮动）。
+- 起服务：start-console.ps1 -Detach（隐藏窗口）把后台拉到 127.0.0.1:7872 pid=31472，日志 .work/console.stdout.log / .stderr.log；本轮测完不停，留作可用交付。
+- 网关契约零改动：GET /health 仍 200 + application/json; charset=utf-8 + 2,741 B。
+
+### 验收（主线独立实跑，self-report 不当结论）
+- .work/e2e-console.py v3 版 **39 项 PASS / failures=0**：21 GET 全 200（含 /vendor/tabler.min.css）、4 HEAD 200 body=0B、6 项安全（Host evil.example 403 / 无 Origin POST 403 / 跨站 Origin 403 / 同源 POST reload 200 ok=true / 未知路由 404 / GET reload 404）、7 项脱敏（strict + shapes 双口径零命中）、1 项 VENDOR offline（inline_svg_urls=25、loader_hits=[]）。E2E_EXIT=0。
+- server.py --check：handwritten 41719 / vendor 686736 / 13 个 /api/* 全 OK / result = PASS (0 failure(s))，CHECK_EXIT=0；py_compile 三文件 exit 0；node --check static/app.js exit 0（node v24.13.1）。
+- 范围门禁 `check-docs.py` 5 篇 exit 0；`check-project.py` 8 项 exit 0；全仓 `check-docs.py` exit 1 唯一原因仍是用户既有未跟踪 docs/reports/MODEL-SYNC-20261112-1209.md 被 docs/reports/README.md:7 链接（HEAD 无该链接、git ls-files 无目标），与本任务无关。
+- 侧栏浏览器真渲染：open 127.0.0.1:7872 → 8 页 hash 路由逐页切（overview/models/prices/health/traffic/accounts/logs/ops）全部 fail=false；总览 nav=8 / cards=10 / tables=2 / styleSheets=[tabler.min.css, app.css] / bodyBg=rgb(245,245,245) / hasHorizontalScroll=false；截图 575×704 见本轮附件。
+
+### 子代理产物（三路已派发、已催收，产物待落盘后独立核对）
+- console-impl / console-verify / console-progress 三路 running，已逐路 send_message 催收落盘；主线已把所有验收项独立跑通，不等旁路结论即可判定主任务完成。按 §14 产物核对（glob + read 行数/字节 + git status）结果在下一补记；未产出的一路由主线独立证据结案。
+
+### 踩坑沉淀
+- error_lessons_add Lmwdg8j85：builtin_browser batch 不接受 open（须先单独 open 建 tab，再 batch 跑 wait/snapshot）、eval script 顶层 return 非法（改对象字面量 `({...})`）。
+
+### 子代理产物核对与结案（按 §14 回退口径，2026-11-12 19:16 实况）
+- `list_agents` 状态：lead=running / console-progress=running / console-verify=running / console-impl=running；已两轮 `send_message` 催收（落盘 + 结束），仍未产出。
+- 磁盘核对（glob + 字节/行数 + git status）：`glob evidence/agent-console-*.md` 零命中；`git status --short -- evidence/` 无本轮三路新增文件。
+- 结论：三路分片（静态审 / 门禁脱敏验 / 进度还原）的全部结论已由主线独立实跑证据覆盖 —— 39 项 E2E、范围文档门禁 5 篇 exit 0、check-project 8 项 exit 0、server.py --check 0 failures、8 页浏览器逐页渲染、文档数字按磁盘实测回写、死因按文件时间戳定位。按 §14「哪一路空手就原样贴错、标回进行中、由主线自己接这一块」由主线结案；三路子代理产物未作为本批次结论依据，后续若落盘只作旁证、不推翻已验证结论。
+
+### 文档口径补记
+- 除六处体积回写外，docs/CONSOLE.md:327 补「侧栏浏览器 8 页 hash 逐页渲染 fail=false」实测、:329 把范围门禁口径写全 5 篇、:330 把 /health 写死 2,738 B 改为「约 2.7 KB 动态浮动、本轮 2,741 B」；改完复跑范围 `check-docs.py` exit 0 无回归。
+- 交付态：7872 保持 LISTEN（pid=31472）不停，供用户直接打开；7871 网关 pid=17336 全程未动。截图 `.work/console-v3-screenshot.png`（40,896 B / 575×704）。
+
+### 旁证后到复核（2026-11-12 19:26 实况，主结论不变）
+- 19:16 结案后三路子代理分片于 19:22–19:23 陆续落盘。按 §7「self-report 不当结论」逐文件核对磁盘：`evidence/agent-console-progress.md` 42,440 B / 233 行（其自报 31,288 B 与实测不符，行数一致）、`evidence/agent-console-verify.md` 22,957 B / 323 行（与自报一致）、`evidence/agent-console-impl.md` 44,620 B / 308 行；`git status --short -- evidence/` 三份均 `??`，写域只限各自分片，未碰 PROGRESS.md / docs/ / tests/ / 配置 / 7871。
+- 时间线澄清：19:11 旁证采到的 7872 LISTEN pid=31472 是主线本轮 19:08:01 用 `start-console.ps1 -Detach` 拉起（v2 批次 17:14 的 pid=29672 测完已停）；「前任中断时 7872 未起」指中断时刻、「19:11 已起」指主线接手后，两者不矛盾，按 live runtime 优先且无第二实例。
+- 门禁口径不冲突：`console-verify` 全仓 `check-docs.py` RC=1 与主线范围 5 篇 exit 0 是同一根因的两个范围 —— `docs/reports/README.md:7` 链接用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md`（`git diff` 仅新增这一行、文件 mtime 12:09:00），保持原样；`check-project.py` 8 项 exit 0 与主线一致。
+- 旁证列出的静态推断待核项（Tabler stars 数字、`aliases.Reload()` 注释落点、`--host ::1` 绑定、vendor 压缩超长行未逐字通读、3 个 .pyc）属只读审的取证边界；运行态已由主线 39 项 E2E + 8 页浏览器渲染覆盖，不改代码、不扩张范围，记录留在各自分片。
+## 批次：2026-11-12 二次收尾（三处降级缺陷最小修复 + 重新封口）
+
+- 起手：用户 m00145「继续并收尾」。上一轮修正探针的 run_code 调用被中断（原始提示逐字：`The tool call was interrupted after it was recorded, but no result was durably recorded. Its outcome is unknown.`），先清点再续：`server.py`（do_POST 补 JSON 兜底）与 `start-console.ps1`（提示补 stderr）已由 console-fix-server 分片落盘，`app.js:356` 状态灯仍为旧逻辑；两路修复子代理均 inactive、`evidence/agent-console-fix-*.md` 零命中（按 §14「哪一路空手就由主线自己接这一块」，不新增路，判定：≥3目标=否、≥3处同类=否、≥10次工具=否、多视角=否，四项全否，理由「依赖链必须串行 + 单次磁盘核对即够」）；7872 已 NONE（pid=31472 ABSENT）、7871 仍 LISTEN pid=17336。
+- 缺陷来源：`console-impl` 分片静态审出的三处可复现降级路径，属前任原话「审查，主要为优化功能实现」没收干净的尾，扩展为「最小修复 + 重新验收封口」，不重构、不加新功能、不扩范围。
+- 修复 1 · 前端状态灯（`tools/console/static/app.js:356`，改前 26,427 B → 改后 26,524 B，419 行纯 LF）：
+  - 改前逐字：`setGatewayDot(bag["/api/gateway"] ? true : (bag["/api/overview"] ? !bag["/api/overview"].__err : undefined));`
+  - 改后逐字：`setGatewayDot(bag["/api/gateway"] ? (bag["/api/gateway"].ok === true && !bag["/api/gateway"].__err) : (bag["/api/overview"] ? (bag["/api/overview"].ok === true && !bag["/api/overview"].__err) : undefined));`
+  - 根因：`app.js:89-93 all()` 对失败源写 truthy 的 `{ __err: s.reason }`，健康页 502 被判「网关在线」、总览页恒判「网关不可达」。
+- 修复 2 · 写面异常兜底（`tools/console/server.py:185-186`，改前 10,175 B / 259 行 → 改后 10,360 B / 261 行）：`do_POST` 在 `except sources.SourceError` 之后补 `except Exception as exc:  # 页面必须拿到结构化错误，不能是裸 500` → `return self._send(500, err_envelope("PARSE_ERROR", f"{type(exc).__name__}: {exc}"))`。`actions.py:29-57 reload_gateway()` 自身已捕 HTTPError/URLError/TimeoutError/OSError，通用兜底只在非预期异常触发。
+- 修复 3 · 启动提示（`tools/console/start-console.ps1:27`，改前 1,013 B → 改后 1,041 B，32 行）：`Write-Output "console detached on 127.0.0.1:$Port (stdout: $out, access-log stderr: $err)"`；`server.py:70 log_message` 写 `sys.stderr`，原提示只给 stdout 路径。
+- 探针（中间产物只进 `.work/`）：`.work/probe-post-json.py` monkeypatch `Handler._send` + 令 `actions.reload_gateway` 抛 `ValueError`，断言 500 + `application/json; charset=utf-8` + `ok:false` / `error.code=PARSE_ERROR`，结果 `PROBE_POST_RESULT=PASS` / `POST_EXIT=0`；`.work/probe-gateway-dot.cjs` 按行锚定抽 `setGatewayDot` 调用实参对 5 种 bag 求值，`PROBE_DOT_RESULT=PASS failures=0`（health 成功=true、health 502=false、overview 成功=true、overview 502=false、ops 缺源=undefined）。
+  - 探针自身踩坑：首版正则 `/setGatewayDot\(([\s\S]*?)\);/` 误抓函数定义，5 例全 `EVAL_ERR:SyntaxError` / `DOT_EXIT=1`；改 `lines.find(l => /^\s*setGatewayDot\(/.test(l) && !/function\s/.test(l))` 整行锚定后全绿。已沉淀教训 `Lmwdhhtkr`。
+- 重新验收（19:47 实跑）：`server.py --check` → `handwritten static bytes = 41816` / `vendor static bytes = 686736` / `result = PASS (0 failure(s))` / `SELFCHECK_EXIT=0`；三个 .py `py_compile` 全 0（cfile 落 TEMP，源码树零 .pyc）；`node --check static/app.js` = 0；PS1 Parser `PS1_PARSE_ERRORS=0`；`.work/e2e-console.py` **39 项 PASS / failures=0 / E2E_EXIT=0**（含 21 GET / 4 HEAD / 6 安全 / 7 脱敏 / 1 vendor 离线）；范围 `check-docs.py` 5 篇 `[OK]` / `SCOPED_DOCS_EXIT=0`；`check-project.py` 8 项 / `CHECK_PROJECT_EXIT=0`。
+- 服务：`start-console.ps1 -Detach` 重新拉起 7872，`PORT 7872 LISTEN pid=11684`、`/healthz` 200 / 140 B；`PORT 7871 LISTEN pid=17336`、`/health` 200 / `application/json; charset=utf-8` / 2,741 B，**网关全程零重启零改动**。全仓 `check-docs.py` 仍因用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md` 被 `docs/reports/README.md:7` 链接而 exit 1，与本轮无关，保持原样。
+- 文档口径回写：`docs/CONSOLE.md` 六处字节引用 :16 / :158 / :297 / :326 / :329 / :358 由 41,719 → **41,816 B**、26,427 → **26,524 B**、`handwritten static bytes = 41719` → `= 41816`；§12 验收表补第 11 项「降级路径结构化」、§13 功能优化列表补 7/8/9 三条。改完范围门禁复跑 exit 0。
+- 边界：两路修复分片未落 evidence，按 §14 由主线接管 `app.js` 一块并独立取证结案；三路早前分片仅作旁证。未 `git add` / `commit` / `push`；用户三份既有未跟踪改动未碰；`docs/reports/README.md` 的未跟踪报告链接未动。
+- 浏览器真渲染复验（19:50）：侧栏单独 `open` 建 tab → `batch(wait #page-title + eval + read)` → 单独 `eval` 取全量指标，总览 `gwText="网关在线"` / `gwDotClass="status-dot status-green"` / `pageTitle=总览` / `navCount=8` / `cards=10` / `tables=2` / `viewHtmlLen=6261` / 两张本地样式表 `vendor/tabler.min.css` + `app.css` / `theme=light` / `hasHorizontalScroll=false`；8 页 hash 逐页 `err=false`（overview 10 卡 2 表 / models 5 卡 5 表 / prices 2 卡 2 表 / health 1 卡 1 表 / traffic 9 卡 4 表 / accounts 3 卡 2 表 / logs 2 卡 1 表 / ops 7 卡 4 表），状态灯修复的用户可见效果直接成立。`screenshot` 两次报 `the screenshot did not finish within 10s — is the Harness window visible?`（宿主窗口可见性，非页面问题），按教训改以 DOM eval 指标作证据、复用早前 `.work/console-v3-screenshot.png`（40,896 B），已沉淀一条 lesson。
+
+[[TASK_ALL_DONE]]

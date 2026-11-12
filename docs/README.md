@@ -30,7 +30,7 @@
 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) | **zgate 生命周期正本**：计划任务单任务自启、CMD/DSH 会话树与 Job Object 问题、`build.py --candidate` + `tools/zgate-lifecycle/` 换版流程、失败回滚与常见故障 |
 | [ROUTING-POLICY.md](ROUTING-POLICY.md) | **路由策略正本**：一条请求「先打哪一跳、等多久、失败算谁的、什么时候不许判死」—— 逐跳参数聚合、链预算 `chainBudgetSec`、单跳链冷却豁免、两张冷却表、启动自检 `ValidatePolicies`、`/v1/models?scope=`、`/health` 的 early/chain/guard 段、各渠道当前实际值与回退 |
 | [TOOLS.md](TOOLS.md) | **工具清单正本**：运行环境、每个脚本的产物与去留标记、统一模式与 `--separate` 的区别 |
-| [CONSOLE.md](CONSOLE.md) | **可视化后台正本**：8 页信息架构与字段来源、独立 Python 服务而非塞进网关的取舍、MD3 选型（Beer CSS 单 CSS）、API 契约、脱敏红线、P0–P3 分期与验收 |
+| [CONSOLE.md](CONSOLE.md) | **可视化后台正本（2026-11-12 已落地 v3）**：Tabler 1.7.4 高星后台外壳 + Microsoft Fluent 2 语义令牌桥接与十二条落地规则、8 页信息架构与字段来源、独立 Python 服务而非塞进网关的取舍、统一响应包与静态/vendor 路由、脱敏红线与同源 POST 校验、资源占用只读候选、验收实测 |
 | [VERSIONING.md](VERSIONING.md) | **版本晋升正本**：三段式进位、仓库发布号在哪维护、什么时候不动版本号。发版规则并入本篇 |
 | [SECRETS.md](SECRETS.md) | **凭据位置正本**：一律走环境变量，**只写位置不写值**；上传公开仓库前必读 |
 | [release-notes/README.md](release-notes/README.md) | **Release 说明格式正本**：形状、动词四选一、覆盖率红线、固定尾巴 |

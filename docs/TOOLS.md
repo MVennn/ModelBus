@@ -68,6 +68,7 @@
 | `evidence/wb_panel_models.json` | 网关模型目录原始快照 | 只读证据 | — |
 | `third-party/zcodium/reasoning-rules.js` | 按协议算「最小且正确」的思考字段；并比对本机 ZCode 内置规则与上游切片，报漂移 | stdout | ✅ 长期 |
 | `third-party/zcodium/zcode-builtin-reasoning-rules.json` | ZCodium 内置思考规则的最小切片（4 条，逐字抄录，带来源 URL + SHA + license） | 只读参考 | ✅ 长期 |
+| `tools/console/` | **可视化后台（Fluent 2，独立进程）**：`server.py` 监听 `127.0.0.1:7872`，17 条路由（13 个只读 `/api/*` + `/healthz` + SSE + `POST /api/actions/reload` + `/api/actions/jobs`）；`sources.py` 汇总 13 个数据源（TTL 缓存 + 流式尾读 + `scrub` 脱敏），`actions.py` 唯一写面只转发 `POST /admin/reload` 且不启停 zgate；前端 `static/` 零 CDN / 零构建 / 零第三方包。入参 `--port`（默认 7872）/ `--check`（逐源自检 + 静态预算 + 探 `/health`，不监听）；`start-console.ps1` 带 `-Port` / `-Check` / `-Detach`（隐藏窗口）。设计正本 [CONSOLE.md](CONSOLE.md) | 只读汇总，无落盘数据产物；`-Detach` 时 stdout/stderr 写 `.work/console.stdout.log` / `.work/console.stderr.log`；浏览器 `http://127.0.0.1:7872` | ✅ 长期 |
 
 ---
 

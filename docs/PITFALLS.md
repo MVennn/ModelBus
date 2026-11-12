@@ -917,3 +917,10 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **判据**：分清「链路坏了」还是「模型这一跳退化」只看三件事 —— 会话 `sessionStats.decodeTokens` 是否为 0、网关日志那次请求后面有没有 fallback/error 行、同一条链**不带 tools** 直打有没有正文。三件全中就是模型退化，不是配置掉了。
 
 - **同类**：任何「把思考流也算作产出」的探活/首块判定都会漏掉这一类空回；`reasoning` 只能证明上游活着，不能证明它给了可用的答案。
+
+## 51. 控制台脱敏把 `token` 当凭据：`*_tokens` 业务计量被抹成 `<redacted>`，流量页丢数 【通用】
+
+- **现象**：`tools/console/` 首版端到端里，`/api/overview` 与 `static/app.js` 的脱敏 grep 命中 5 处 `token`，一度当成凭据泄漏；放宽检查口径后才发现 `sources.scrub()` 把 `total_tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens` 全换成 `<redacted>`，`/api/traffic` 的 `tokens` 合计变 0，流量页「采样 token」永远显示 0。
+- **根因**：首版 `sources.py` 的 `SECRET_NAME` 写成 `r"(?i)(token|secret|cookie|...)"` —— 裸 `token` 是子串匹配，所有 `*_tokens` 业务计量字段名一并命中。`request-logs/requests-*.jsonl` 每行都带 `total_tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens`，这些是统计口径，不是凭据；`auths/*.json` 里的 `accessToken` / `refreshToken` 才是凭据。同一套正则既想防泄漏又想留统计，用子串匹配必然互相打架。
+- **怎么避**：字段名脱敏只认「凭据语境」精确词（`(access|refresh|id|auth)[_-]?token` / `secret` / `cookie` / `passwd` / `password` / `credential` / `authorization` / `api[_-]?key` / `private`），值形状脱敏单独用 `SECRET_VALUE`（`sk-…` / `Bearer …`）。改完必须跑行为等价单测：一边断言 `accessToken` / `refreshToken` / `cookie` / `api_key` / `authorization` / 嵌套 `secret` / 列表 `password` / `Bearer` / `sk-` 全被抹，另一边断言 `total_tokens` / `tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens` 全保留（`.work/test-redaction.py` 13 项 PASS）。验收 grep 也分两套口径：对 `/api/config`、`/api/accounts` 用 strict 零命中，对流量 / 探针 / 静态源码只查「凭据值形状 + 凭据字段名」，别用 `grep -i token` 一把梭。
+- **同类**：本轮另两处写面收紧同源同理 —— ① 缺 `Origin` 的 `POST /api/actions/reload` 曾被放行（`_origin_ok()` 里 `if not origin: return True`），本机 curl 方便却给简单跨站 POST 留了口子，改成「写操作必须带同源 `Origin`，缺一律 403」；② `do_HEAD` 直接 `_send` 会写出 body 且绕过 `Host` 校验，改成 `_head` 标志复用 `do_GET`、只发头不写体。三条都是「便利默认值」盖过了安全 / 正确性判据，判据要显式到字段级。
