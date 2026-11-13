@@ -61,12 +61,12 @@ python tools\console\server.py --check
 
 | 分组 | 路径 | 关键内容 | 后台 TTL |
 |---|---|---|---|
-| 模型真值 | `~/.zcode/v2/model-alias-map.json` | 18 个模型 + legacy 映射（实测 23,928 B） | 30s |
+| 模型真值 | `~/.zcode/v2/model-alias-map.json` | 19 个模型 + 72 条 legacy 映射（实测 2026-11-13：25,401 B、链上共 42 跳） | 30s |
 | Provider 配置 | `~/.zcode/v2/provider_config.json` | 三组 provider + 模型映射 | 60s，**只露存在性与键名** |
-| 探针 | `~/.zcode/v2/model_probe.json` | 每模型 `status/http/ms/detail/provider/ever_ok`（49,389 B） | 30s |
-| 评分 | `~/.zcode/v2/model-scores.json` | `basis` + `models`（1,767 B） | 60s |
+| 探针 | `~/.zcode/v2/model_probe.json` | 每模型 `status/http/ms/detail/provider/ever_ok`（体积随最近一次探活变，以磁盘为准） | 30s |
+| 评分 | `~/.zcode/v2/model-scores.json` | `basis` + `models`（2026-11-13 实测 5 条） | 60s |
 | 额度 | `~/.zcode/v2/quota-windows.json` | `windows[3]`（621 B） | 60s |
-| 竞技榜 | `~/.zcode/v2/arena-leaderboard.json` | `rows[231]` + `totals`（117,012 B） | 300s |
+| 竞技榜 | `~/.zcode/v2/arena-leaderboard.json` | `rows` + `totals`（2026-11-13 实测 235 行） | 300s |
 | 价格 | `providers/workbuddy/cache/wb_pricing.json`（39 项，14,201 B）、`providers/qoder/cache/qd_prices.json`（13 项，2,744 B） | WB 折扣价、Qoder 峰谷价 | 60s |
 | 请求明细 | `gateways/upstream/workbuddy/data/request-logs/requests-YYYY-MM-DD.jsonl` | 单日 2.95–6.73 MB，字段含 tokens / ttfb / attempts / credit | 15s，**流式 tail 800 行，不全量入内存** |
 | 网关日志 | `%LOCALAPPDATA%/ZCodeGateway/zgate.log`（4,408,304 B） | `时间 LEVEL msg` | 不缓存，尾读 1 MiB |
@@ -122,7 +122,7 @@ P3 保留一个桥（**未实施**）：zgate 在 `Accept` 含 `text/html` 时�
 | https://github.com/microsoft/fluentui/blob/master/packages/tokens/src/alias/darkColor.ts | `colorNeutralForeground1=white`、`colorNeutralBackground1=grey[16] #292929`、`colorBrandBackground=brand[70] #106EBE` | 同上 | 同上 | 定 dark 中性/品牌令牌 |
 | https://github.com/veronicaward/skills/blob/main/skills/fluent2-design/references/color-tokens.md | `#0F6CBD / #115EA3 / #0E4775 / #B4D6FA`；中性 `#FFFFFF / #F5F5F5 / #F0F0F0 / #E0E0E0`、描边 `#D1D1D1 / #E0E0E0`、文字 `#242424 / #424242 / #616161 / #707070` | Fluent 2 Web（社区汇编，与官方别名互证） | 同上 | 定 light 主题实值 |
 | https://open-design.ai/design-system/microsoft-fluent | 同上 spacing / radius 表 + 官方 `colorNeutralForeground1=grey[14]`、`colorNeutralBackground1=white/grey[16]` | Fluent 2 汇编页 | 同上 | 交叉核对，避免单源抄错 |
-| `gh api repos/microsoft/fluentui/releases/latest`（C 路 `evidence/agent-audit.md` §8 一手实取） | `@fluentui/web-components@3.2.1` / MIT；latest release = `@fluentui/react-provider_v9.22.23`（2026-10-29T01:05:26Z），**不是** Web Components 版本，别拿它当组件库版本 | Fluent UI v9 / Web Components 3.2.1 | 2026-11-12 16:37 | 锁版本锚点；Fluent 2 只作设计规则，不引组件包 |
+| `gh api repos/microsoft/fluentui/releases/latest`（C 路审查原件 `evidence/agent-audit.md` 已归档，台账见 `evidence/README.md`） | `@fluentui/web-components@3.2.1` / MIT；latest release = `@fluentui/react-provider_v9.22.23`（2026-10-29T01:05:26Z），**不是** Web Components 版本，别拿它当组件库版本 | Fluent UI v9 / Web Components 3.2.1 | 2026-11-12 16:37 | 锁版本锚点；Fluent 2 只作设计规则，不引组件包 |
 | `gh api repos/tabler/tabler` + `gh api repos/tabler/tabler/releases/latest`（一手实取） | `tabler/tabler` **42,052★**、MIT、`pushed_at=2026-11-10T22:13:59Z`、`archived=false`、默认分支 `dev`；latest release = `@tabler/core@1.7.4` | Tabler 1.7.4 | 2026-11-12 | 选库、锁版本、许可证 |
 | `https://preview.tabler.io/layout-vertical.html`（官方骨架） | `.page` > `aside.navbar.navbar-vertical.navbar-expand-*` + `.page-wrapper`；`navbar-brand-autodark` / `navbar-toggler` / `collapse.navbar-collapse` / `nav-link-icon` / `nav-link-title` / `page-header` / `page-body` / `footer` | Tabler 1.7.4 | 2026-11-12 | 定 `index.html` 竖向骨架 |
 | `gh api repos/ColorlibHQ/AdminLTE`（对照） | stars 更高，但 v4 的 npm 版本与 release tag 不同步，且依赖 FontAwesome CDN | AdminLTE v4 | 2026-11-12 | 排除：违反零 CDN、版本锚点不稳 |
@@ -164,7 +164,7 @@ P3 保留一个桥（**未实施**）：zgate 在 `Accept` 含 `text/html` 时�
 | # | 页面 | 一句话 | 主要数据源 | 刷新 |
 |---|---|---|---|---|
 | 1 | 总览 | 网关坏没坏、跳数与探测、采样成功率、可复核占用 | `/api/overview`、`/api/ops` | 10s |
-| 2 | 模型 | 18 个别名 + 探测 / 评分 / 配额 / 榜单前 20 行 | `/api/models`、`probe`、`scores`、`quota`、`arena` | 手动 / TTL |
+| 2 | 模型 | 19 个别名（2026-11-13 实测）+ 探测 / 评分 / 配额 / 榜单前 20 行 | `/api/models`、`probe`、`scores`、`quota`、`arena` | 手动 / TTL |
 | 3 | 价格 | WB 39 项与 Qoder 13 项价目快照 | `/api/prices` | 60s |
 | 4 | 健康 | `/health` 原样字段展开 + 原始 JSON（脱敏） | `/api/gateway` | 5s |
 | 5 | 流量 | 请求量、成功率、耗时、token、按模型/状态/小时分布 | `/api/traffic` | 15s |
@@ -181,7 +181,7 @@ P3 保留一个桥（**未实施**）：zgate 在 `Accept` 含 `text/html` 时�
 | 页 | 已落地字段 |
 |---|---|
 | 总览 | 8 个 KPI（网关状态 / 别名模型 / 渠道段 / 跳数可用 / 探测通过 / 请求采样 / 采样成功率 / 可复核占用）；7 段渠道表（状态、凭据、base、child）；运行细节（uptime、冷却、guard、health 体积、平均耗时、token）；占用候选前 5 行 |
-| 模型 | 别名表（模型名 + 映射规格脱敏截断）；探测表（状态/HTTP/ms/provider/详情/曾通）；评分表与配额窗口并排；榜单前 20 行（共 231 行，不全推） |
+| 模型 | 别名表（模型名 + 映射规格脱敏截断）；探测表（状态/HTTP/ms/provider/详情/曾通）；评分表与配额窗口并排；榜单前 20 行（2026-11-13 实测共 235 行，不全推） |
 | 价格 | WB 表（id/credits/eff_rate/list_rate/促销/ctx/out/工具/默认 effort）；Qoder 表（price/peak/valley/off_peak） |
 | 健康 | 网关契约卡（网关地址、`/health` ok 与 Content-Type、响应体积、`/v1/models` 条数、轮询下限）；字段原样表；原始 JSON 代码块 |
 | 流量 | 5 个 KPI；按模型 / 按状态 / 按小时三张分布表；日志文件体积表 |
@@ -327,7 +327,7 @@ tools/console/
 | 4 | 路由全通 + 缓存 | 端到端 **39 项 PASS**：21 GET 全 200（新增 `/vendor/tabler.min.css`）、4 HEAD 全 200 且 body=0 B（新增 vendor）、6 项安全断言、7 项脱敏断言、1 项 vendor 离线断言；`--check` 13 个 `/api/*` 全 OK；5s TTL 缓存合并 `/health` 轮询；侧栏浏览器 8 页 hash 逐页渲染 `fail=false`（总览 8 导航 / 10 卡 / 2 表，两张本地样式表全加载、零横向滚动） |
 | 5 | 不碰网关：实现里没有 `zgate.exe` 启停调用 | `actions.py` 只发 `POST /admin/reload`；网关 7871 全程在跑且响应未改 |
 | 6 | 门禁 | `check-project.py` exit 0；`check-docs.py` 范围模式（5 篇：本正本 / README / PITFALLS / TOOLS / MAINTENANCE）exit 0；`py_compile`、`node --check static/app.js` exit 0；`server.py --check` exit 0（`handwritten static bytes = 41816` / `vendor static bytes = 686736` / `result = PASS (0 failure(s))`）。全仓 `check-docs.py` exit 1 只因用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md` 被 `docs/reports/README.md:7` 链接（HEAD 无该链接、`git ls-files` 无目标），与本轮改动无关 |
-| 7 | `/health` 契约不变 | 仍 `application/json; charset=utf-8`、约 2.7 KB（`uptime_s` 等动态字段位数增长会使体积浮动，本轮实测 2,741 B）、7 个渠道段齐全、`key` 只露 bool；A 路分片 `evidence/agent-endpoints.md` 复现 18 个顶层键 |
+| 7 | `/health` 契约不变 | 仍 `application/json; charset=utf-8`、约 2.7 KB（`uptime_s` 等动态字段位数增长会使体积浮动，本轮实测 2,741 B）、7 个渠道段齐全、`key` 只露 bool；A 路分片 `evidence/agent-endpoints.md` 复现 18 个顶层键（原件已并入 `evidence/topic-routing-runtime.md`） |
 | 8 | 脱敏：strict 口径 + shapes 口径 | `/api/config`、`/api/accounts` 对凭据字段名零命中；`/api/gateway`、`/api/overview`、`/api/traffic`、`/api/probe` 与 `static/app.js` 对凭据值形状（`sk-` / `Bearer`）和凭据字段名双零命中；脱敏单测 13 项 PASS 同时锁「凭据被抹」与「`*_tokens` 计量保留」 |
 | 9 | 跨站与写面 | 无 `Origin` POST 403、跨站 `Origin` 403、同源 `Origin` 200、`Host: evil.example` 403、未知路由 404、`GET /api/actions/reload` 404；`HEAD` 不写 body |
 | 10 | Tabler 外壳 + Fluent 2 桥接 | `index.html` 用官方竖向骨架与 `.page` / `.navbar-vertical` / `.page-wrapper` / `.page-header` / `.page-body` / `.footer`；`app.css` 194 行只做 `--tblr-*: var(--mb-*)` 映射与专有类；`app.js` 8 个 render 函数主体未动、只换 helper 输出 Tabler 类；`setTheme()` 同步 `data-theme` + `data-bs-theme`；`#nav-toggle` 原生切 `.collapse.show`，零 Bootstrap JS；MIT 全文随 `vendor/LICENSE-tabler.txt` 落盘 |
@@ -337,7 +337,7 @@ tools/console/
 
 ## 13. 资源占用审查（只读，不自动清理）
 
-全仓审查（C 路 `evidence/agent-audit.md` 419 行 / 37,908 B / SHA256 `0BF7ED72…878D`，主线按下节命令独立复现）发现 7 类占用候选，全部在 `/api/ops` 与运维页列出**体积与处置建议**，后台不删任何文件：
+全仓审查（C 路 `evidence/agent-audit.md` 419 行 / 37,908 B / SHA256 `0BF7ED72…878D`，主线按下节命令独立复现；原件已归档，台账见 `evidence/README.md`）发现 7 类占用候选，全部在 `/api/ops` 与运维页列出**体积与处置建议**，后台不删任何文件：
 
 | 候选 | 实测（2026-11-12 16:27–16:37 采样，长驻网关持续写盘） | 性质 | 建议 |
 |---|---|---|---|

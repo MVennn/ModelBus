@@ -305,13 +305,13 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
   「`agents[cli].models` 过滤 + `nonChatModel` 剔除 + `disabled` 剔除」，`dynMap` 在过滤之后才收字段 ——
   补全模型、短输出模型、出图出视频模型本来就不进对话列表。
 - 出图模型在面板里另行单列（条目带 `image_generation` 标记），所以「对话列表里没有」不等于模型被删。
-- 面板结果有 `modelsCacheTTL`（`internal/panel/panel.go`，默认 60s）短缓存：改了白名单或上游配置后
+- 面板结果有 `modelsCacheTTL`（`gateways/upstream/workbuddy/internal/panel/panel.go`，默认 60s）短缓存：改了白名单或上游配置后
   立刻去读会拿到旧结果，等缓存过期再取证。
 - `global` 目录可能降级到企业端点，响应里的 `global_source` 会标出来源；那种目录条目明显少于桌面版 ——
   看到「少了模型」先读 `global_source`，别当成下架。
 - 与 7871 的 `/v1/models` **不是同一份口径**：后者是 alias 聚合目录（`?scope=` 分 canonical / legacy / all，
   每条带 `group`）。判定「模型还在不在」要交叉价目表（`providers/*/cache/*.json`）与
-  `~/.zcode/v2/provider_config.json` 的 `providerRules[].config.modelOrder`；面板查不到但有另一条源命中，
+  `~/.zcode/v2/provider_config.json` 的 `config.providerConfigRules.providerRules[].config.modelOrder`（2026-11-13 实测 3 条规则，`modelOrder` 分别 2 / 5 / 12 条）；面板查不到但有另一条源命中，
   就是被口径筛掉。
 
 判定优先级：**口径筛掉 > 配额与冷却 > 真下架**。只有上游明确回 404 / `model_unavailable` /
@@ -409,7 +409,7 @@ chat 组，四个 chat 组（历史口径）的 `api.baseUrl` 指向本地入口
 | cn:deepseek-v4-flash | 0.17 | 1M | 50K | ✅ | low / high / xhigh | 200 |
 | cn:minimax-m3 | 0.25 | 512K | 512K | ❌ | medium | 200 |
 
-**全部 18 个模型都支持工具调用**（网关 `supports_tool_call` 全为真）。
+**该时点目录里 18 个模型全部支持工具调用**（2026-11-03 `ListModels` 口径，网关 `supports_tool_call` 全为真；此后目录有增删，条数以 `~/.zcode/v2/model-alias-map.json` 为准）。
 
 ### 4.6 被排除的 38 个
 
@@ -538,7 +538,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 |---|---|
 | 渠道 | `GM`，远程直连，无本地子进程 |
 | 协议 | `chat`（OpenAI 兼容），`stream:true` 走 SSE |
-| 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`router.go` 的 `applyHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
+| 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`gateways/zgate/internal/router/router.go:815` 的 `forwardHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
 | 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
 | 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
 | 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七个 GM 跳同族合并成一条链；同代跨站兜底 2026-11-11 下线，主力组里没有第二个同代模型） |
@@ -585,20 +585,25 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 ### 4.11.3 zgate 侧机制（`channelPolicy.GM` / `channelPolicy.HJ`）
 
-当前真值（2026-11-10 21:30 第四次收敛：**判死权归上游**）：
+现行真值（2026-11-13 逐格核对 `gateways/zgate/zgate.json`；口径正本见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8）：**判死权归上游** —— 本地不再按时间判死，只在按上游回话冷却：
 
 | 参数 | `GM` | `HJ` | 作用 |
 |---|---|---|---|
 | `headerTimeoutSec` | **-1** | **-1** | 负数 = 这一渠道**不设**响应头看门狗，等多久由上游决定 |
 | `firstBlockMs` | 0 | 0 | 0 = 不判首块；「200 之后多久出正文」不再当失败信号 |
 | `silenceCooldownSeconds` | 0 | 0 | 0 = 沉默不埋冷却（单跳链埋了只会把下一个请求饿死） |
-| `hedgeAfterMs` | 18000 | 0 | 首跳发出 18s 还没等到响应头就**并行**再发下一跳 —— 只多开一路，不取消前一路 |
-| `maxParallel` | 2 | 2 | 同时在路上的上限 —— **不是拍脑袋，是上游限流的上限**，见下节 |
-| `softCooldownSeconds` | 60 | 0 | 5xx（503 high demand）的冷却，跨过上游的需求窗口 |
+| `hedgeAfterMs` | 0 | 0 | 0 = 不对冲；`GM` 自 2026-11-11 10:35 起单发串行，不再并排多开一路 |
+| `maxParallel` | 1 | 0（缺省） | 同时在路上的上限；`GM` 收到 1 之后链上永远逐跳推进 |
+| `softCooldownSeconds` | 15 | 0 | 5xx（503 high demand）的冷却，按上游回话关 15 秒 |
+| `busyCooldownSeconds` | 10 | 0 | 上游明确说「忙」时只跳这一跳、不禁整个渠道（2026-11-11 11:03 加） |
+| `timeoutCooldownSeconds` | 20 | 0 | 这一跳超时后的短冷却（同上） |
+| `retry500Once` | true | false | 5xx 先原地重试一次再换跳 |
 | `rateLimitBackoffMs` | -1 | 0 | 关掉 429 就地 700ms 白等，直接换下一跳 |
 | `authFailCooldownHours` | 24 | 0 | key 无效/被封类 403 → 整渠道禁用一天 |
 
-两个渠道**不再共用一套参数**：`GM` 是降级链的链首（当时 7 跳，11-11 11:03 起 3 跳），需要的只是「慢一点也先让下一跳并排跑」。
+其余渠道：`WB` 是唯一还开着对冲的一家（`hedgeAfterMs: 18000`、`maxParallel: 2`，另有四段启用时间窗）；`OC` 软冷却 60s / 沉默冷却 20s；`QD` 沉默冷却 20s；`QW` / `QN` 不在 `channelPolicy` 里，一律走缺省（不对冲、不冷却）。
+
+两个渠道**不再共用一套参数**：`GM` 是降级链的链首（当时 7 跳，11-11 11:03 起 3 跳）；2026-11-11 10:35 起连对冲也撤了 —— 链上一跳慢就让它慢，本地不再同时多问一家。
 `HJ` 按单跳直连的普通供应商处理（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
 「一次 502 + 客户端重试 + 上游重跑」，所以它那份收敛到只剩 `headerTimeoutSec: -1`
 （其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数**逐跳取值**（2026-11-10 深夜改）：
@@ -651,7 +656,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
    命中 `SERVER` 必然重打 → 上游再跑一遍 → 用户看到的正是「后台在跑、本地断开」。
    所以问题不再是「窗口调到多长才不误杀」，而是**本地根本不该判死**：两个渠道都改成
    `headerTimeoutSec: -1`（不设响应头看门狗）、`firstBlockMs: 0`（不判首块）、
-   `silenceCooldownSeconds: 0`（不埋沉默冷却）；GM 只保留 `hedgeAfterMs: 18000` 做对冲
+   `silenceCooldownSeconds: 0`（不埋沉默冷却）；GM 当时只保留 `hedgeAfterMs: 18000` 做对冲（2026-11-11 10:35 起这一项也撤了，改为单发串行，见本节表格）
    —— 对冲只是**多开一路**、不取消前一路，判死权仍在上游。全局兜底从 12s 放回 45s，
    只兜「真的挂了」的渠道。要回旧行为：`headerTimeoutSec` 给正数、`firstBlockMs` 给 4000，
    `/admin/reload` 即生效，不用重编译。
@@ -691,7 +696,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 要动的是：`zgate.json` 的 `upstreams` 与
 `channelPolicy`、`keys.go` 的 `Channels` 与 `Set` 字段、`keys.go` 的 `Load` 取值链、
-`router.go` 的 `applyHeaders` 名单与 `healthSegments`。`tools/check-project.py` 现在
+`router.go` 的 `forwardHeaders` 名单（`router.go:815`）与 `healthSegments`。`tools/check-project.py` 现在
 静态比对前三处的渠道集合，漏一处门禁直接红。
 
 ---
@@ -741,7 +746,7 @@ map 是**一段 JS 表达式**，引擎求值成 JSON 对象后再发出去。
 `providerModelRules` 19 条里 0 条 `map = "{}"`，早先 id 已并组改名且不在现网配置。
 机制与历史复现手法见 [PITFALLS.md](PITFALLS.md) §2，档位装饰项的解释见 §5.4。
 
-**WorkBuddy 侧 18 个模型一个都没配覆盖** —— 探测确认它们**全部接受 ZCode 原生 body**。
+**WorkBuddy 侧 18 个模型（2026-11-03 目录口径）一个都没配覆盖** —— 探测确认它们**全部接受 ZCode 原生 body**。
 （与 OpenCode-Go 侧不同：那边 minimax-m3 会拒 `thinking:{type:"enabled"}`，这边 CodeBuddy 上游接受。）
 
 **Qoder 侧 7 个模型（带 `qoder:` 前缀，经 7871）也没有配覆盖** —— 2026-10-23 用

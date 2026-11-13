@@ -1,6 +1,7 @@
 # ModelBus —— 记忆索引
 
-> **一句话**：把 AI 模型供应商接进 ZCode（OpenCode-Go 探测与同步 / WorkBuddy2API 网关 / 思考参数矩阵）。
+> **一句话**：把 AI 模型供应商接进 ModelBus 网关 —— 以 **DSH 为主宿主**、ZCode 降为兼容投影（OpenCode-Go 探测与同步 / WorkBuddy2API 反代 / 思考参数矩阵）。
+> 三层命名口径见根 [AGENTS.md](../AGENTS.md)「当前架构（2026-11-11 起）」与 [docs/DSH-FIRST.md](../docs/DSH-FIRST.md)。
 >
 > 仓库路径：本仓库根目录（`ModelBus/`，实际路径以 git remote 为准）
 > 记忆文件一条一件事，**只记非看代码/读文档就能知道的结论**；

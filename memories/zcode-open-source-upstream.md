@@ -27,7 +27,9 @@ ZCodium（revision 32）的同三条规则**逐字一致**。
 - `apiTypeMatch` **缺省时对所有 api type 生效**（provider-site 里有 4 条这样）
 - `map` 表达式的作用域只有 `reasoningLevel` 与 `maxOutputTokens` 两个自由变量
 
-**已 vendor 进 `zcode-ai-models/third-party/zcode/`**（4 个原样文件 + Apache-2.0 LICENSE）。
+**已 vendor 进本仓 `third-party/zcode/`**（2026-11-13 实测 7 个文件：`.upstream-sha`、`LICENSE`、
+`model-config.ts`、`rule-data-schema.ts`、`schema.ts`、`UPSTREAM.md`、`zcode-builtin.json`；
+旧路径 `zcode-ai-models/third-party/zcode/` 是更名前的写法）。
 
 **三个坑**：
 1. ZCode 桌面版装在 `AppData/Local/Programs/@opencodedesktop`（**@ 前缀**），

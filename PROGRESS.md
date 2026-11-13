@@ -3696,3 +3696,28 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 浏览器真渲染复验（19:50）：侧栏单独 `open` 建 tab → `batch(wait #page-title + eval + read)` → 单独 `eval` 取全量指标，总览 `gwText="网关在线"` / `gwDotClass="status-dot status-green"` / `pageTitle=总览` / `navCount=8` / `cards=10` / `tables=2` / `viewHtmlLen=6261` / 两张本地样式表 `vendor/tabler.min.css` + `app.css` / `theme=light` / `hasHorizontalScroll=false`；8 页 hash 逐页 `err=false`（overview 10 卡 2 表 / models 5 卡 5 表 / prices 2 卡 2 表 / health 1 卡 1 表 / traffic 9 卡 4 表 / accounts 3 卡 2 表 / logs 2 卡 1 表 / ops 7 卡 4 表），状态灯修复的用户可见效果直接成立。`screenshot` 两次报 `the screenshot did not finish within 10s — is the Harness window visible?`（宿主窗口可见性，非页面问题），按教训改以 DOM eval 指标作证据、复用早前 `.work/console-v3-screenshot.png`（40,896 B），已沉淀一条 lesson。
 
 [[TASK_ALL_DONE]]
+## 2026-11-13 大扫除第八轮（微扫档收口）
+
+- 定档微扫 + 全盘只读盘点 + 漂移复报：长任务在跑 / 距第七轮 <24h / 多仓 status 非空三项闸门全命中，构建产物、git gc、pnpm prune、记忆五槽全量整理一律只列预案。8 路并行（三口令不限并发），分片产物全落盘并 lead 逐文件复核。
+- 优化：唯一真删除分片 host-micro 稳定净释放 40,469,775 B（删前 846 行 / 41,660,203 B，Node 重建 213 个编译缓存 1,190,428 B 后三轮稳定）；独占 .tmp / 不稳定 / 近 30 分钟写入一律跳过，只报稳定净释放。
+- 修复：① OpenwrtOpsToolkit docs/PITFALLS.md 尾部多余空行裁掉，diff --check 由 exit 2 转 0；② 超长热条目压到 ≤300B，记忆门禁 R5 转绿、exit 0。
+- 更新：OO `fc7ee7d` / SCR `4349e68` 两仓成套变更按对象拆 Conventional Commit 提交并 push，远端 HEAD 对齐、两仓 CI 全绿；ModelBus 因活跃写入（两点采样字节/哈希变化 + 并行会话认领）判 NO_LOCAL_ONLY 保留本地，其余 10 仓全干净。
+- 门禁：13 仓 check-secrets 全绿、check-docs OO/SCR exit 0、5 个 shell 全 LF、记忆门禁 PASS 21 / WARN 1 / FAIL 0；§5 收尾三选一（2 条外部事实卡 + 七路免搜行）合格。§11 红线 A/C/E/N 漂移与隔离区现值只登记、不改配置，留标准/深扫预案。明细见大扫除台账正本第八轮（~/.dsh/evidence/sweep-ledger.md）。
+- 结果：宿主 TEMP 由 75,029,514 降到 71,465,657 B，F: 可用 351,649,583,104 B；两仓未提交改动清零并同步远端，ModelBus 在用改动原样保留、零误推。全盘缓存与隔离区未到期对象一律不误删。
+
+[[TASK_ALL_DONE]]
+
+
+---
+
+## 批次：2026-11-13 ZCode 用量统计修复 + Token 用量搬进 DSH（收口）
+
+- 判定：≥3目标=是、≥3处同类=是、≥10次工具=是、多视角=是 → 命中 §7/§14 闸门，同批 3 路只读子代理（dsh-landing / zcode-usage-data / dsh-widget-pattern），lead 逐条核实际文件后收口；PROGRESS.md 单写者。
+- 修复（任务1）：~/.zcode/v2/provider_config.json 的 9 条 reasoningLevel.map 旧 JS 方言（裸键、===、!==）被新版受限 CEL 编译器拒绝 → ZodError object keys must be string literals at offset 1 / unsupported token "=" at offset 36 → 内存空配置降级 providerCount=0 → no_active_workspace → 设置页「无法读取用量统计。请稍后重试，或检查网络和供应商配置。」；改合法 CEL（键加双引号、==、!=），同步 catalog/model_caps.json 顶层 10 条与 tests/test_model_alias_efforts.py 夹具；上游真实 compiler.ts 终审 22/22 compile+evaluate OK、语义 A/B 18 项 0 mismatch。CEL 守门落 tools/model_alias.py（_cel_map_error 等 +320 行）与 tests/test_cel_map_guard.py 13 条；全量 unittest discover 171 OK、dsh_sync.py --check exit 0、坏夹具 --apply exit 1 零写盘；日志 2026-11-13.log:2325 usage-stats.getAppUsageSnapshot OK (104.4ms)（对比 :1837 FAIL no_active_workspace）。
+- 更新（任务2）：用户「把这个token用量搬到dsh来，dsh前半部分是空的」。定案不改插件、不装新卡片、不动 §16 保护的 ui-chat 三键，只补皮肤数据文件 ~/.dsh/dsh-claude-style/usage.json。真源 ~/.zcode/cli/db/db.sqlite 的 model_usage（8428 completed / 8471 行，computed_total_tokens 累计 1,115,341,160 ≈ 界面 11.2 亿）；口径用 completed_at（started_at 有 5 行跨午夜、峰值少 765,749），且 input_tokens 已含 cache_read_input_tokens，导入 5 列写 [input-cr, output, cr, cc, calls]，否则四桶被双计成 2,193,500,534。.work/import_zcode_usage.py EXIT=0：230 个 zcode-<session_id> session 只带 days 不带 fingerprint、10 个缺失日（2026-10-21..11-04）、跳过重叠日 11-06/11-09，导入 4 桶 1,101,429,613；备份 .work/usage.json.bak-zcodeimport-20261113192538，报告 .work/import_zcode_usage_result.json。
+- 验证：磁盘回读 computedAt 1794569251087 / sessions 1896 / zcode 230 / 18 天 / 4 桶 4,416,426,564 / ANY_FINGERPRINT_ON_ZCODE False，宿主自身重算重写盘后仍在（lib/host/usage.js:390-393 与 lib/host/usage-record.js:211-219 overStored 的 else-if 保留分支）；GUI 首屏 1,299→1,529 会话 / 35,577→43,970 消息 / 3.3B→4.4B Token / 8→18 活跃天数 / firstDay 2026-10-21（.work/dsh-screen-after.png）；热力图像素差分 27×7 网格 col 23/24/25 由灰 (64,67,75) 变蓝 (44,56,77)，B-R 11→23~66，col 0-22 与 26 零 delta，与 lib/client.js 的 n8() 固定 26 周（188 cells）复刻分布 {23:3,24:3,25:7,26:5} 吻合；更早列仍灰是 ZCode 库最早只到 2026-10-21，物理上没有更老用量可搬，不是导入失败也不是渲染 bug。HTTP snapshot 无 token 返回 401 dsh web authentication required; reopen the URL printed by dsh web.，改用磁盘 + GUI 双证据，等价成立。
+- 教训：Lmwepjal3 / Lmwepjal8 / Lmwepjalb（任务1）与 Lmwewi0ag（cacheRead 双计口径）/ Lmwewi0ak（无 fingerprint 持久性 + n8 热力图栅格）已沉淀，库 total 182。
+- 免搜｜依据本地 lib/host/usage-record.js、usage.js、usage-summary.js、lib/client.js 与 db.sqlite 实测、用户已给确切截图｜无外部事实缺口｜2026-11-13。
+- 边界：未 git add / commit / push；docs/reports/README.md、providers/qoder/cache/qd_prices.json、docs/reports/MODEL-SYNC-20261113-1210.md、evidence/go-model-sync-20261113-120007.md 为他人产物未碰；ZCode 长驻网关零重启。
+
+[[TASK_ALL_DONE]]

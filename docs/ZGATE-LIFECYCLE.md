@@ -1,6 +1,6 @@
-> **一句话**：zgate 必须挂在计划任务父链上自启，换版必须走 `build.py --candidate` + `tools/zgate-lifecycle/restart-zgate.cmd` 受控流程；在 CMD/DSH 会话里直接拉起的实例会随会话树一起被回收。
-
 # ZGATE-LIFECYCLE.md — zgate 生命周期正本
+
+> **一句话**：zgate 必须挂在计划任务父链上自启，换版必须走 `build.py --candidate` + `tools/zgate-lifecycle/restart-zgate.cmd` 受控流程；在 CMD/DSH 会话里直接拉起的实例会随会话树一起被回收。
 
 > **正本声明**：本篇是 zgate 进程生命周期（自启父链、换版、回滚、存活验证、故障定位）的唯一正本。
 > 日常维护命令表见 [MAINTENANCE.md](MAINTENANCE.md) §8，故障现象与排查见

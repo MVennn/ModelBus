@@ -166,7 +166,7 @@ WorkBuddy 侧**只能用** `workbuddy_probe.py`（它先调 `effective_body.js`
 | `providers/workbuddy/logs/wb_zcode_probe.log` | 探测日志 | 本机保留，**不随仓库分发** | 一次性日志 |
 | `providers/opencode-go/probe/results/20261019/*.json` | 三份探测原始结果（34 模型 / 28 组基准 / 决赛采样） | 本机保留，**不随仓库分发** | 体积大、可重跑再生。三个探测脚本把结果写到**当前工作目录**，跑完要手动挪进 `results/<日期>/` |
 | `evidence/wb_panel_models.json` | 网关模型目录快照 | **随仓库分发** | 目录结构证据，无凭据 |
-| `evidence/go-model-sync/*.md` | 每次自动收录的报告 | **随仓库分发**（可挑代表性的几份） | 收录决策的证据 |
+| `evidence/go-model-sync-<YYYYMMDD>-<HHMMSS>.md` | 每次自动收录的报告（**平铺**在 `evidence/` 根，不是子目录） | **随仓库分发**（只留最近一版，见下条原则） | 收录决策的证据 |
 
 **原则**：
 

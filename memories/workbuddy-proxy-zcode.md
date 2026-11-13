@@ -58,15 +58,14 @@ metadata:
 - ZCode 热加载 `provider_config.json`（~1s 轮询）——改完无需重启，用 `ListModels` 工具
   即可确认新 provider 是否已生效。
 
-**脚本产物**（都在仓内 `workbuddy/`）
+**脚本产物**（都在仓内 `providers/workbuddy/`；2026-11-11 去 ZCode 化后脚本名去掉了 `zcode` 字样）
 
 | 文件 | 作用 |
 |---|---|
-| `cache/wb_pricing.json` | 网关 56 模型倍率/上下文/输出上限/effort 档快照 |
-| `workbuddy_probe_zcode.py` | 用 ZCode 真实 body 探测（可断点续跑，逐条写缓存） |
-| `cache/wb_zcode_probe.json` | 探测缓存（status/variant/http/detail/rate） |
-| `zcode_effective_body.js` | 复刻引擎规则解析，算真实请求体 |
-| `workbuddy_zcode_sync.py` | 按倍率分档生成三个 provider 并写配置（`--apply` 才写） |
+| `cache/wb_pricing.json` | 网关 56 模型倍率/上下文/输出上限/effort 档快照（2026-11-13 实测 cache/ 下只剩它与其 `.bak-<ts>`） |
+| `workbuddy_probe.py` | 用真实请求体探测（原 `workbuddy_probe_zcode.py`） |
+| `effective_body.js` | 复刻引擎规则解析，算真实请求体（原 `zcode_effective_body.js`） |
+| `workbuddy_sync.py` | 按倍率分档生成三个 provider 并写配置（`--apply` 才写；原 `workbuddy_zcode_sync.py`） |
 
 配置备份：`provider_config.json.bak-wbproxy-20261020-163755`（分层写入）、
 `.bak-wbproxy-rm-20261020-163800`（删旧 provider）。

@@ -719,8 +719,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
 ## 37. 探活写了三年没人调用：结果文件不存在、没有时间戳、顺序还反了 【通用】
 
-- **现象**：`model_alias.py --probe-file` 有完整的消费逻辑（:1731-1766：非 ok 的条目
-  从分组里剔除），可 `moonshotai/kimi-k3-free` 在 2026-10-27 被上游 retired 之后，
+- **现象**：`model_alias.py --probe-file` 有完整的消费逻辑（现 `tools/model_alias.py:2643-2648`：读探活结果 → `_fresh_probe()`（`:1183`）判新鲜度 → 非 ok 的条目从分组里剔除），可 `moonshotai/kimi-k3-free` 在 2026-10-27 被上游 retired 之后，
   还稳稳占着免费组的位置，每次调用 502。`sync-models.ps1` 里 grep `model_probe`
   零命中 —— 结果文件从来没被生成过。
 - **三个坑叠在一起，只修一个都不生效**：
@@ -824,7 +823,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **三次修复（2026-11-10 傍晚）：守卫压根没上场**。换版后用户复测仍「看不到思考 + 一节一节」，而 zgate.log 里那两条请求**一个守卫行都没有** —— 不是重抽失败，是触发条件不成立：guardApplies 首行 !reasoningExpectsThinking(body)，而 DSH 的模型选择器没有逐模型默认档位（catalog 的 reasoning.defaultEffort 为空 → 选的是 Default 伪档位），真实请求体只有 provider/model/maxTokens，**不带 reasoning_effort**。诊断入口：会话 session.v4.jsonl.zstd 的 request/header 记录里看 config 字段，没有 reasoningEffort 就实锤。修法：reasoningGuard.forceEffort + forceEffortModels，由 injectThinkingEffort 在转发前补档（日志「客户端未声明思考档位，按配置补 reasoning_effort=high」），补档后原有「换连接+换会话重抽」才会真正生效。**不要**再走给 dsh-claude-style/lib/client.js 打补丁的老路：该文件 2026-11-10 12:35 被重建后 11-09 的 effort 补丁整段消失（patch-claude-style-effort.mjs --check 报 NEEDS_REVIEW，六条锚点全归零），profile 每次重建都会重演。补档只影响「客户端没说话」的情况：显式 off / thinking 原样透传。
 - **四次修复（2026-11-10 傍晚）：探针把用户的等待放大了**。三次修完后守卫确实上场，但每个请求要空等 85 秒（用户手动点停止）。代码级原因有三层：① `probeReasoningStream` 只在**第一个正文 delta** 时返回 `streamEncrypted`，而加密那一路思考阶段整段静默（无明文 `reasoning_content`、无正文），于是"判定"的延迟就等于那一次尝试的整段思考时长（`zgate.log` 实测两次判定隔 61 秒）；② 重抽预算花完的最后一发仍用无上限探针，再叠一段空等；③ 跳过期命中就续期，窗口过去也探不回来。现网口径：`probeSeconds`（缺省 12）到点换连接重抽；重抽预算花完或处于跳过期时**不探测、直接放行上游原始流**并插一条按成因写的提示（超时说"探测超时"、`reasoning.encrypted` 才说"只回加密"）；`guardInSkip` 到期清计数再复探，进跳过表改成"自上一条明文以来连续 N 轮失败"。**诊断入口**：日志里出现 `内没有可判定的思考信号（上游静默）` = 探针超时在换连接，`连续 N 次探测超时` = 已放弃探测直接放行；两者都在 `probeSeconds` 附近出现即说明修复在位。参数联动：`probeSeconds` 要大于正常流的首字节耗时（明文实测最高 13.5 秒 → 配置 15），小了会把慢流误判成静默；`maxRetries` 大于 1 在窗口期纯属白等（12:01 连续 3/3、13:20 连续 2/2 都落回同一后端）。
 
-## 43. 配置加了渠道、进程没重载：整条降级链静默退回串行 【通用】
+## 43. 配置加了渠道、进程没重载：整条降级链静默退回串行（旧判据，2026-11-10 深夜起改为逐跳取值） 【通用】
 
 > **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；当时 `Gemini-AIS` 改成 7 跳全 GM，
 > 哈基米 3.8 被拆成独立单跳模型（排在 AIS 前面）。

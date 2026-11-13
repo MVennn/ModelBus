@@ -232,7 +232,7 @@ DeepSeek-4.1-Flash
 |---|---|
 | `providers/qwen/.env.local` | `QWEN_API_KEY` / `QWEN_BASE`（gitignored，唯一持久落点） |
 | `providers/qwen/qwen_sync.py` | 目录 → `qwen:` 前缀播种进免费组；`--only` / `--all-chat` / `--probe-file` |
-| `providers/qwen/cache/freetier_20261028.txt` | 118 个家族的控制台快照（`family <= id,id`），漏斗的输入 |
+| `providers/qwen/cache/freetier_<日期>.txt` | 控制台导出的家族快照（`family <= id,id`），漏斗的输入。**本机一次性产物**，`cache/` 被 `.gitignore` 排除，仓库与 CI 里没有这份文件；2026-10-28 那份 118 个家族 |
 
 ### 5.2 改
 

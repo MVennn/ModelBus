@@ -1,8 +1,8 @@
 # 七牛云 AI 网关（api.qnaigc.com）
 
 > **一句话**：七牛云的 AI 推理网关只提供 Anthropic Messages 端点，经 `zgate` 的
-> `QN` 渠道 + 协议桥接入；目前收了 2 个**限时免费到 2026-11-30** 的模型
-> （`Conatus` / `Kimi-K3`），过期后 `model_alias.py` 自动剔除，不需要人回来改配置。
+> `QN` 渠道 + 协议桥接入；目前只收 1 个**限时免费到 2026-11-30** 的模型
+> （`Conatus`；同批收过的 `Kimi-K3` 已于 2026-10-27 被上游 retired 剔除），过期后 `model_alias.py` 自动剔除，不需要人回来改配置。
 
 ---
 
@@ -14,7 +14,7 @@
 | 渠道代号 | `QN` |
 | 认证 | `x-api-key`（`anthropic-version: 2023-06-01`） |
 | 凭据位置 | 环境变量 **`QINIU_API_KEY`**，或 `providers/qiniu/.env.local`（gitignored） |
-| 现状 | 2 个模型，都在免费组：`qiniu/conatus-free` → **`Conatus`**，`moonshotai/kimi-k3-free` → **`Kimi-K3`**（显示名只留原名，不带 `-Free`） |
+| 现状 | 1 个模型，在免费组：`qiniu/conatus-free` → **`Conatus`**（显示名只留原名，不带 `-Free`）。2026-11-13 实测：`model-alias-map.json` 里带 `QN` 跳的只有这一条，`/v1/models` 19 条里没有 Kimi |
 | 免费期 | **2026-11-30** 截止（`model_alias.py` 的 `QN_FREE_UNTIL`） |
 
 为什么按「免费」记账：这段是**限时免费**，边际单价 0。注意 `price_of` 只对 id 以
@@ -57,23 +57,24 @@ deepseek-v4.1-flash」，同目录里也确有 `deepseek/deepseek-v4.1-flash` �
 | 模型 | 结果 | 说明 |
 |---|---|---|
 | `qiniu/conatus-free` | ✅ 200 | 已收录 |
-| `moonshotai/kimi-k3-free` | ✅ 200，首字约 0.5 s | 1M 上下文；**已收录**（显示名 `Kimi-K3`，免费组） |
+| `moonshotai/kimi-k3-free` | ❌ 2026-10-27 被上游 retired | 曾收录为 `Kimi-K3`（免费组），已从 alias map 与分组里消失；复现见 [PITFALLS.md](PITFALLS.md) §37 |
 | `nvidia/nemotron-3-ultra-550b-a55b0-free` | ❌ 502 暂时不可用 | 上游偶发，可重试 |
 | `z-ai/glm-4.5-air-free` | ❌ 已于 2026-06-25 退役 | 别收 |
 
-只收这两个：免费组刻意保持精简（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4），
-多收一个就多一份「点进去报错」的概率；两个都在限免期内实测 200。
+只收这一个：免费组刻意保持精简（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4），
+多收一个就多一份「点进去报错」的概率；`Conatus` 在限免期内实测 200。
 
 ---
 
 ## 4. 怎么加/删模型
 
-种子写在 `provider_config.json` 的 `opencode-go-chat-free` 里，带 `qn:` 前缀：
+种子写在 `provider_config.json` 的 `opencode-go-chat-free` 里，带 `qn:` 前缀。历史上形如：
 
 ```
 qn:qiniu/conatus-free
-qn:moonshotai/kimi-k3-free
 ```
+
+> 2026-11-13 实测：`provider_config.json` 里已经没有 `qn:` 字面量 —— `model_alias.py --apply` 会用显示名整份重写 `providerRules`，种子被清掉后靠 alias map 的 chain 延续（见下段）。所以「查种子」要看 `~/.zcode/v2/model-alias-map.json` 的 `chain`，不是配置里的字符串。
 
 改了之后归一化：
 
@@ -95,7 +96,7 @@ alias map 被删重建时，种子要重新写回去。
 | 端点数 | 只有 Messages | 只有 Messages |
 | 免费性质 | 每模型 1M 试用 + ¥300 一年期预付 | 限时免费（到 2026-11-30） |
 | 记账 | 0（`QW_CREDIT_UNTIL`） | 0（`QN_FREE_UNTIL`） |
-| 收录策略 | 只留主力链尾跳，集合体已下线 | 只留 2 个限免模型进免费组 |
+| 收录策略 | 只留主力链尾跳，集合体已下线 | 只留 1 个限免模型进免费组 |
 | 代码谓词 | `isQwen()` = `qwen:` 前缀 | `isQiniu()` = `qn:` 前缀 |
 
 > 两个谓词都是**前缀判定、不是渠道判定**（`gateways/zgate/internal/router/router.go:2474`）。它们只在 `router.go:598` 那处「非 chat 路径 + 带渠道前缀的裸 model → 400」里生效；alias 统一名（不带前缀）走正常路由。照抄千问分支时别把它当渠道识别用。

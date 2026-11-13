@@ -1217,7 +1217,7 @@ ZCode 的每日自动收录任务报「触发运行失败」。根因是自动�
   WorkBuddy 18 个模型并入五个 chat 组，与同步前逐个对账一致
 - 调整 文档 —— MAINTENANCE §6 每日任务改 12:00 并补 key 来源、§7 登记两条脚本
   待办；TROUBLESHOOTING 补 §13「每日自动收录的体检刷出一片 400 / 403」
-- 新增 数据 —— 两份 Go 同步报告（`evidence/go-model-sync/go-model-sync-20261022-*.md`）
+- 新增 数据 —— 两份 Go 同步报告（`evidence/go-model-sync-20261022-*.md`，平铺在 `evidence/` 根，当时的子目录写法已废弃）
 
 ### 守护器生命周期加固（2026-10-21 深夜）
 
@@ -1296,7 +1296,7 @@ ZCode 的每日自动收录任务报「触发运行失败」。根因是自动�
   与 `workbuddy/cache/wb_zcode_probe.json` 覆盖，2026-10-21 删除。
 - 调整 数据 —— `probe_results.json` / `bench_results.json` / `bench_clean.json`：从 `scripts/` 迁入 `opencode-go/probe/results/20261019/`。
 - 调整 数据 —— `wb_panel_models.json`：从原 `audit/` 迁入 `evidence/`。
-- 调整 数据 —— `go-model-sync-*.md`（5 份）：从原 `audit/` 迁入 `evidence/go-model-sync/`。
+- 调整 数据 —— `go-model-sync-*.md`（5 份）：从原 `audit/` 迁入 `evidence/`（平铺，现文件名形如 `go-model-sync-20261113-120007.md`）。
 - 调整 文档 —— 新增根 `README.md`（门面：这是什么 / 适用环境 / 快速开始 / 文件清单 / 已知坑）。
 - 调整 文档 —— 新增根 `AGENTS.md`（机器协议：PROGRESS 按逻辑任务分家 / 凭据走环境变量 / CodeGraph）。
 - 调整 文档 —— 新增根 `CHANGELOG.md`（本文件）与根 `NOTICE`（第三方声明）。

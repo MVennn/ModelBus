@@ -522,11 +522,11 @@ python tools/model_alias.py --check --arena --scores \
 
 ---
 
-## 9. 维度补遗（2026-11-11 记忆合并落地）
+## 8. 维度补遗（2026-11-11 记忆合并落地）
 
 > 本节收录链序、目录条数、档位投影、守门前提、ondemand 唤醒五组判据；每节只写仓内别处没有或已过时的部分。
 
-### 9.1 链序第一维：`CHANNEL_RANK`（`TAIL_HOPS` 已退役）
+### 8.1 链序第一维：`CHANNEL_RANK`（`TAIL_HOPS` 已退役）
 
 链序是**三维排序**：渠道 rank → 跳级优先级 → 折算价升序。第一维现值：
 
@@ -544,20 +544,20 @@ python tools/model_alias.py --check --arena --scores \
 
 **`DEMOTE_HOPS` 不可复活**：把 WB 跳降到 OC 之后躲限流，曾导致整条会话静默跑在 opencode 上计费。限流只许由 zgate 逐跳回落处理，回归由 `tests/test_model_alias_hop_order.py` 守。
 
-### 9.2 目录条数的四个数：20 / 47 / 56 / 73
+### 8.2 目录条数的四个数：19 / 42 / 56 / 72
 
 | 数 | 含义 | 出处 |
 |---|---|---|
-| 20 | alias 聚合后的模型条数，= zgate `canonical` 命名空间条数 | `model-alias-map.json` `models` 键数 |
-| 47 | 20 条名下的跳数总和（一条链 1～4 跳） | 逐条累加 `chain[].length` |
+| 19 | alias 聚合后的模型条数，= zgate `canonical` 命名空间条数 | `model-alias-map.json` `models` 键数 |
+| 42 | 19 条名下的跳数总和（一条链 1～4 跳） | 逐条累加 `chain[].length` |
 | 56 | WB 面板对话目录条目（cn 22 + global 34）；网关未重启时只有 34 个 global | `/panel/api/models` |
-| 73 | 历史 id → 现值 id 的映射条数（legacy 命名空间） | `model-alias-map.json` `legacy` |
+| 72 | 历史 id → 现值 id 的映射条数（legacy 命名空间） | `model-alias-map.json` `legacy` |
 
-`canonical` / `legacy` 分段与 93 = 20 + 73 在 [ROUTING-POLICY.md](ROUTING-POLICY.md) §scope 表已有，本节只补「四数并列 + 47 跳 + 56 面板」的对照与判据。
+`canonical` / `legacy` 分段与 91 = 19 + 72 在 [ROUTING-POLICY.md](ROUTING-POLICY.md) §scope 表已有，本节只补「四数并列 + 42 跳 + 56 面板」的对照与判据（四数实测 2026-11-13，56 面板为 2026-11-11 面板口径，会随上游目录漂）。
 
-判据：**面板条数属「CLI 菜单口径」，`/v1/models` 条数属「网关承诺口径」，两者不必相等也不该相等。**「面板 56 个、`/v1/models` 20 个」是正常态。查一个名字是否还在，用 `?scope=all` 看它是否只以 legacy 身份存在 —— 只在 legacy 意味着「可以继续用，但新配置不该再用这个名字」。
+判据：**面板条数属「CLI 菜单口径」，`/v1/models` 条数属「网关承诺口径」，两者不必相等也不该相等。**「面板 56 个、`/v1/models` 19 个」是正常态。查一个名字是否还在，用 `?scope=all` 看它是否只以 legacy 身份存在 —— 只在 legacy 意味着「可以继续用，但新配置不该再用这个名字」。
 
-### 9.3 档位投影到客户端：四层链与 `_efforts_lost` 守门
+### 8.3 档位投影到客户端：四层链与 `_efforts_lost` 守门
 
 ZCode `optionSpecs.reasoningLevel.values` 只是第二层，之后还有请求体与客户端投影两层，任一断链都表现为「只剩一个默认档」：
 
@@ -578,7 +578,7 @@ L4 投影规则（顺序不可换）：`map` 为 `"{}"` → 直接给空档位�
 
 反方向（源头退化、客户端保留旧档位）由 `_keep_efforts()` 承接，属**刻意保留，不算漂移** —— 把它也报出来会让每日检查长期红，最后没人看。
 
-### 9.4 守门规则的三条生效前提（现网现值）
+### 8.4 守门规则的三条生效前提（现网现值）
 
 `reasoningGuard` 只有三条同时成立才真的重抽，缺一条就静默不上场：
 
@@ -592,13 +592,13 @@ L4 投影规则（顺序不可换）：`map` 为 `"{}"` → 直接给空档位�
 
 调不动的旋钮：`probeSeconds` / `maxRetries` 调大只会让等待变长；上游双后端随机分流回加密 blob 时，没有任何参数能强制明文。
 
-### 9.5 ondemand 子进程：用一个「别名表里不存在」的名字唤醒
+### 8.5 ondemand 子进程：用一个「别名表里不存在」的名字唤醒
 
 zgate 的 `routeAttempt` 走 `bridge.Forward` 时**不会**调用 `s.prepare()`，只有 `routeFallback` 末尾才会 prepare。所以想唤醒一个 `ondemand` 子进程，必须拿**不在 alias map 里的模型名**发请求：名字一旦在别名表里，请求会被当成正常路由直接转发出去，子进程永远不启，表现为长时间挂住而不是报错。同理，判断端口是否被占要 `dial` 而不是 `bind` —— 同端口 `net.Listen` 能成功，`bind` 判占用必然误判成「没占」。
 
 ---
 
-## 8. 相关
+## 9. 相关
 
 - 价格 / 协议来源：[MODEL-PROVIDERS.md](MODEL-PROVIDERS.md)
 - 外部榜单与主力扩充口径：[BENCHMARKS.md](BENCHMARKS.md) §8

@@ -176,7 +176,7 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 
 ### 3.6 这些值填错，在 DSH 里到底会发生什么
 
-宿主侧实测（`evidence/agent-cap-dsh.md`）给出了后果链，不是所有字段都一样疼：
+宿主侧实测（原 `evidence/agent-cap-dsh.md`，2026-11-13 已并入结论卡 `evidence/topic-capability-fields.md`，台账见 `evidence/README.md`）给出了后果链，不是所有字段都一样疼：
 
 | 字段 | 宿主怎么用 | 填错的后果 |
 |---|---|---|
@@ -368,7 +368,7 @@ dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投
 
 ### 9.5 Gemini：接口不给，靠取证补
 
-GM 不会告诉你能力字段（`/v1/models` 只有 id，`/v1beta/models` 自报的 limit 与厂商文档也对不上），所以这条换个取法，证据落 `evidence/agent-gemini-truth.md`：
+GM 不会告诉你能力字段（`/v1/models` 只有 id，`/v1beta/models` 自报的 limit 与厂商文档也对不上），所以这条换个取法，证据落 `evidence/topic-gemini-channels.md`（原分片 `agent-gemini-truth.md` 已于 2026-11-13 并入该结论卡）：
 
 | 模型 | 关键证据 | 采用的结论 |
 |---|---|---|

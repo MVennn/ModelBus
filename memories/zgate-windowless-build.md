@@ -17,7 +17,10 @@
 
 ## agent 会话里起 zgate：只有 explorer 拉起能活
 
-> **2026-11-09 起本节为历史**：启动文件夹快捷方式 / HKCU Run daemon 已移除，现役自启为 `\ModelBus-zgate-hidden` + `\ModelBus-zgate-watchdog` 两个计划任务；会话里不要自行拉起，换版走 `tools/zgate-lifecycle/restart-zgate.cmd`。详见 `docs/ZGATE-LIFECYCLE.md`。
+> **2026-11-09 起本节为历史**：启动文件夹快捷方式 / HKCU Run daemon 已移除。
+> **现行自启是单个计划任务 `\ModelBus-zgate-watchdog`**（LogonTrigger 登录即拉起 + PT1M 每分钟兜底；
+> `\ModelBus-zgate-hidden` 已于 2026-11-11 删除，备份 `%USERPROFILE%\.dsh\backups\task-ModelBus-zgate-hidden-20261111-142620.xml`）。
+> 会话里不要自行拉起，换版走 `tools/zgate-lifecycle/restart-zgate.cmd`。详见 `docs/ZGATE-LIFECYCLE.md` §2.1。
 
 Windows **Job Object 会在 agent 会话结束时回收整棵进程树**。
 实测 `nohup` / `setsid` / `Start-Process` 起的 zgate 都会随会话消失；
@@ -42,7 +45,7 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"
 | dsh 重启为什么连坐 | dsh 退出时 TerminateJobObject 终止整棵子进程树；实测 13:27 被杀的那台，是 11:49 在会话里手工起的，不是 lnk 起的 |
 | 自愈实测 | 13:30:46 看门狗拉起（13:30:49 日志「已启动」）；手动 Stop-Process 后 25s 由看门狗拉回。新 zgate 父进程是 Task Scheduler 下的 powershell，随后成孤儿，与 dsh 无关 |
 | 结论 | 只要 zgate 由**登录自启 / 计划任务 / 看门狗**产生，重启 dsh 杀不到它；由会话产生就会陪葬 |
-| 禁 | 会话里禁止 `Start-Process zgate.exe` / `cmd /c` 直接拉起（会落进会话 Job Object 被回收）。改完 Go 代码由 agent 自动跑 `tools/zgate-lifecycle/restart-zgate.cmd` 换版；需要它起来用该命令（内部 `schtasks /run /tn \ModelBus-zgate-hidden`，父链在 Task Scheduler）或等看门狗；`swap-zgate.ps1` / `start-zgate.bat` 现为薄包装，同样转交计划任务，不再用 `Start-Process` |
+| 禁 | 会话里禁止 `Start-Process zgate.exe` / `cmd /c` 直接拉起（会落进会话 Job Object 被回收）。改完 Go 代码由 agent 自动跑 `tools/zgate-lifecycle/restart-zgate.cmd` 换版；需要它起来用该命令（内部 `schtasks /run /tn \ModelBus-zgate-watchdog`，父链在 Task Scheduler）或等看门狗；`swap-zgate.ps1` / `start-zgate.bat` 现为薄包装，同样转交计划任务，不再用 `Start-Process` |
 | 秒级守护（尽力而为） | `%LOCALAPPDATA%\ZCodeGateway\zgate-daemon.ps1` + HKCU Run 键 `ModelBus-zgate-daemon`，登录时由 explorer 拉起、10s 轮询；实测该脚本从无控制台上下文（WMI Create / EncodedCommand）启动会秒退，只有交互式登录态能常驻，故看门狗仍是兜底。**2026-11-09 已移除**（HKCU Run 值删除 + 进程杀掉）；现役登录自启为 `\ModelBus-zgate-hidden`，见下节 |
 
 ## 2026-11-09 自启收敛：弹窗来源与现行结构
@@ -64,8 +67,7 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"
 
 | 层 | 方式 | 弹窗 |
 |---|---|---|
-| 登录自启 | 计划任务 `\ModelBus-zgate-hidden`（AtLogOn, Interactive, Limited）→ `wscript //B //Nologo launch-zgate.vbs` → `start-zgate-nw.ps1` → `CreateNoWindow` 起 `zgate.exe serve` | 否 |
-| 兜底 | `\ModelBus-zgate-watchdog`（PT1M）→ `ensure-zgate.vbs` → 同一个 `start-zgate-nw.ps1` | 否 |
+| 登录自启 + 兜底（**2026-11-11 起并为单任务**） | 计划任务 `\ModelBus-zgate-watchdog`（LogonTrigger, Interactive/Limited + PT1M）→ `ensure-zgate.vbs` → `start-zgate-nw.ps1` → `CreateNoWindow` 起 `zgate.exe serve`；旧的 `\ModelBus-zgate-hidden`（AtLogOn）已删除 | 否 |
 | 产物 | `python gateways/zgate/build.py`（强制 `Subsystem = 2`） | 否 |
 
 `start-zgate-nw.ps1` 先 `Test-Up(127.0.0.1:7871, 1200ms)`：已起就写 `port already up, skip` 退出；
@@ -73,7 +75,7 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"
 **脚本跑完即退，不留常驻 powershell** —— 即「执行完自动杀死自己」。
 
 已删除：启动文件夹 `ModelBus zgate.lnk`、HKCU Run `ZcodeAIModels-zgate-daemon`（进程 9804 一并杀掉）、
-旧计划任务 `\ModelBus-zgate`（UAC 提权 `schtasks /Delete /F`，exit=0；现役登录自启已换成 `\ModelBus-zgate-hidden`，不删）。保留 `CSPPassword.ahk.lnk`
+旧计划任务 `\ModelBus-zgate`（UAC 提权 `schtasks /Delete /F`，exit=0）。**2026-11-11 追加**：`\ModelBus-zgate-hidden` 也已删除，登录自启并入 `\ModelBus-zgate-watchdog` 的 LogonTrigger。保留 `CSPPassword.ahk.lnk`
 （itzmx 加密包自动填密码，AHK v2 无控制台）。备份/回滚：`%LOCALAPPDATA%\ZCodeGateway\autostart-backup-20261109\restore-autostart.ps1`。
 
 **验证**：`wscript //B //Nologo launch-zgate.vbs` → `zgate-launch.log` 记 `port already up, skip`，
