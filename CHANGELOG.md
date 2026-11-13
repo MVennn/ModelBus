@@ -478,7 +478,7 @@
 - `tools/sync_report.py` / `tools/check-secrets.py` / `providers/workbuddy/workbuddy_probe_zcode.py`
   的 subprocess 调用补 `encoding="utf-8", errors="replace"`（换机或 UTF-8 模式失效时，
   中文输出不再 UnicodeDecodeError）
-- `docs/PITFALLS.md` §71 删掉从未入库的测试文件引用，验证方式改为在线实测
+- `docs/PITFALLS.md` §23 删掉从未入库的测试文件引用，验证方式改为在线实测
 - `docs/TOOLS.md` zgate 行 Qoder 策略 `always` → `ondemand`（与 zgate.json 一致）
 - `memories/opencode-go-zcode-models.md` 更新为现行定时任务（12:00 / `automation-3e2f8a53-*`）
 
