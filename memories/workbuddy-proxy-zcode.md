@@ -62,7 +62,7 @@ metadata:
 
 | 文件 | 作用 |
 |---|---|
-| `cache/wb_pricing.json` | 网关 56 模型倍率/上下文/输出上限/effort 档快照（2026-11-13 实测 cache/ 下只剩它与其 `.bak-<ts>`） |
+| `cache/wb_pricing.json` | 网关 56 模型倍率/上下文/输出上限/effort 档快照（2026-11-13 实测 cache/ 下：它本身 + `wb_pricing.json.bak-20261112-120012` / `.bak-20261113-120008` + 一份 `provider_config.json.pre-alias-fix-20261030-194243.bak`，全部被 `.gitignore` 排除） |
 | `workbuddy_probe.py` | 用真实请求体探测（原 `workbuddy_probe_zcode.py`） |
 | `effective_body.js` | 复刻引擎规则解析，算真实请求体（原 `zcode_effective_body.js`） |
 | `workbuddy_sync.py` | 按倍率分档生成三个 provider 并写配置（`--apply` 才写；原 `workbuddy_zcode_sync.py`） |

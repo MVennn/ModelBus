@@ -46,7 +46,7 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"
 | 自愈实测 | 13:30:46 看门狗拉起（13:30:49 日志「已启动」）；手动 Stop-Process 后 25s 由看门狗拉回。新 zgate 父进程是 Task Scheduler 下的 powershell，随后成孤儿，与 dsh 无关 |
 | 结论 | 只要 zgate 由**登录自启 / 计划任务 / 看门狗**产生，重启 dsh 杀不到它；由会话产生就会陪葬 |
 | 禁 | 会话里禁止 `Start-Process zgate.exe` / `cmd /c` 直接拉起（会落进会话 Job Object 被回收）。改完 Go 代码由 agent 自动跑 `tools/zgate-lifecycle/restart-zgate.cmd` 换版；需要它起来用该命令（内部 `schtasks /run /tn \ModelBus-zgate-watchdog`，父链在 Task Scheduler）或等看门狗；`swap-zgate.ps1` / `start-zgate.bat` 现为薄包装，同样转交计划任务，不再用 `Start-Process` |
-| 秒级守护（尽力而为） | `%LOCALAPPDATA%\ZCodeGateway\zgate-daemon.ps1` + HKCU Run 键 `ModelBus-zgate-daemon`，登录时由 explorer 拉起、10s 轮询；实测该脚本从无控制台上下文（WMI Create / EncodedCommand）启动会秒退，只有交互式登录态能常驻，故看门狗仍是兜底。**2026-11-09 已移除**（HKCU Run 值删除 + 进程杀掉）；现役登录自启为 `\ModelBus-zgate-hidden`，见下节 |
+| 秒级守护（尽力而为） | `%LOCALAPPDATA%\ZCodeGateway\zgate-daemon.ps1` + HKCU Run 键 `ModelBus-zgate-daemon`，登录时由 explorer 拉起、10s 轮询；实测该脚本从无控制台上下文（WMI Create / EncodedCommand）启动会秒退，只有交互式登录态能常驻，故看门狗仍是兜底。**2026-11-09 已移除**（HKCU Run 值删除 + 进程杀掉）；现役登录自启为 `\ModelBus-zgate-watchdog`（LogonTrigger + PT1M），见下节 |
 
 ## 2026-11-09 自启收敛：弹窗来源与现行结构
 
@@ -56,7 +56,7 @@ Start-Process explorer.exe -ArgumentList '"<启动文件夹>\ModelBus zgate.lnk"
 
 | 窗口 | 来源 | 判定 |
 |---|---|---|
-| Windows Terminal（标题 `…\gateways\zgate\zgate.exe`，07:10:39，父 svchost=Task Scheduler） | 计划任务 `\ModelBus-zgate`（旧，已删；现役 `\ModelBus-zgate-hidden`）直接拉起 `zgate.exe serve`；Win11 默认终端接管其 console → 可见窗口 | 网关本体**有用**；弹窗 = 控制台版产物 + 终端接管 |
+| Windows Terminal（标题 `…\gateways\zgate\zgate.exe`，07:10:39，父 svchost=Task Scheduler） | 计划任务 `\ModelBus-zgate`（旧，已删；现役 `\ModelBus-zgate-watchdog`）直接拉起 `zgate.exe serve`；Win11 默认终端接管其 console → 可见窗口 | 网关本体**有用**；弹窗 = 控制台版产物 + 终端接管 |
 | 第二个实例 | HKCU Run `ZcodeAIModels-zgate-daemon`（07:11:16，父 explorer）+ 启动文件夹 `ModelBus zgate.lnk` 与计划任务重复，抢 7871 失败退出（`zgate.log` 记 `bind: Only one usage of each socket address`） | 冗余，已删 |
 
 **根因**：`gateways/zgate/zgate.exe` 被裸 `go build .` 覆盖成控制台版（`build.py --check` 报 `Subsystem = 3`；

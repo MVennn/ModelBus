@@ -5,10 +5,10 @@
 ## 1. 现行：远程 GM 直连（正本 §4.11，这里只留「为什么」）
 
 - 网关 `https://catiecli.sukaka.top/v1`，`GET /v1/models` 自取目录（2026-11-10 返回 7 个 `ais-gemini-*` id）。`Gemini-AIS` = `ais-gemini-3.8-flash` 领头的同站降级链，2026-11-11 11:03 起只留 3 跳（3.8 → 3.7 → 3.6），后四跳记 `dropped_hops`、仍留在 `legacy_ids`。
-- 渠道 `GM` 远程直连无本地子进程；`Authorization: Bearer` 必须由 zgate `applyHeaders` 覆盖注入，透传空 Bearer 上游回 401 `未提供API Key`。
+- 渠道 `GM` 远程直连无本地子进程；`Authorization: Bearer` 必须由 zgate 的 `forwardHeaders`（`gateways/zgate/internal/router/router.go:815`，覆盖名单见 `:833`）覆盖注入，透传空 Bearer 上游回 401 `未提供API Key`。
 - 价：无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返回 `None` → 当死链丢弃，**新增型号必须先补价**。
 - 思考参数**未定论**：3.8 / 3.7 常态 503 拿不到稳定样本；3.6 上 `{"thinking":{"type":"disabled"}}` 首字 2.27s（对照 `reasoning_effort:minimal` 12.67s），样本不足，暂不配 `optionSpecs.reasoningLevel`。
-- GM 是仅有的两个开 `channelPolicy` 的渠道之一（另一个 HJ 哈基米，2026-11-11 整族下线）—— 竞速、静默冷却、403 暂停只对这两个生效。
+- `channelPolicy` 只对 WB / OC / QD / GM / HJ 五家配了策略（`gateways/zgate/zgate.json`）；GM 现行 `hedgeAfterMs 0` / `maxParallel 1` 即**不对冲**，冷却只用 `soft 15` / `busy 10` / `timeout 20`，真正还在对冲的只有 WB（`hedgeAfterMs 18000` / `maxParallel 2`）。
 - 原证据：agent-gemini-truth.md、agent-gemini-thinking-proof.md、agent-gemini-ais-alias.md、agent-gemini-merge-plan.md。
 
 ## 2. 已弃：本地 CLIProxyAPI 中转（CP）

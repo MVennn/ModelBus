@@ -21,12 +21,14 @@
 
 ## 整理记录（2026-11-13）
 
-- 75 篇 md → 8 篇：5 张主题卡 + 本台账 + 1 份最新收录快照 + 只读的历史台账。
+- 60 篇入库 md → 8 篇：5 张主题卡 + 本台账 + 1 份最新收录快照 + 只读的历史台账（另有 14 篇本地未跟踪分片同批清理）。
 - 判定口径：结论已被 `docs/` 正本吸收 → 删并留指针；未吸收 → 进对应主题卡；纯过程细节（逐次探测、逐行日志、中间结论）不留。
 - 同时删除 1 个被 `.git/info/exclude` 挡住的残留备份 `agent-effort-audit.md.bak-hy3xcause-20261110`。
 - 恢复方式：入库文件 `git show HEAD:evidence/<文件名>`；被 `.git/info/exclude` 挡住的本地分片没有 git 历史，从 `%TEMP%\doc-audit\S2-removed\` 拷回。
 
 ## 台账（一行一篇，按主题分组）
+
+> **14 行原件的正文从未入库**（当初被 `.git/info/exclude` 挡住，`git log --all` 对它们零记录，前缀均为 `agent-gemini`）：`agent-gemini-truth.md`、`-channels-local.md`、`-channels-web.md`、`-go-cleanup.md`、`-ais-alias.md`、`-thinking-proof.md`、`-merge-plan.md`、`-memory-docs.md`、`-memory-cleanup.md`、`-logs.md`、`-code.md`、`-runtime.md`、`-provider-locate.md`、`-docs-cleanup.md`。这 14 行只能从 `%TEMP%\doc-audit\S2-removed\` 拷回，`git show HEAD:evidence/<文件名>` 对它们必然失败。
 
 ### 路由与运行态（→ `topic-routing-runtime.md`）
 
@@ -111,7 +113,7 @@
 | agent-admission-price.md | 收录 | 收录价格口径正规化验收（m01046 / m01047） | topic-sync-ops.md §2 |
 | agent-audit.md | 运维 | 1153 文本文件 / 45,225,871 B；`zgate.exe.bak-*` 64,514,048 B；请求日志 7 天 27,688,206 B / 40,351 行无 retention；`.bak-*` 49 份 849,378 B；P0=0 / P1=6 / P2=8 | topic-sync-ops.md §3 |
 | agent-git.md | 运维 | 2026-11-10 17 个 commit / 70 去重文件 / +14391 −2612 | topic-sync-ops.md §3 |
-| agent-adaptation.md | 评估 | 反代 / 模型提供商适配性评估终稿（真实项目根 `F:\Project\ModelBus`，junction 不是项目身份） | topic-sync-ops.md §3 |
+| agent-adaptation.md | 评估 | 反代 / 模型提供商适配性评估终稿（真实项目根用 `git rev-parse --show-toplevel` 解析，junction 不是项目身份） | topic-sync-ops.md §3 |
 | agent-aggregation.md | 评估 | 聚合性评估分片终稿 | topic-sync-ops.md §3 |
 | agent-automation.md | 评估 | 自动性边界：哪一步脚本自动、哪一步必须人拍板 | topic-sync-ops.md §3 |
 | agent-reasoning-history.md | 展示 | 网关与流式两条线已闭环；档位 4 空档 + 1 副作用；展示层悬空；`reasoningGuard.mode` 被并行会话改回 models | topic-sync-ops.md §3 §4 |
