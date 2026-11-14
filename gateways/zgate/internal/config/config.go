@@ -195,11 +195,19 @@ type Config struct {
 	// 用户在 DSH 里看到的是「转圈几分钟然后断开重试」，同一个问题在上游被算两遍。
 	// 预算压在链这一层而不是跳这一层：跳层能给的只有「每跳等多久」，加起来仍然
 	// 没有上界；只有链层才知道用户愿意等多久。
-	ChainBudgetSec int                      `json:"chainBudgetSec"`
-	ChannelPolicy  map[string]ChannelPolicy `json:"channelPolicy"`
-	Log            Log                      `json:"log"`
-	Upstreams      map[string]Upstream      `json:"upstreams"`
-	Children       map[string]Child         `json:"children"`
+	ChainBudgetSec int `json:"chainBudgetSec"`
+	// MaxRequestBodyBytes：单个请求体的上限。0/缺省 = 32 MiB。
+	// 网关是常驻进程，过去 io.ReadAll 不设上限，本机任意进程一条超大 POST
+	// 就能把它打到 OOM；超限现在直接 413。
+	MaxRequestBodyBytes int64 `json:"maxRequestBodyBytes"`
+	// AdminToken：管理面（/admin/*）的口令。空 = 不要求口令，但仍强制
+	// 「回环来源 + X-Zgate-Admin 头 + 同源 Origin」。也可用环境变量
+	// ZGATE_ADMIN_TOKEN 提供（配置优先）。
+	AdminToken    string                   `json:"adminToken"`
+	ChannelPolicy map[string]ChannelPolicy `json:"channelPolicy"`
+	Log           Log                      `json:"log"`
+	Upstreams     map[string]Upstream      `json:"upstreams"`
+	Children      map[string]Child         `json:"children"`
 
 	Path string `json:"-"`
 	Dir  string `json:"-"`
@@ -327,6 +335,12 @@ func (c *Config) applyDefaults() {
 	}
 	if c.UpstreamHeaderTimeoutSec == 0 {
 		c.UpstreamHeaderTimeoutSec = 12
+	}
+	if c.MaxRequestBodyBytes <= 0 {
+		c.MaxRequestBodyBytes = 32 << 20
+	}
+	if c.AdminToken == "" {
+		c.AdminToken = strings.TrimSpace(os.Getenv("ZGATE_ADMIN_TOKEN"))
 	}
 	if c.Log.Dir == "" {
 		c.Log.Dir = filepath.Join(os.Getenv("LOCALAPPDATA"), "ZCodeGateway")

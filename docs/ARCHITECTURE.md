@@ -159,9 +159,48 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
    `x-opencode-session`）→ zgate 的第二个监听器，`config.json` 里 `profiles.client-headers`。
    它现在根本没在跑，但迟早要跑，别再多一个 Node 进程。
 2. `/health` 已落地为统一视图：七段 upstream（OC / WB / QD / QW / QN / GM / HJ）各带 `base` / `key` / `child` / `state` / `last_error`，
-   加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias.models`、`cooling`、`uptime_s`，以及 2026-11-10 新增的 `early`（提前交卷计数）、`chain`（链预算）、`guard`（思考守卫档位）；`GET /v1/models` 返回 alias 聚合 catalog，`?scope=` 分 canonical / legacy / all（缺省 canonical）。
+   加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias`（`path` / `models` / `revision`）、`cooling`、`uptime_s`、`version`、`draining`、
+   `stats`（请求数 / 分位延迟 / 状态码分布 / 慢请求样本），以及 2026-11-10 新增的 `early`（提前交卷计数）、`chain`（链预算）、`guard`（思考守卫档位）、`hops`（每跳计数）；
+   `GET /v1/models` 返回 alias 聚合目录，`?scope=` 分 canonical / legacy / all（缺省 canonical），响应带 `ETag`，命中 `If-None-Match` 直接 304。完整端点清单与管理面校验见 §3.6。
 3. 日志合并：`zgate.log`（按大小轮转）+ 子进程 stdout/stderr 各一份，
    目录统一到 `%LOCALAPPDATA%\ZCodeGateway\`。今天的四套日志名保留一版兼容。
+
+### 3.6 HTTP 面（7871 上的非代理端点）
+
+2026-11-14 起，7871 上除 `/v1/*` 代理流量外还挂着三类非代理入口：探活、模型目录、指标与管理面。
+「进程活着并且有活路」看 `/health`；「跑得怎么样」的账本在 `/admin/stats` 与 `/metrics`。
+
+| 端点 | 方法 | 作用 | 门槛 |
+| --- | --- | --- | --- |
+| `/health` | GET | 健康快照：七段 upstream + `children` + `alias`（含 `revision`）+ `cooling` + `uptime_s` + `version` + `draining` + `stats` + `race` + `early` + `chain` + `guard` + `hops` | 无 |
+| `/models`、`/v1/models` | GET | alias 聚合目录，`?scope=canonical\|legacy\|all`（缺省 canonical）；`/v1` 前缀剥掉后落同一 handler；带 `ETag`（`"zgate-<alias rev>-<scope>"`），`If-None-Match` 命中回 304 且无 body | 无 |
+| `/metrics` | GET | Prometheus 文本（0.0.4）：`zgate_requests_total` / `zgate_request_duration_seconds` 直方图 / `zgate_hop_total` / `zgate_alias_models` / `zgate_alias_revision` / `zgate_child_up` / `zgate_draining` | 回环 + 同源 |
+| `/admin/reload` | POST | 热加载 `zgate.json` 的策略 / 空闲窗口 / 上游 `base` 与 key；监听地址、新增子进程、alias map 路径仍需重启 | 管理面三道 |
+| `/admin/routes` | GET | 整张路由表：每模型一条，带链跳（渠道 / 协议 / 价格）与每跳当前状态（`ready` / `cool_until_HH:MM:SS` / `silent_until_…` / `channel_off`），附 `revision` 与 `total` | 管理面三道 |
+| `/admin/explain` | GET | `?model=<名字>` 回答「这个名字最后打到哪」：命中给链与每跳状态，未命中给前缀兜底（`fallback_channel`），并附思考守卫档位 | 管理面三道 |
+| `/admin/stats` | GET | 运行态快照：`requests` / `errors` / `inflight` / `bytes_in` / `bytes_out` / `latency_ms{p50,p90,p99}` / `status_class` / `rps` / `slow`（最近 20 条 ≥5s 慢请求，带请求号）/ `alias` / `cooling` / `children` / `draining` | 管理面三道 |
+| `/admin/drain` | POST | 优雅收尾：置 `draining` 后等手上请求走完（`?wait_ms=`，缺省 5000，上限 30000），返回 `{ok,draining,inflight,waited_ms,timed_out}`；幂等，不撤销 `draining` | 管理面三道 |
+| `/admin/logs` | GET | 日志尾部若干行：`?lines=`（缺省 200，上限 2000）、`?filter=` 子串过滤；返回 `{ok,path,lines,count,truncated}`，只回看最后 512 KiB | 管理面三道 |
+| `/admin/pprof/*` | GET | 标准库 pprof：`index` / `profile` / `trace` / `cmdline` / `symbol`，其余交 `pprof.Handler` | 管理面三道 |
+
+**管理面三道校验**（`internal/router/admin.go` 的 `adminGuard`，三条同时成立才放行）：
+
+1. **回环来源**：`RemoteAddr` 必须是 loopback，否则 403 `admin endpoints are loopback-only`；
+2. **`X-Zgate-Admin` 头**：值非空即可，缺了回 403 `missing X-Zgate-Admin header (blocks cross-site POST)` —— 浏览器跨站表单加不了自定义头，这条挡住「任意网页一个 `text/plain` POST 就让网关重读配置」；
+3. **同源 `Origin`**：带了 `Origin` 就必须是回环来源，否则 403 `cross-origin admin request rejected`。
+
+配置里 `adminToken` 非空（空则读环境变量 `ZGATE_ADMIN_TOKEN`）时再加一道口令：`X-Zgate-Token` 或 `Authorization: Bearer <token>`，
+`subtle.ConstantTimeCompare` 比较，不符回 403 `bad admin token`。`/metrics` 只做「回环 + 同源」，故意不要求 `X-Zgate-Admin` —— 抓取端不该为只读指标改请求头。
+
+**请求号与跳头**（2026-11-14 新增，`internal/router/reqid.go`）：每个请求一个 id —— 客户端带了 `X-Request-Id` 就沿用，否则网关生成 16 位十六进制。
+响应头回写 `X-Zgate-Request-Id`，同一个 id 会带给上游（`X-Request-Id`）、写进每个请求的收尾日志行 `[req] <id> <METHOD> <path> …`、并出现在 `/admin/stats.slow` 的样本里；
+收尾日志对 `/health` 与 `/metrics` 不记，避免面板轮询把日志刷满。成功转发时还回写 `X-Zgate-Channel` / `X-Zgate-Model` / `X-Zgate-Attempt`（本请求第几次打上游，跨回落累计）/ `X-Zgate-Hop`（竞速模式下的跳标记）——
+客户端只凭响应头就知道实际命中哪条上游、前面失败过几次，不必翻日志。边界：提前交卷（`earlySSE`）的流式请求头已经发出，这四个头设不进去。
+
+**请求体上限**：`/v1/*` 的 body 统一套 `http.MaxBytesReader`，上限 `maxRequestBodyBytes`（`zgate.json` 可覆盖，缺省 32 MiB），超限回 413 `request body exceeds N bytes`，读失败回 400 `invalid request body`。
+
+**收尾期**：收到 `SIGTERM` / `Ctrl+C` 先置 `draining`（`/health` 与 `zgate_draining` 立刻可见），此后每个响应都带 `Connection: close`，让客户端这一轮结束就别复用即将断开的连接。
+换版脚本（`tools/zgate-lifecycle/deploy-zgate.ps1` 第 3 步）在 `Stop-Process` 之前会先 `POST /admin/drain?wait_ms=8000`，把「硬切正在流式输出的请求」换成「等它写完再停」；旧二进制没有这个端点时回 404，脚本退回原行为。注意这条请求自己也算在 `inflight` 里，所以判定是 `inflight <= 1`。
 
 ---
 

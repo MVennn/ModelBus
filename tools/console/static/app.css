@@ -152,6 +152,8 @@ code, .num, .mono { font-family: var(--mb-mono); font-variant-numeric: tabular-n
 .grid { display: grid; gap: var(--mb-sp-4); }
 .grid.kpi { grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .grid.two { grid-template-columns: repeat(auto-fit, minmax(340px, 1fr)); }
+/* 路由表：每个渠道一张卡片，窄屏按列堆叠 */
+.grid.channels { grid-template-columns: repeat(auto-fit, minmax(440px, 1fr)); }
 
 /* ---- KPI 卡（.card / .card-body / .subheader 由 Tabler 提供） ---- */
 .kpi-value { font-size: 28px; font-weight: 600; letter-spacing: -.02em; line-height: 1.2; color: var(--mb-fg-1); }
@@ -166,6 +168,10 @@ code, .num, .mono { font-family: var(--mb-mono); font-variant-numeric: tabular-n
 /* ---- 表格里的项目专有件 ---- */
 .cell-clip { display: inline-block; max-width: 360px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom; }
 .table td .sub { display: block; color: var(--mb-fg-3); font-size: 12px; margin-top: 2px; }
+/* 渠道分组卡片头（Tabler .card-header 上叠一层横向 flex） */
+.chan-head { display: flex; align-items: center; gap: var(--mb-sp-2); flex-wrap: wrap; width: 100%; }
+.chan-name { font-weight: 600; font-size: 14px; color: var(--mb-fg-1); }
+.chan-meta { color: var(--mb-fg-2); font-size: 12px; margin-inline-start: auto; }
 
 /* ---- 代码块 / 键值表 ---- */
 .code-block { font-family: var(--mb-mono); font-size: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-all; background: var(--mb-bg-2); border: 1px solid var(--mb-stroke-2); border-radius: var(--mb-radius-s); padding: var(--mb-sp-3); max-height: 420px; overflow: auto; color: var(--mb-fg-1); }
@@ -190,5 +196,7 @@ code, .num, .mono { font-family: var(--mb-mono); font-variant-numeric: tabular-n
   .page-header .col-auto { flex-wrap: wrap; justify-content: flex-end; }
   .stamp { display: none; }
   .grid.two { grid-template-columns: 1fr; }
+  .grid.channels { grid-template-columns: 1fr; }
+  .chan-meta { margin-inline-start: 0; }
   .grid.kpi { grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
 }

@@ -129,7 +129,22 @@ try {
         Write-Log ('已暂停 {0}' -f $WatchdogTask)
     }
 
-    # 3) 停旧实例（winproc 的 Job Object 会一并回收它监管的 children）
+    # 3) 优雅收尾：先让旧实例进 draining 并等手上请求走完，再停进程。
+    #    新版才有 /admin/drain；旧版会回 404，此时退回直接停（等价于老行为）。
+    #    wait_ms 给 8 秒：超过它的多半是长流式请求，再等只是拖长换版窗口。
+    $drainUrl = $HealthUrl -replace '/health$', '/admin/drain?wait_ms=8000'
+    $drainHeaders = @{ 'X-Zgate-Admin' = '1' }
+    if ($env:ZGATE_ADMIN_TOKEN) { $drainHeaders['X-Zgate-Token'] = $env:ZGATE_ADMIN_TOKEN }
+    if (Test-Health $HealthUrl) {
+        try {
+            $dr = Invoke-WebRequest -Uri $drainUrl -Method Post -Headers $drainHeaders -UseBasicParsing -TimeoutSec 20
+            Write-Log ('优雅收尾：{0}' -f $dr.Content)
+        } catch {
+            Write-Log ('/admin/drain 不可用（旧版二进制或已退出），直接停进程：{0}' -f $_.Exception.Message)
+        }
+    }
+
+    # 4) 停旧实例（winproc 的 Job Object 会一并回收它监管的 children）
     $old = Get-Process -Name zgate -ErrorAction SilentlyContinue
     if ($old) {
         Write-Log ('停旧实例 pid={0}' -f (($old | Select-Object -ExpandProperty Id) -join ','))
@@ -143,7 +158,7 @@ try {
     }
     if (Get-Process -Name zgate -ErrorAction SilentlyContinue) { throw '旧实例未能停止，放弃换版' }
 
-    # 4) 备份 + 原子替换
+    # 5) 备份 + 原子替换
     $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
     $backup = $exe + '.bak-deploy-' + $stamp
     if (Test-Path $exe) { Copy-Item -LiteralPath $exe -Destination $backup -Force }
@@ -151,7 +166,7 @@ try {
     $replaced = $true
     Write-Log ('已替换 {0}（备份：{1}）' -f $exe, $backup)
 
-    # 5) 计划任务拉起：父链落在 Task Scheduler，脱离 CMD/DSH 会话树
+    # 6) 计划任务拉起：父链落在 Task Scheduler，脱离 CMD/DSH 会话树
     #    用 watchdog 拉起时先把它从「换版暂停」状态恢复：禁用态下的手动 /run 不可靠。
     if ($startTask -eq $WatchdogTask -and $watchdogPaused) {
         Enable-ScheduledTask -TaskName $WatchdogTask -ErrorAction Stop | Out-Null
@@ -160,7 +175,7 @@ try {
     }
     Invoke-ScheduledStart $startTask
 
-    # 6) 健康检查
+    # 7) 健康检查
     $ok = $false
     for ($i = 0; $i -lt $HealthRetries; $i++) {
         if (Test-Health $HealthUrl) { $ok = $true; break }

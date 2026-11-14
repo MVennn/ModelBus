@@ -923,3 +923,35 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **根因**：首版 `sources.py` 的 `SECRET_NAME` 写成 `r"(?i)(token|secret|cookie|...)"` —— 裸 `token` 是子串匹配，所有 `*_tokens` 业务计量字段名一并命中。`request-logs/requests-*.jsonl` 每行都带 `total_tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens`，这些是统计口径，不是凭据；`auths/*.json` 里的 `accessToken` / `refreshToken` 才是凭据。同一套正则既想防泄漏又想留统计，用子串匹配必然互相打架。
 - **怎么避**：字段名脱敏只认「凭据语境」精确词（`(access|refresh|id|auth)[_-]?token` / `secret` / `cookie` / `passwd` / `password` / `credential` / `authorization` / `api[_-]?key` / `private`），值形状脱敏单独用 `SECRET_VALUE`（`sk-…` / `Bearer …`）。改完必须跑行为等价单测：一边断言 `accessToken` / `refreshToken` / `cookie` / `api_key` / `authorization` / 嵌套 `secret` / 列表 `password` / `Bearer` / `sk-` 全被抹，另一边断言 `total_tokens` / `tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens` 全保留（`.work/test-redaction.py` 13 项 PASS）。验收 grep 也分两套口径：对 `/api/config`、`/api/accounts` 用 strict 零命中，对流量 / 探针 / 静态源码只查「凭据值形状 + 凭据字段名」，别用 `grep -i token` 一把梭。
 - **同类**：本轮另两处写面收紧同源同理 —— ① 缺 `Origin` 的 `POST /api/actions/reload` 曾被放行（`_origin_ok()` 里 `if not origin: return True`），本机 curl 方便却给简单跨站 POST 留了口子，改成「写操作必须带同源 `Origin`，缺一律 403」；② `do_HEAD` 直接 `_send` 会写出 body 且绕过 `Host` 校验，改成 `_head` 标志复用 `do_GET`、只发头不写体。三条都是「便利默认值」盖过了安全 / 正确性判据，判据要显式到字段级。
+
+## 52. `/admin/reload` 曾对任意网页开放，body 也没有上限 【通用】
+
+- **现象**：手工 `curl -X POST http://127.0.0.1:7871/admin/reload` 回 403 `missing X-Zgate-Admin header (blocks cross-site POST)`；控制台点「重载」同样 403；一条超大请求打过来回 413 `request body exceeds 33554432 bytes`。
+- **根因**：改造前 `/admin/reload` 只绑 127.0.0.1、没有任何请求级校验 —— 浏览器里任意一个页面都能对它发一个 `Content-Type: text/plain` 的简单 POST（简单请求不触发预检、也不受 CORS 约束），网关照单全收并重读配置。绑定回环只挡住「别的机器」，挡不住「同一台机器上打开的任意网页」。请求体侧同理：过去是无限 `io.ReadAll`，本机任意进程一条几 GB 的 POST 就能把常驻进程内存打满。
+- **正解**：管理面统一过 `adminGuard`（`internal/router/admin.go`）—— 回环来源 + `X-Zgate-Admin` 头非空 + `Origin` 若存在必须同源；配了 `adminToken`（`zgate.json` 字段，空则读环境变量 `ZGATE_ADMIN_TOKEN`）再加一道 `X-Zgate-Token` 或 `Authorization: Bearer`，`subtle.ConstantTimeCompare` 比较。手工 curl 补 `-H "X-Zgate-Admin: 1"`，配了口令再加 `-H "X-Zgate-Token: $env:ZGATE_ADMIN_TOKEN"`；`zgate reload` 子命令与 `tools/console/actions.py` 都已补头。`serveHTTP` 对 `/v1/*` 套 `http.MaxBytesReader`，上限 `maxRequestBodyBytes`（缺省 32 MiB，`zgate.json` 可覆盖），超限回 413 而不是 400。
+- **判据**：403 文案能直接分诊 —— `missing X-Zgate-Admin header` = 缺头（不是网关挂了）、`admin endpoints are loopback-only` = 不是从本机回环发的、`cross-origin admin request rejected` = `Origin` 不是回环、`bad admin token` = 口令不对；413 看文案里的字节数是否等于 `maxRequestBodyBytes`。写管理面测试别拿 `/admin/reload` 当探针：`newServer` 的 `cfg.Path` 为空时它会去 exe 目录找 `zgate.json`，拿不到就回 400，看起来像鉴权失败 —— 用只读的 `/admin/stats` 验门禁。
+- **同类**：`/metrics` 只做回环 + 同源，故意不要求自定义头（抓取端零改动）；只读端点不该因为鉴权收紧把监控打断。凡是「本机进程就能改全局状态」的端点，都要假设同机浏览器是敌对环境。
+
+## 53. body 只扫一遍之后，facts 变成会过期的快照 【通用】
+
+- **现象**：`TestReasoningGuardForcesEffortThenRedraws` 报 `上游调用次数 = 1, want 2` —— 「加密思考分流应触发重抽」没触发；`/health` 里 guard 档位显示正常，可每次请求只打一次上游。
+- **根因**：`doForwardWith` 里 `facts := parseBodyFacts(body)` 只解析一次，随后 `injectThinkingEffortFacts` 往 body 里补了 `reasoning_effort`，而 facts 仍是补之前那份 —— 守卫判「客户端是不是已经要思考」时看不到刚补的档位，于是判成「不必重抽」。同一份 facts 里的 `modelAt` / `closeAt` 是字节偏移，body 一改就全错。
+- **正解**：注入成功后立刻 `facts = parseBodyFacts(body)` 重扫；跨函数一律重扫，不要把 facts 塞进 `context` 传下去（跳上的 body 会被 `rewriteModel` 改写，旧偏移必错）。`parseBodyFacts` 本身是零分配扫描，重扫一遍远比一次 `json.Unmarshal` 便宜。
+- **判据**：任何 `withModel` / `withStringField` / `injectThinkingEffort*` 之后，只信重新扫出来的 facts；单测要锁「注入 → 守卫 → 重抽」整条链，别只测注入函数本身返回的字节。
+- **同类**：一次解析 + 多处改写的管线，改完必须重解析，或者用能显式失效的句柄；把解析结果当不可变快照往下传，等于给自己埋一个静默错判。
+
+## 54. 回写头有三处写了也看不见：提前交卷、hop-by-hop、channel 传空 【通用】
+
+- **现象**：客户端拿到 200 却没有 `X-Zgate-Channel` / `X-Zgate-Hop`；`TestDrainingSetsConnectionClose` 断言 `resp.Header.Get("Connection")` 恒为空，一度被当成「draining 没生效」；只有 `X-Zgate-Attempt` 一直正常。
+- **根因**：三条各自成立 —— ① 提前交卷（`earlySSE`）路径先写 200 与响应头再慢慢转发，之后 `w.Header().Set(...)` 已经晚了（头随第一块字节发出）；② `Connection` 是 hop-by-hop 头，`net/http` 客户端会吃掉它，要看 `resp.Close`；③ `forward` / `forwardChain` 一直把 channel 传成 `""`，只有竞速路径传了 `hop.Channel`，于是渠道头只在竞速模式下有值。
+- **正解**：等跳定了再设头 —— `doForwardWith` 里 `copyHeaders` 之后、`http.NewRequest` 之前写 `X-Zgate-Channel`（空则退回 `at.hop.Channel`）/ `X-Zgate-Model` / `X-Zgate-Attempt` / `X-Zgate-Hop`；`Connection: close` 只对服务端有意义，客户端断言改用 `resp.Close`；`forward` / `forwardChain` 补 `channel string` 形参，四个调用点（`routeAlias` 两处、`routeFallback`、递归）一起补。
+- **判据**：新增响应头先问一句「这时候头发出去了吗」；`go test -run TestRequestID` 五个用例锁住 id 回显、跨回落 `Attempt=2`、渠道与模型名、上游收到 `X-Request-Id`、draining 的 `resp.Close`。
+- **同类**：观测类头一律在「跳已定、头未发」的窗口里写；任何「传空串当默认值」的形参，落地前确认每个调用点都真传了值 —— 空串不报错，只会让日志与响应头静默缺字段。
+
+## 55. 用编辑器/脚本改 PS1 会掉 UTF-8 BOM，PS5.1 立刻按 GBK 乱码解析失败 【Windows】
+
+- **现象**：`python tools/check-project.py` 在 `check_ps1` 崩成 `AttributeError: 'NoneType' object has no attribute 'strip'`（`tools/check-project.py:292`），同一进程里先有 `UnicodeDecodeError: 'gbk' codec can't decode byte 0xb6 in position 146`；直接用 PS5.1 解析 `tools/zgate-lifecycle/deploy-zgate.ps1` 则报 `106: The Try statement is missing its Catch or Finally block.`、`114: Unexpected token '}'`、`152: Unexpected token '宸叉彁鍓嶆仮澶?'` 一串行号，看着像脚本结构被改坏了。
+- **根因**：`deploy-zgate.ps1` 开头那 3 字节 BOM 被写文件工具吃掉（BOM=True→False，其余 12 个脚本仍是 True）。Windows PowerShell 5.1 在没有 BOM 时按系统 ANSI 代码页（本机 GBK）读脚本，中文注释与中文字符串变成乱码字节，其中恰好吞掉引号与括号，Parser 就从那一行开始连锁报错；报错消息本身也是中文（GBK），`subprocess.run(..., text=True)` 用 GBK 解码又撞上非法字节，读取线程抛 UnicodeDecodeError → `stdout=None` → 检查器 `.strip()` 崩。
+- **正解**：改完 `.ps1` 立刻验字节头（`$b=[IO.File]::ReadAllBytes($p); $b[0..2] -join ','` 应为 `239,187,191`，文件内 CR 计数为 0）；掉了就补回 BOM —— PowerShell 用 `[IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($true)))`，Node 用 `Buffer.concat([Buffer.from([0xEF,0xBB,0xBF]), Buffer.from(text, "utf8")])`。检查器侧给 `subprocess.run` 加 `errors="replace"`，并对 `r.stdout or ""` 兜底，别让一条本地化报错把整轮门禁带崩。
+- **判据**：`Get-ChildItem tools\zgate-lifecycle\*.ps1` 逐个打印 `bom=` 应全为 True；PS5.1 `ParseFile` 探针回 `PARSE_OK`；`python tools/check-project.py` 的「换行/BOM」与「PS1 语法」两项都必须是 OK（现为 `13 个脚本全部符合` + `7 个脚本 Parser 通过`）。
+- **同类**：仓里「PS1 带 BOM」不是洁癖，是 PS5.1 的中文解码开关；任何「读文本→写回」的工具（edit / sed / 格式化器 / 生成脚本）都可能顺手抹掉 BOM，改完必须回验字节头。

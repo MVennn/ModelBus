@@ -193,9 +193,17 @@ func serve() error {
 	// each child can take StartTimeoutSeconds, while the HTTP server should be
 	// accepting requests during that window.
 	go sup.Start()
+	front := router.New(cfg, ks, am, sup, client, log)
+	front.SetVersion(version)
 	srv := &http.Server{
-		Handler:  router.New(cfg, ks, am, sup, client, log).Handler(),
-		ErrorLog: nil,
+		Handler: front.Handler(),
+		// 三个超时只设「读请求头」和「空闲连接」：流式响应可能一挂就是几十分钟，
+		// 设 ReadTimeout/WriteTimeout 会把正常的长回答从中间掐断。
+		// MaxHeaderBytes 防「超长请求头撑内存」，1 MiB 对本地网关绰绰有余。
+		ReadHeaderTimeout: 15 * time.Second,
+		IdleTimeout:       120 * time.Second,
+		MaxHeaderBytes:    1 << 20,
+		ErrorLog:          nil,
 	}
 
 	// 从 cmd/PowerShell 前台启动时，上面几行横幅是附着到父控制台的；打完就解放
@@ -231,6 +239,9 @@ func serve() error {
 	select {
 	case s := <-sig:
 		log.Infof("收到 %v，正在退出", s)
+		// 先置「正在退出」位：/health 与 /metrics 立刻可见，压测/探活脚本
+		// 能据此停止灌流量，而不是继续往一个正在关的进程里塞请求。
+		front.SetDraining()
 	case err := <-errCh:
 		if err != nil && err != http.ErrServerClosed {
 			sup.Stop()
@@ -368,7 +379,17 @@ func reload() error {
 		host = "127.0.0.1" + host
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Post("http://"+host+"/admin/reload", "application/json", nil)
+	req, err := http.NewRequest(http.MethodPost, "http://"+host+"/admin/reload", nil)
+	if err != nil {
+		return err
+	}
+	// 管理面现在要求 X-Zgate-Admin 头（挡住浏览器跨站表单）；配了 adminToken
+	// 的话再从环境变量带上口令，命令行就不必把口令写进参数历史。
+	req.Header.Set("X-Zgate-Admin", "1")
+	if token := strings.TrimSpace(os.Getenv("ZGATE_ADMIN_TOKEN")); token != "" {
+		req.Header.Set("X-Zgate-Token", token)
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return fmt.Errorf("连不上 %s（服务没在跑？）: %w", host, err)
 	}

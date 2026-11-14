@@ -13,10 +13,10 @@
 | 形态 | 独立 Python 进程 `tools/console/server.py`，**不塞进 zgate** |
 | 地址 | `http://127.0.0.1:7872`（7871 / 7863 / 8790 已占用，7872 实测空闲） |
 | 设计规则 | **Microsoft Fluent 2**：语义色令牌、4px 间距刻度、4/6/8px 圆角、上方光阴影、状态色 + 文字双编码；通过 `--tblr-* → --mb-*` 变量桥接注入 Tabler 外壳 |
-| 前端 | 4 个手写静态文件 **41,816 B** + 本地 vendor `tabler.min.css` **686,736 B**（MIT）+ `LICENSE-tabler.txt` 1,247 B；零 npm / 零 CDN / 零构建链 / 零加载型外链，vendor 单文件 **25 个** `url()` 全是内联 `data:image/svg+xml` |
+| 前端 | 4 个手写静态文件 **50,999 B** + 本地 vendor `tabler.min.css` **686,736 B**（MIT）+ `LICENSE-tabler.txt` 1,247 B；零 npm / 零 CDN / 零构建链 / 零加载型外链，vendor 单文件 **25 个** `url()` 全是内联 `data:image/svg+xml` |
 | UI 库 | **Tabler 1.7.4**（`tabler/tabler` 42,052★ / MIT / pushed 2026-11-10 / `@tabler/core@1.7.4`）；官方竖向骨架 + 组件类，`app.css` 只做令牌桥接与少量专有类 |
 | 页面 | 8 个：总览 / 模型 / 价格 / 健康 / 流量 / 账号 / 日志 / 运维 |
-| 数据 | 13 个只读 `/api/*` + `/healthz` + SSE 日志流 + 只读 `/api/actions/jobs`，共 17 条路由；写操作只有 `reload` |
+| 数据 | 16 个只读 `/api/*`（含 2026-11-14 新增的 `/api/routes` / `/api/stats` / `/api/metrics`）+ `/healthz` + SSE 日志流 + 只读 `/api/actions/jobs`，共 20 条路由；写操作只有 `reload` |
 | 网关改动 | **零改动**；P3 的 302 桥未实施 |
 | 依赖 | Python 3.12 标准库（`http.server` / `json` / `pathlib` / `urllib` / `re` / `shutil`） |
 
@@ -37,7 +37,9 @@ python tools\console\server.py --check
 
 1. **`/health` 只出 JSON**，2026-11-12 实测 **2738 B**（v1 稿记的 1166 B 已过期），7 个渠道段 + 子进程 + 冷却 + 竞速 + guard 挤在一层里。信息全，但没有层级，人眼扫不出「哪一段现在是坏的」。
 2. **可可视化资产 38 项、页面候选 12 类**，散在 `~/.zcode/v2/`、`providers/*/cache/`、`gateways/upstream/*/data/`、`%LOCALAPPDATA%/` 四个根下，跨 5 种格式（json / jsonl / 按天分文件的 jsonl / 文本日志 / markdown 报告）。
-3. **网关只有三个非代理端点**：`GET /health`、`GET /models`、`POST /admin/reload`（`/v1/models` 剥前缀后落同一 handler）。没有 `/metrics`、没有模板引擎、没有 CORS，也没有任何计数聚合 —— `/health` 是唯一指标出口。
+3. **网关的非代理端点从三个变成十个**：探活 `GET /health`；目录 `GET /models` 与 `GET /v1/models`（剥 `/v1` 前缀后同一 handler，带 `ETag`，`If-None-Match` 命中回 304）；
+   指标 `GET /metrics`（Prometheus 文本，仅回环 + 同源）；管理面 `POST /admin/reload`、`GET /admin/routes`、`GET /admin/explain`、`GET /admin/stats`、`GET /admin/logs`、`GET /admin/pprof/*`、`POST /admin/drain`（换版前等手上请求走完）（回环 + `X-Zgate-Admin` 头 + 同源 `Origin`，可选 `adminToken`）。
+   控制台只读这些端点并转发 reload，不引入新的写面；全量清单与校验口径的正本在 [ARCHITECTURE.md](ARCHITECTURE.md) §3.6。
 
 所以它的价值不是「给 `/health` 加个页面」，而是**把 40 个文件读成 8 张能一眼判断的表**，并且让 `/health` 那份 JSON 变成其中一页。
 
@@ -49,13 +51,22 @@ python tools\console\server.py --check
 
 | 端点 | 方法 | 说明 | 注意 |
 |---|---|---|---|
-| `127.0.0.1:7871/health` | GET | 网关健康快照 | **每次请求都会 `aliases.Reload()` 重读 alias map 文件**，后台用 5s 服务端缓存合并，轮询间隔 ≥ 5s |
-| `127.0.0.1:7871/models`、`/v1/models` | GET | 模型目录简表（同源，实测字节相同，Content-Length 2193） | 只有 `id` / `owned_by`，**没有价格、链路、legacy** |
-| `127.0.0.1:7871/admin/reload` | POST | 热加载 alias / 配置 | 无鉴权，只靠绑定 127.0.0.1；返回 `{ok, applied, stale, added, note}`；`GET` 为 405 |
+| `127.0.0.1:7871/health` | GET | 网关健康快照：upstream / children / alias（含 `revision`）/ cooling / uptime / version / draining / stats | 热路径上 `refreshAliases()` 每秒最多 `stat` 一次（`/admin/reload` 后归零强制重读）；后台仍用 5s 服务端缓存合并，轮询间隔 ≥ 5s |
+| `127.0.0.1:7871/models`、`/v1/models` | GET | alias 聚合目录，`?scope=canonical\|legacy\|all`（缺省 canonical）；剥 `/v1` 前缀后同一 handler | 带 `ETag`（`"zgate-<rev>-<scope>"`），`If-None-Match` 命中回 304、零 body；目录体按别名表版本缓存在进程内，只在 `rev` 变化时重建 |
+| `127.0.0.1:7871/admin/reload` | POST | 热加载 alias / 配置 / 空闲窗口 / 上游 base 与 key；监听地址、新增子进程、alias map 路径仍需重启 | 回环 + `X-Zgate-Admin` 头 + 同源 `Origin`（可选 `adminToken` / `ZGATE_ADMIN_TOKEN`）；缺头 403 `missing X-Zgate-Admin header (blocks cross-site POST)`；返回 `{ok, applied, stale, added, note}`；`GET` 为 405 |
+| `127.0.0.1:7871/metrics` | GET | Prometheus 文本：请求数 / 延迟直方图 / 链跳 / 别名版本 / 子进程 up / draining | 仅回环 + 同源；故意不要求 `X-Zgate-Admin` |
+| `127.0.0.1:7871/admin/routes` | GET | 整张路由表，每模型带链跳、价格与每跳状态，附 `revision` | 管理面三道 |
+| `127.0.0.1:7871/admin/explain` | GET | `?model=` 解析结果 + 思考守卫档位，未命中给前缀兜底 | 管理面三道 |
+| `127.0.0.1:7871/admin/stats` | GET | 运行态快照：计数 / 分位延迟 / 慢请求样本（带请求号）/ 冷却 / 子进程 / draining | 管理面三道 |
+| `127.0.0.1:7871/admin/logs` | GET | 日志尾部：`?lines=`（缺省 200，上限 2000）、`?filter=` 子串过滤，只回看最后 512 KiB | 管理面三道 |
+| `127.0.0.1:7871/admin/pprof/*` | GET | 堆 / CPU / trace / cmdline / symbol | 管理面三道 |
 | `127.0.0.1:7863/panel/api/*` | GET | WorkBuddy 面板 | 需自身鉴权 —— **后台不代理它**，只读本地 `data/*.json` |
 | `127.0.0.1:8790/ping` | GET | Qoder 存活 | 只判活 |
 
-网关路由字面量在 `gateways/zgate/internal/router/router.go:583/587/591`，`/v1` 前缀剥离在 `:2001-2005`；`health` 实现在 `:1425-1474`（首行 `s.aliases.Reload()`，`upstreamView` 只出 `hasKey` 布尔不出值）。
+网关路由字面量在 `gateways/zgate/internal/router/router.go` 的 `(*Server).serveHTTP`：`/health` / `/models` / `/metrics` 三条旁路先判，`/admin/` 前缀交 `adminGuard` 再按子路径分流，其余落代理路径；`/v1` 前缀剥离是同一函数里的 `strings.TrimPrefix(path, "/v1")`。
+`health` 实现在 `(*Server).health`（首行 `s.refreshAliases()` 做每秒节流，`upstreamView` 只出 `hasKey` 布尔不出值）。行号随批次漂移，按符号名检索。
+
+控制台转发 reload 走 `tools/console/actions.py`：请求带 `X-Zgate-Admin: 1`（不带就是 403），环境变量 `ZGATE_ADMIN_TOKEN` 非空时再补 `X-Zgate-Token`；读 `/admin/*` 与 `/metrics` 同理，统一在 `tools/console/sources.py` 的 `_admin_headers()`。
 
 ### 2.2 文件与日志
 
@@ -155,7 +166,7 @@ P3 保留一个桥（**未实施**）：zgate 在 `Accept` 含 `text/html` 时�
 11. **状态色只用在需要决策处**：纯信息数字一律 `--mb-fg-1`，避免满屏彩色。
 12. **响应式与可达性**：按 Tabler `navbar-expand-md` 的 768px 断点折窄屏，`#nav-toggle` 纯原生切换 `.collapse.show`（不引 Bootstrap JS）；`:focus-visible` 2px 焦点环；模态 `Escape` 可关；日志 SSE 断开给文字提示。
 
-体积实测（v3，2026-11-12）：手写资产 `index.html` 4,328 B + `app.css` 10,717 B + `app.js` 26,524 B + `favicon.svg` 247 B = **41,816 B**（预算 200 KB，占用 20.4%）；本地 vendor `vendor/tabler.min.css` **686,736 B** + `vendor/LICENSE-tabler.txt` 1,247 B **单独计**，不占手写预算。`--check` 分别打印 `handwritten static bytes` 与 `vendor static bytes`。
+体积实测（v4，2026-11-14）：手写资产 `index.html` 4,328 B + `app.css` 11,285 B + `app.js` 35,139 B + `favicon.svg` 247 B = **50,999 B**（预算 200 KB，占用 24.9%；v3 为 41,816 B）；本地 vendor `vendor/tabler.min.css` **686,736 B** + `vendor/LICENSE-tabler.txt` 1,247 B **单独计**，不占手写预算。`--check` 分别打印 `handwritten static bytes` 与 `vendor static bytes`。
 
 ---
 
@@ -294,7 +305,7 @@ tools/console/
   static/
     index.html             # Tabler 竖向骨架（4,328 B）
     app.css                # Fluent 2 令牌 + --tblr-* 桥接 + 专有类（10,717 B）
-    app.js                 # 8 页 hash 路由 + 拉数 + Tabler 渲染（26,524 B）
+    app.js                 # 9 页 hash 路由 + 拉数 + Tabler 渲染（35,139 B）
     favicon.svg            # 内联 SVG（247 B）
     vendor/
       tabler.min.css       # Tabler 1.7.4 单 CSS，本地离线（686,736 B）
@@ -314,6 +325,7 @@ tools/console/
 | **P2** | 写操作 `reload` + 互斥 + 动作历史 | 无 | **已落地**；跑门禁/探针/同步长任务未做 |
 | **P3**（可选） | zgate 在 `Accept: text/html` 时 302 到后台；TTFB 分位、差集高亮、门禁缓存 | 约 10 行 + 一次换版 | **未做**（本轮网关零改动） |
 | **v3 UI 重构** | 换 Tabler 1.7.4 官方骨架与组件类，Fluent 2 降级为令牌桥接层 | 无 | **已落地**（2026-11-12） |
+| **v4 可观测面** | 接网关 `/admin/routes` / `/admin/stats` / `/metrics`：总览「请求与延迟」卡片、路由表页（按渠道分组的跳行 + 模型 → 链总表）、请求账本与 Prometheus 面板 | 网关侧新增十个非代理端点（正本 [ARCHITECTURE.md](ARCHITECTURE.md) §3.6） | **前端已落地**（2026-11-14）；7871 仍是 11 月 11 日旧二进制，三条路由现报 `NOT_SUPPORTED` 降级，换版后自动出数 |
 
 ---
 
@@ -323,15 +335,16 @@ tools/console/
 |---|---|---|
 | 1 | 零加载型外链：静态资源不得触发任何外部请求 | 手写 4 文件 `https?://` 命中 **0**（`favicon.svg` 的 `http://www.w3.org/2000/svg` 是 SVG namespace）；`vendor/tabler.min.css` 的 25 个 `url()` 全是内联 `data:image/svg+xml`，`@import` / `fonts.googleapis` / `cdn.jsdelivr` / `unpkg.com` / `url(http` 命中 **0**；仅 `/*!` 注释头留 `https://tabler.io` 与 MIT LICENSE 两个不产生请求的字面量。E2E 新增 `VENDOR offline CSS` 断言锁住 |
 | 2 | 零依赖：只用标准库 | `server.py` / `sources.py` / `actions.py` 无第三方 import；`py_compile` exit 0 |
-| 3 | 手写静态资产 ≤ 200 KB；vendor 单独计 | `--check` 分别打印：手写 **41,816 B**（去重后；v2 为 41,649 B）、vendor **686,736 B**（Tabler 1.7.4，离线单 CSS）。v2 修正过 `/` 与 `/index.html` 别名双计 44,105 B 的老问题；v3 把 vendor 从手写预算里拆出，避免 686 KB 误判 FAIL；缺 vendor 文件直接 FAIL |
+| 3 | 手写静态资产 ≤ 200 KB；vendor 单独计 | `--check` 分别打印：手写 **50,999 B**（去重后；v3 为 41,816 B、v2 为 41,649 B）、vendor **686,736 B**（Tabler 1.7.4，离线单 CSS）。v2 修正过 `/` 与 `/index.html` 别名双计 44,105 B 的老问题；v3 把 vendor 从手写预算里拆出，避免 686 KB 误判 FAIL；缺 vendor 文件直接 FAIL |
 | 4 | 路由全通 + 缓存 | 端到端 **39 项 PASS**：21 GET 全 200（新增 `/vendor/tabler.min.css`）、4 HEAD 全 200 且 body=0 B（新增 vendor）、6 项安全断言、7 项脱敏断言、1 项 vendor 离线断言；`--check` 13 个 `/api/*` 全 OK；5s TTL 缓存合并 `/health` 轮询；侧栏浏览器 8 页 hash 逐页渲染 `fail=false`（总览 8 导航 / 10 卡 / 2 表，两张本地样式表全加载、零横向滚动） |
 | 5 | 不碰网关：实现里没有 `zgate.exe` 启停调用 | `actions.py` 只发 `POST /admin/reload`；网关 7871 全程在跑且响应未改 |
-| 6 | 门禁 | `check-project.py` exit 0；`check-docs.py` 范围模式（5 篇：本正本 / README / PITFALLS / TOOLS / MAINTENANCE）exit 0；`py_compile`、`node --check static/app.js` exit 0；`server.py --check` exit 0（`handwritten static bytes = 41816` / `vendor static bytes = 686736` / `result = PASS (0 failure(s))`）。全仓 `check-docs.py` exit 1 只因用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md` 被 `docs/reports/README.md:7` 链接（HEAD 无该链接、`git ls-files` 无目标），与本轮改动无关 |
+| 6 | 门禁 | `check-project.py` exit 0；`check-docs.py` 范围模式（5 篇：本正本 / README / PITFALLS / TOOLS / MAINTENANCE）exit 0；`py_compile`、`node --check static/app.js` exit 0；`server.py --check` exit 0（`handwritten static bytes = 50999` / `vendor static bytes = 686736` / `result = PASS (0 failure(s))`）。全仓 `check-docs.py` exit 1 只因用户既有未跟踪 `docs/reports/MODEL-SYNC-20261112-1209.md` 被 `docs/reports/README.md:7` 链接（HEAD 无该链接、`git ls-files` 无目标），与本轮改动无关 |
 | 7 | `/health` 契约不变 | 仍 `application/json; charset=utf-8`、约 2.7 KB（`uptime_s` 等动态字段位数增长会使体积浮动，本轮实测 2,741 B）、7 个渠道段齐全、`key` 只露 bool；A 路分片 `evidence/agent-endpoints.md` 复现 18 个顶层键（原件已并入 `evidence/topic-routing-runtime.md`） |
 | 8 | 脱敏：strict 口径 + shapes 口径 | `/api/config`、`/api/accounts` 对凭据字段名零命中；`/api/gateway`、`/api/overview`、`/api/traffic`、`/api/probe` 与 `static/app.js` 对凭据值形状（`sk-` / `Bearer`）和凭据字段名双零命中；脱敏单测 13 项 PASS 同时锁「凭据被抹」与「`*_tokens` 计量保留」 |
 | 9 | 跨站与写面 | 无 `Origin` POST 403、跨站 `Origin` 403、同源 `Origin` 200、`Host: evil.example` 403、未知路由 404、`GET /api/actions/reload` 404；`HEAD` 不写 body |
 | 10 | Tabler 外壳 + Fluent 2 桥接 | `index.html` 用官方竖向骨架与 `.page` / `.navbar-vertical` / `.page-wrapper` / `.page-header` / `.page-body` / `.footer`；`app.css` 194 行只做 `--tblr-*: var(--mb-*)` 映射与专有类；`app.js` 8 个 render 函数主体未动、只换 helper 输出 Tabler 类；`setTheme()` 同步 `data-theme` + `data-bs-theme`；`#nav-toggle` 原生切 `.collapse.show`，零 Bootstrap JS；MIT 全文随 `vendor/LICENSE-tabler.txt` 落盘 |
 | 11 | 降级路径结构化（2026-11-12 二次收尾） | 修三处只读后台的降级缺陷：`static/app.js:356` 状态灯改按 `env.ok === true && !env.__err` 判定（健康页 `/api/gateway` 502 显「网关不可达」、总览页成功不再恒显不可达）；`server.py:185-186` `do_POST` 补 `except Exception` 兜底为 `err_envelope("PARSE_ERROR", ...)` 结构化 500，不再返回裸 HTML；`start-console.ps1:27` 启动提示补上 stderr 访问日志路径。两个运行时探针 `.work/probe-gateway-dot.cjs` 5 例行为矩阵全 PASS、`.work/probe-post-json.py` 断言 500 + JSON 全 PASS；修复后 `server.py --check` 0 failure、39 项 E2E 重跑仍全绿；侧栏浏览器真渲染复验总览 `gwText="网关在线"` / `gwDotClass="status-dot status-green"`（旧逻辑恒显「网关不可达」）、8 页 hash 逐页 `err=false`，两张本地样式表全加载、零横向滚动 |
+| 12 | 网关管理面接入（2026-11-14） | 三条只读路由 `/api/routes`（TTL 5s）/ `/api/stats`（5s）/ `/api/metrics`（10s，64 KiB 截断）；统一由 `sources._admin_headers()` 补 `X-Zgate-Admin: 1`，`ZGATE_ADMIN_TOKEN` 非空再补 `X-Zgate-Token`；404/405 归 `NOT_SUPPORTED`、其它归 `UPSTREAM_DOWN`，一律收敛成 `{available:false,error:{code,message}}` 不 500。实测：`--check` 三条 WARN（旧二进制 404）但 `result = PASS (0 failure(s))`、exit 0；桩服务 happy path 回 `revision:42 / total:4 / hop_total:6`、`requests:1873 / p50:250 / error_rate 0.0037`、`/metrics` 22 行 8 家族且管理头到达上游（桩日志 `admin='1'`）；`node --check static/app.js` exit 0 |
 
 ---
 
@@ -356,7 +369,7 @@ tools/console/
 1. **服务端 TTL 缓存**合并 `/health` 轮询，避免多标签页把 `aliases.Reload()` 打成热点（C 路实测 `docs/CONSOLE.md` 口径：每次 `/health` 请求都触发 `aliases.Reload()` 重读 alias map，轮询必须 ≥ 5s）。
 2. **流式尾读** `_tail_bytes()` / `tail_jsonl()` 只读文件尾部 1 MiB，27 MB 日志目录不再全量入内存。
 3. **单源隔离** `Promise.allSettled`，一个数据源坏掉不影响其余 7 页。
-4. **静态预算去重 + 分层**：`--check` 用文件名集合统计，`index.html` 两条路由别名不重复计数（v2 修正前 44,105 B → 修正后 41,649 B）；v3 再把手写资产（41,816 B，仍卡 200 KB）与本地 vendor（686,736 B，单独打印校验存在）拆开，避免引入 Tabler 后误判超预算。
+4. **静态预算去重 + 分层**：`--check` 用文件名集合统计，`index.html` 两条路由别名不重复计数（v2 修正前 44,105 B → 修正后 41,649 B）；v3 再把手写资产（现 50,999 B，仍卡 200 KB）与本地 vendor（686,736 B，单独打印校验存在）拆开，避免引入 Tabler 后误判超预算。
 5. **写面收紧**：`reload` 改同源 POST + 必带 `Origin`；`HEAD` 复用 `GET` 且不写 body。
 6. **占用处置只读化**：`/api/ops` 只汇总体积与建议，不删任何文件；删除属不可逆且配置备份含凭据真值，全部留待用户拍板。
 7. **状态灯三态判据收紧**（2026-11-12 二次收尾）：`all()` 对失败源写的是 truthy 的 `{ __err: ... }`，原 `bag["/api/gateway"] ? true : ...` 会把 502 错判「在线」、总览恒判「不可达」；改按响应包 `ok === true` 且无 `__err` 判在线，缺源保持「检测中」。

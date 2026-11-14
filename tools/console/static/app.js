@@ -5,10 +5,11 @@
   "use strict";
 
   const PAGES = [
-    { id: "overview", name: "总览",   ico: "▦", sub: "网关与数据面一眼可见", routes: ["/api/overview", "/api/ops"] },
+    { id: "overview", name: "总览",   ico: "▦", sub: "网关与数据面一眼可见", routes: ["/api/overview", "/api/ops", "/api/stats"] },
     { id: "models",   name: "模型",   ico: "◇", sub: "别名 · 探测 · 评分 · 配额 · 榜单", routes: ["/api/models", "/api/probe", "/api/scores", "/api/quota", "/api/arena"] },
+    { id: "routes",   name: "路由表", ico: "⇉", sub: "整张别名链 · 每跳渠道 / 协议 / 价格 / 状态", routes: ["/api/routes", "/api/stats"] },
     { id: "prices",   name: "价格",   ico: "＄", sub: "WorkBuddy 与 Qoder 价目快照", routes: ["/api/prices"] },
-    { id: "health",   name: "健康",   ico: "✚", sub: "网关 /health 原样字段展开", routes: ["/api/gateway"] },
+    { id: "health",   name: "健康",   ico: "✚", sub: "网关 /health 原样字段展开", routes: ["/api/gateway", "/api/metrics"] },
     { id: "traffic",  name: "流量",   ico: "⇅", sub: "请求日志尾部采样", routes: ["/api/traffic"] },
     { id: "accounts", name: "账号",   ico: "◎", sub: "只列存在性与掩码", routes: ["/api/accounts"] },
     { id: "logs",     name: "日志",   ico: "≡", sub: "zgate.log 尾部 + 实时流", routes: ["/api/logs"] },
@@ -43,6 +44,46 @@
   // pill() 自己已对 label 做 esc()，输出是可信片段；用 data-mb-pill 让 table() 精确识别，避免二次转义。
   const pill = (label, t) => `<span class="badge ${pillTone[t] || pillTone.muted}" data-mb-pill>${esc(label == null || label === "" ? "—" : label)}</span>`;
 
+  // ---- 网关管理面（/admin/routes · /admin/stats · /metrics）-----------------
+  // 状态口径与 zgate internal/router/admin.go 的 hopState() 一一对应：
+  // ready / cool_until_HH:MM:SS / silent_until_HH:MM:SS / channel_off。
+  function stateTone(state) {
+    const v = String(state == null ? "" : state).toLowerCase();
+    if (v === "ready") return "ok";
+    if (v.startsWith("cool_until") || v.startsWith("silent_until")) return "warn";
+    if (v === "channel_off") return "bad";
+    return "muted";
+  }
+  function stateLabel(state) {
+    const v = String(state == null ? "" : state);
+    if (v === "ready") return "ready";
+    if (v.startsWith("cool_until_")) return "冷却至 " + v.slice(11);
+    if (v.startsWith("silent_until_")) return "静默至 " + v.slice(13);
+    if (v === "channel_off") return "渠道关闭";
+    return v || "unknown";
+  }
+  const statePill = (s) => pill(stateLabel(s), stateTone(s));
+  const priceCell = (v) => (typeof v === "number"
+    ? num(v)
+    : { html: '<span class="text-secondary">—</span>', num: true });
+  const pct = (v, d = 2) => (typeof v === "number" ? (v * 100).toFixed(d) + "%" : "—");
+
+  // 管理面降级：旧版 zgate.exe 没有 /admin/* 与 /metrics，控制台不把整页打成错误。
+  function unavailable(title, err) {
+    const e = err || {};
+    return `<div class="card flat"><div class="card-body">
+      <div class="d-flex align-items-baseline gap-2 flex-wrap"><strong>${esc(title)}</strong>${pill("不可用", "warn")}</div>
+      <div class="small text-secondary mt-1">${esc(e.code || "UNAVAILABLE")}：${esc(e.message || "网关未提供该端点")}</div>
+      <div class="small text-secondary mt-1">控制台按 <code>X-Zgate-Admin: 1</code> 调 <code>/admin/*</code>；旧版二进制没有这三个端点，换新版 zgate.exe 后这里自动出数。</div>
+    </div></div>`;
+  }
+  function sourceOf(bag, path) {
+    const err = E(bag, path);
+    if (err) return { available: false, error: { code: err.code || "UPSTREAM_DOWN", message: err.message || String(err) } };
+    const d = D(bag, path);
+    return d && Object.keys(d).length ? d : { available: false, error: { code: "SOURCE_MISSING", message: path + " 无数据" } };
+  }
+
   function table(headers, rows, opts = {}) {
     if (!rows || !rows.length) return empty(opts.emptyText || "这个数据源当前没有记录");
     const th = headers.map(h => `<th class="${h.num ? "text-end" : ""}">${esc(h.label)}</th>`).join("");
@@ -52,7 +93,9 @@
       const cls = typeof c === "object" && c !== null && c.num ? ' class="text-end num"' : "";
       return `<td${cls}>${cell}</td>`;
     }).join("") + "</tr>").join("");
-    return `<div class="card"><div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div></div>`;
+    const body = `<div class="table-responsive"><table class="table table-vcenter card-table"><thead><tr>${th}</tr></thead><tbody>${tr}</tbody></table></div>`;
+    // opts.bare：调用方自带卡片外壳（渠道分组卡片里用），这里只出表格
+    return opts.bare ? body : `<div class="card">${body}</div>`;
   }
   const H = (html, cls = "") => ({ html, cls });
   const num = (v) => ({ html: n(v), num: true });
@@ -130,6 +173,7 @@
       num(c.count), num(bytes(c.bytes)), esc(c.review),
     ]);
     return section("关键指标", `<div class="grid kpi">${kpis.join("")}</div>`, "每 10 秒自动刷新；/health 每次触发 aliases.Reload()，不做高频轮询")
+      + latencyCard(bag)
       + section("渠道段", table(
           [{ label: "渠道" }, { label: "状态" }, { label: "凭据" }, { label: "Base" }, { label: "Child" }],
           segRows))
@@ -137,6 +181,102 @@
       + section("占用候选（只读）", table(
           [{ label: "项" }, { label: "路径" }, { label: "文件数", num: true }, { label: "体积", num: true }, { label: "处置建议" }],
           topOps, { emptyText: "没有可复核的占用候选" }));
+  }
+
+  // 总览「请求与延迟」：网关进程内的账本（/admin/stats），不是日志采样。
+  function latencyCard(bag) {
+    const st = sourceOf(bag, "/api/stats");
+    if (st.available === false) return section("请求与延迟", unavailable("请求与延迟", st.error),
+      "/admin/stats 是网关进程内的请求账本；流量页的 jsonl 采样是另一套口径");
+    const lat = st.latency_ms || {};
+    return section("请求与延迟", `<div class="grid kpi">` +
+        kpi("RPS", (typeof st.rps === "number" ? st.rps.toFixed(3) : "—"), "requests / uptime_s") +
+        kpi("5xx 错误率", pct(st.error_rate), n(st.errors) + " 次 5xx / " + n(st.requests) + " 次请求") +
+        kpi("p50", n(lat.p50 ?? 0) + " ms", "总耗时中位数（桶上界）") +
+        kpi("p90", n(lat.p90 ?? 0) + " ms", "90 分位") +
+        kpi("p99", n(lat.p99 ?? 0) + " ms", "99 分位") +
+        kpi("inflight", n(st.inflight ?? 0), "正在处理中的请求") +
+        `</div>`,
+      `网关 ${esc(st.version || "—")} · uptime ${n(st.uptime_s)} s · in ${bytes(st.bytes_in)} / out ${bytes(st.bytes_out)} · alias rev ${n((st.alias || {}).revision ?? "—")}`);
+  }
+
+  // 请求账本：状态码分布 + 慢请求样本（/admin/stats 的 status_class 与 slow）
+  function statsLedger(bag) {
+    const st = sourceOf(bag, "/api/stats");
+    if (st.available === false) return section("请求账本", unavailable("请求账本", st.error));
+    const cls = st.status_class || {};
+    const clsRows = ["1xx", "2xx", "3xx", "4xx", "5xx"].map(k => [
+      pill(k, k === "5xx" ? "bad" : (k === "4xx" ? "warn" : "ok")), num(cls[k] ?? 0),
+    ]);
+    const slowRows = (st.slow || []).map(s => [
+      esc(s.at || "—"), esc(s.id || "—"), esc(s.path || "—"), esc(s.model || "—"),
+      num(s.status), num(s.ms),
+    ]);
+    return section("请求账本", `<div class="grid two">` +
+        `<div>${table([{ label: "状态类" }, { label: "次数", num: true }], clsRows)}</div>` +
+        `<div>${table([{ label: "时间" }, { label: "请求号" }, { label: "路径" }, { label: "模型" }, { label: "HTTP", num: true }, { label: "耗时 ms", num: true }],
+            slowRows, { emptyText: "没有超过 5 秒的慢请求样本" })}</div></div>`,
+      `共 ${n(st.requests)} 次请求 / ${n(st.errors)} 次 5xx · 慢请求样本上限 20，这里展开最近 10 条`);
+  }
+
+  function renderRoutes(bag) {
+    const d = sourceOf(bag, "/api/routes");
+    if (d.available === false) {
+      return unavailable("路由表", d.error)
+        + `<div class="alert alert-info mt-3" role="alert">其余页面不依赖这三个端点，仍可正常使用。</div>`;
+    }
+    const chans = d.channels || [];
+    const kpis = [
+      kpi("模型条目", n(d.total ?? 0), "alias revision " + n(d.revision ?? "—")),
+      kpi("链跳总数", n(d.hop_total ?? 0), "每跳自带协议 / 价格 / 出口"),
+      kpi("ready 跳", n(d.hop_ready ?? 0) + " / " + n(d.hop_total ?? 0), "此刻可用的跳数"),
+      kpi("降级跳", n((d.hop_total ?? 0) - (d.hop_ready ?? 0)), "冷却 / 静默 / 渠道关闭"),
+      kpi("渠道数", n(chans.length), "按跳归属统计"),
+    ];
+    const cards = chans.map(g => {
+      const rows = (g.rows || []).map(r => [
+        esc(r.model),
+        r.primary ? pill("首选", "info") : pill("第 " + r.hop + " 跳", "muted"),
+        esc(r.protocol || "—"),
+        priceCell(r.price),
+        statePill(r.state),
+        H(`<span class="cell-clip" title="${esc((r.upstream || "") + "  " + (r.base || ""))}">${esc(short(r.upstream || r.base, 44) || "—")}</span>`),
+      ]);
+      return `<div class="card"><div class="card-header"><div class="chan-head">` +
+        `<span class="chan-name">${esc(g.channel)}</span>` +
+        pill(n(g.ready) + "/" + n(g.hops) + " ready", g.degraded ? "warn" : "ok") +
+        `<span class="chan-meta">${n(g.model_count)} 个模型 · ${n(g.hops)} 跳</span>` +
+        `</div></div>` +
+        table([{ label: "模型" }, { label: "位置" }, { label: "协议" }, { label: "价格", num: true },
+               { label: "状态" }, { label: "上游" }], rows,
+              { bare: true, emptyText: "该渠道当前没有跳" }) +
+        `</div>`;
+    });
+    const modelRows = (d.models || []).map(m => [
+      esc(m.model), esc(m.group || "—"), esc(m.protocol || "—"), priceCell(m.price),
+      num(m.hop_count), num(m.ready_hops),
+      H(`<span class="cell-clip" title="${esc((m.channels || []).join(" → "))}">${esc(short((m.channels || []).join(" → "), 64) || "—")}</span>`),
+      statePill(m.state),
+    ]);
+    return section("路由概览", `<div class="grid kpi">${kpis.join("")}</div>`,
+        "数据来自 /admin/routes：含进程内的冷却 / 静默 / 渠道开关状态，这些在 model-alias-map.json 里没有")
+      + section("按渠道分组", `<div class="grid channels">${cards.join("")}</div>`,
+          `${n(chans.length)} 个渠道 · 每行是一次跳，首选跳排在最前`)
+      + section("模型 → 链", table(
+          [{ label: "模型" }, { label: "组" }, { label: "协议" }, { label: "价格", num: true },
+           { label: "链跳", num: true }, { label: "ready", num: true }, { label: "渠道链" }, { label: "状态" }],
+          modelRows))
+      + statsLedger(bag);
+  }
+
+  function metricsSection(bag) {
+    const mt = sourceOf(bag, "/api/metrics");
+    if (mt.available === false) return section("/metrics（Prometheus）", unavailable("/metrics", mt.error),
+      "抓取端直接读 http://127.0.0.1:7871/metrics；这里只是页面镜像，限长 64 KB");
+    return section("/metrics（Prometheus 0.0.4 原样）",
+      `<div class="code-block">${esc(mt.text || "（空）")}</div>`,
+      `${esc(mt.content_type || "text/plain")} · ${n(mt.families)} 个指标族 · ${n(mt.lines)} 行 · ${bytes(mt.bytes)}` +
+      (mt.truncated ? ` · 已按 ${bytes(mt.limit_bytes)} 截断` : " · 完整"));
   }
 
   function renderModels(bag) {
@@ -215,7 +355,8 @@
     ]))
       + section("/health 字段原样展开", table([{ label: "字段" }, { label: "值（脱敏 JSON）" }], rows),
           "网关响应一字不改；控制台只做 scrub 后展示")
-      + section("/health 原始 JSON（脱敏）", `<div class="code-block">${esc(JSON.stringify(h, null, 2))}</div>`, "上方表格与此处同源");
+      + section("/health 原始 JSON（脱敏）", `<div class="code-block">${esc(JSON.stringify(h, null, 2))}</div>`, "上方表格与此处同源")
+      + metricsSection(bag);
   }
 
   function renderTraffic(bag) {
@@ -311,7 +452,7 @@
           `允许动作：${esc((jobs.allowed || []).join(", ") || "—")} · 当前${jobs.running ? "运行中" : "空闲"}`);
   }
 
-  const RENDER = { overview: renderOverview, models: renderModels, prices: renderPrices,
+  const RENDER = { overview: renderOverview, models: renderModels, routes: renderRoutes, prices: renderPrices,
     health: renderHealth, traffic: renderTraffic, accounts: renderAccounts, logs: renderLogs, ops: renderOps };
 
   // ---- 路由 / 生命周期 ----------------------------------------------------

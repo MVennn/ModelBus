@@ -135,7 +135,11 @@ MAIN_ORDER = [
     # 原主力的 hy4std（2026-11-06 曾因竞技榜前十被拍到第一位）与
     # qoder:Qwen3.8-Max（AA 1122 的贵备份）一起下沉省钱组，见 LOW_ORDER；
     # 不补进 LOW_PICKS 的话它们价格 >0 又不在任何名单里，会被判 drop 直接掉档。
-    # 日常主力：最便宜的付费档，两跳同型号（WB cn / OC 直连）
+    # OpenCode-Go 拆分条目（用户 2026-11-14 口径）：OC 额度到期前要先烧完，
+    # 所以单列一条主力排最前面。必须显式写 oc: 前缀 —— 只写裸名
+    # chat:deepseek-v4.1-flash 会同时命中下面 WB 条目，两行分不出谁在前。
+    "chat:oc:deepseek-v4.1-flash",
+    # 日常主力：最便宜的付费档，WB cn 首跳 + 千问尾跳（OC 跳已拆到上一条）
     "chat:cn:deepseek-v4.1-flash",
     "chat:deepseek-v4.1-flash",
     # 免费 DeepSeek（千问渠道，messages 协议）：¥300 预付额度先烧这一条。
@@ -463,6 +467,22 @@ ABBR = {
 # 而该显示名所属的模型也已在 2026-11-11 整族下线（见 HJ_PRICES 注释）。
 NAME_RENAMES = {}
 
+# 按渠道拆显示名：同一上游型号在指定渠道上单独成一条模型。
+# 用户 2026-11-14 口径：OpenCode-Go 的 DeepSeek 4.1 Flash 要单列成
+# DeepSeek-4.1-Flash-OC 并排到主力第一位 —— OC 那边的额度快到期，这个月要先烧完。
+# 键 = (上游 base_model 小写, 渠道码)，值 = 拆分后的显示名。family_entries 算分组键时
+# 直接用它替换 abbr，于是这一跳不再并进原条目，而是自成一族；原条目（WB / QW 跳）不变。
+SPLIT_CHANNEL_DISPLAY = {
+    ("deepseek-v4.1-flash", "OC"): "DeepSeek-4.1-Flash-OC",
+}
+
+# 拆分条目的元数据母名：providerModelRules 里没有新显示名的历史条目，
+# pick_rule_config 按这里的母名回退，才能继承 contextWindow / 输入输出格式 / 档位，
+# 否则 DSH 侧这条模型只有 enabled:true，一律落宿主默认值。
+SPLIT_PARENT_DISPLAY = {
+    "DeepSeek-4.1-Flash-OC": "DeepSeek-4.1-Flash",
+}
+
 
 # 「无公司/匿名代号」模型（用户口径：一律沉到每组最下面）。名单顺序无关，
 # 判据只看厂商码是否落在这四个里：Beam / Space-Bunny / Conatus / 未识别(OTHER)。
@@ -705,6 +725,12 @@ def pick_rule_config(entries: list, cfg: dict, old_rules: dict) -> dict:
     for name, entry in by_name.items():
         keys = [entry.get("raw"), entry.get("original"), entry.get("upstream"),
                 entry.get("channel"), entry.get("name")]
+        # 按渠道拆出来的显示名没有自己的历史规则（SPLIT_CHANNEL_DISPLAY），回退到
+        # 母名的 config：contextWindow / inputFormat / 档位都在那条里，否则新条目
+        # 落盘只剩 enabled:true，DSH 侧全靠宿主默认值。
+        _parent = SPLIT_PARENT_DISPLAY.get(str(entry.get("name") or ""))
+        if _parent:
+            keys.append(_parent)
         original_config = {}
         for key in keys:
             if key and str(key) in old_rules:
@@ -742,6 +768,326 @@ def _inherit_efforts(config: dict, entry: dict, old_rules: dict, entries: list,
         source = _sibling_effort(entry, old_rules, entries)
     if source:
         specs["reasoningLevel"] = copy.deepcopy(source)
+
+
+# --- ZCode 受限 CEL 校验（2026-11-13）-------------------------------------
+# ZCode 3.18.x 用 packages/model-option-map 的受限 CEL 编译器解析每条
+# reasoningLevel.map；旧 JS 方言（裸键 {k:v}、===、!==）会让整份 Personal
+# Provider Config 的 Zod 校验失败，客户端「以内存空配置降级」→ providerCount=0
+# → ZCode agent 不启动 → 设置页用量统计抛 no_active_workspace。这里在 --check
+# 与 --apply 写盘前跑同一套语法门槛，防止每日同步链把旧方言再写回去。
+_CEL_DOUBLE_OPS = frozenset(("&&", "||", "==", "!=", "<=", ">="))
+_CEL_SINGLE_OPS = frozenset(("+", "-", "*", "/", "%", "!", "<", ">"))
+_CEL_PUNCT = frozenset(("{", "}", "[", "]", "(", ")", ",", ":", "?", "."))
+_CEL_SIMPLE_ESCAPES = {
+    "'": "'", '"': '"', "\\": "\\",
+    "b": "\b", "f": "\f", "n": "\n", "r": "\r", "t": "\t",
+}
+
+
+class _CelError(Exception):
+    def __init__(self, message: str, offset: int):
+        super().__init__(f"{message} at offset {offset}")
+
+
+def _cel_tokenize(source: str) -> list[tuple[str, str, int]]:
+    """复刻 ZCode packages/model-option-map/src/tokenizer.ts 的逐字符切词。
+
+    单个 "=" 不在任何白名单：旧方言 "===" 会切成 "==" + 孤立的 "="，
+    在第三个字符处抛 unsupported token "="，和本机日志里的报错一模一样。
+    """
+    tokens: list[tuple[str, str, int]] = []
+    i, n = 0, len(source)
+    while i < n:
+        ch = source[i]
+        if ch.isspace():
+            i += 1
+            continue
+        if ch in ("'", '"'):
+            quote, start = ch, i
+            i += 1
+            buf: list[str] = []
+            closed = False
+            while i < n:
+                c = source[i]
+                if c == quote:
+                    i += 1
+                    closed = True
+                    break
+                if c in ("\n", "\r"):
+                    raise _CelError("unterminated string literal", start)
+                if c != "\\":
+                    buf.append(c)
+                    i += 1
+                    continue
+                esc_at = i
+                i += 1
+                if i >= n:
+                    raise _CelError("unterminated string escape", esc_at)
+                e = source[i]
+                if e in _CEL_SIMPLE_ESCAPES:
+                    buf.append(_CEL_SIMPLE_ESCAPES[e])
+                    i += 1
+                    continue
+                if e == "u":
+                    digits = source[i + 1:i + 5]
+                    if len(digits) != 4 or any(d not in "0123456789abcdefABCDEF" for d in digits):
+                        raise _CelError("invalid unicode escape", esc_at)
+                    buf.append(chr(int(digits, 16)))
+                    i += 5
+                    continue
+                raise _CelError(f"unsupported string escape \\{e}", esc_at)
+            if not closed:
+                raise _CelError("unterminated string literal", start)
+            tokens.append(("string", "".join(buf), start))
+            continue
+        if ch.isascii() and ch.isdigit():
+            m = re.match(r"(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?", source[i:])
+            if not m:
+                raise _CelError("invalid number literal", i)
+            val = m.group(0)
+            tokens.append(("number", val, i))
+            i += len(val)
+            continue
+        if ch.isascii() and (ch.isalpha() or ch == "_"):
+            j = i + 1
+            while j < n and source[j].isascii() and (source[j].isalnum() or source[j] == "_"):
+                j += 1
+            tokens.append(("identifier", source[i:j], i))
+            i = j
+            continue
+        pair = source[i:i + 2]
+        if pair in _CEL_DOUBLE_OPS:
+            tokens.append(("operator", pair, i))
+            i += 2
+            continue
+        if ch in _CEL_SINGLE_OPS:
+            tokens.append(("operator", ch, i))
+            i += 1
+            continue
+        if ch in _CEL_PUNCT:
+            tokens.append(("punctuation", ch, i))
+            i += 1
+            continue
+        raise _CelError(f"unsupported token {json.dumps(ch)}", i)
+    tokens.append(("eof", "", n))
+    return tokens
+
+
+class _CelParser:
+    """复刻 packages/model-option-map/src/parser.ts 的递归下降。"""
+
+    def __init__(self, tokens: list[tuple[str, str, int]], variable: str):
+        self.t = tokens
+        self.v = variable
+        self.i = 0
+
+    def _node(self, typ: str, off: int, **kw) -> dict:
+        return {"type": typ, "offset": off, **kw}
+
+    def current(self) -> tuple[str, str, int]:
+        return self.t[min(self.i, len(self.t) - 1)]
+
+    def advance(self) -> tuple[str, str, int]:
+        tok = self.current()
+        if tok[0] != "eof":
+            self.i += 1
+        return tok
+
+    def consume(self, value: str) -> bool:
+        if self.current()[1] != value:
+            return False
+        if self.current()[0] != "eof":
+            self.i += 1
+        return True
+
+    def expect(self, value: str) -> tuple[str, str, int]:
+        tok = self.current()
+        if tok[1] != value:
+            raise _CelError(f"expected {json.dumps(value)}", tok[2])
+        return self.advance()
+
+    def parse(self) -> dict:
+        node = self.parse_conditional()
+        trailing = self.current()
+        if trailing[0] != "eof":
+            if trailing[1] == ".":
+                raise _CelError("member access is not supported", trailing[2])
+            if trailing[1] == "(":
+                raise _CelError("function calls are not supported", trailing[2])
+            raise _CelError(f"unexpected token {json.dumps(trailing[1])}", trailing[2])
+        return node
+
+    def parse_conditional(self) -> dict:
+        cond = self.parse_logical_or()
+        if not self.consume("?"):
+            return cond
+        when_true = self.parse_conditional()
+        self.expect(":")
+        when_false = self.parse_conditional()
+        return self._node("conditional", cond["offset"], cond=cond,
+                          whenTrue=when_true, whenFalse=when_false)
+
+    def parse_logical_or(self) -> dict:
+        return self.parse_binary(self.parse_logical_and, ("||",))
+
+    def parse_logical_and(self) -> dict:
+        return self.parse_binary(self.parse_equality, ("&&",))
+
+    def parse_equality(self) -> dict:
+        return self.parse_binary(self.parse_relational, ("==", "!="))
+
+    def parse_relational(self) -> dict:
+        return self.parse_binary(self.parse_additive, ("<", "<=", ">", ">="))
+
+    def parse_additive(self) -> dict:
+        return self.parse_binary(self.parse_multiplicative, ("+", "-"))
+
+    def parse_multiplicative(self) -> dict:
+        return self.parse_binary(self.parse_unary, ("*", "/", "%"))
+
+    def parse_binary(self, operand, ops) -> dict:
+        expr = operand()
+        while self.current()[0] == "operator" and self.current()[1] in ops:
+            op = self.advance()
+            right = operand()
+            expr = self._node("binary", op[2], op=op[1], left=expr, right=right)
+        return expr
+
+    def parse_unary(self) -> dict:
+        tok = self.current()
+        if tok[0] == "operator" and tok[1] in ("!", "-", "+"):
+            self.advance()
+            return self._node("unary", tok[2], op=tok[1], operand=self.parse_unary())
+        return self.parse_primary()
+
+    def parse_primary(self) -> dict:
+        tok = self.advance()
+        kind, value, off = tok
+        if kind == "number":
+            num = float(value)
+            if num != num or num in (float("inf"), float("-inf")):
+                raise _CelError("number literal is not JSON-safe", off)
+            if num.is_integer() and abs(num) > 2 ** 53 - 1:
+                raise _CelError("number literal is not JSON-safe", off)
+            return self._node("literal", off, value=num)
+        if kind == "string":
+            return self._node("literal", off, value=value)
+        if kind == "identifier":
+            if self.current()[1] == "(":
+                raise _CelError("function calls are not supported", self.current()[2])
+            if value == self.v:
+                return self._node("input", off)
+            if value in ("true", "false", "null"):
+                return self._node("literal", off,
+                                  value={"true": True, "false": False, "null": None}[value])
+            raise _CelError(f"unknown identifier {json.dumps(value)}", off)
+        if value == "(":
+            expr = self.parse_conditional()
+            self.expect(")")
+            return expr
+        if value == "[":
+            return self.parse_array(off)
+        if value == "{":
+            return self.parse_object(off)
+        raise _CelError(f"unexpected token {json.dumps(value)}", off)
+
+    def parse_array(self, off: int) -> dict:
+        elements = []
+        if not self.consume("]"):
+            while True:
+                elements.append(self.parse_conditional())
+                if not self.consume(","):
+                    break
+            self.expect("]")
+        return self._node("array", off, elements=elements)
+
+    def parse_object(self, off: int) -> dict:
+        entries, keys = [], set()
+        if not self.consume("}"):
+            while True:
+                key = self.advance()
+                if key[0] != "string":
+                    raise _CelError("object keys must be string literals", key[2])
+                if key[1] in keys:
+                    raise _CelError(f"duplicate object key {json.dumps(key[1])}", key[2])
+                keys.add(key[1])
+                self.expect(":")
+                entries.append({"key": key[1], "value": self.parse_conditional(),
+                                "offset": key[2]})
+                if not self.consume(","):
+                    break
+            self.expect("}")
+        return self._node("object", off, entries=entries)
+
+
+def _assert_cel_object(node: dict) -> None:
+    """复刻 compiler.ts 的 assertObjectResultExpression。"""
+    if node["type"] == "object":
+        return
+    if node["type"] == "conditional":
+        _assert_cel_object(node["whenTrue"])
+        _assert_cel_object(node["whenFalse"])
+        return
+    raise _CelError("model option map must return a JSON object", node["offset"])
+
+
+def _cel_map_error(expr: str, variable: str = "reasoningLevel") -> str | None:
+    """静态校验一条 optionSpecs.reasoningLevel.map 能否被 ZCode 编译。
+
+    只做 compileModelOptionMap 的编译期检查（不求值）：Zod superRefine 就是
+    在这一步拒绝旧 JS 方言的。返回 None 表示可编译，否则返回带 offset 的原因。
+
+    合法：{"reasoning_effort": reasoningLevel}、键带引号的对象、== / !=、
+          条件表达式（顶层 conditional 的两支也必须是对象）。
+    非法：裸键 {k: v}、=== / !==、函数调用、成员访问、未知标识符、
+          顶层不是对象、孤立的 "="。
+    """
+    try:
+        source = str(expr).strip()
+        if not source:
+            raise _CelError("expression must not be empty", 0)
+        node = _CelParser(_cel_tokenize(source), variable).parse()
+        _assert_cel_object(node)
+    except _CelError as exc:
+        return str(exc)
+    return None
+
+
+def _cel_rule_entries(rules) -> list[dict]:
+    """providerModelRules 兼容 list / dict 两种落盘形态。"""
+    if isinstance(rules, dict):
+        for key in ("providerModelRules", "rules", "providerRules"):
+            if isinstance(rules.get(key), (list, dict)):
+                return _cel_rule_entries(rules[key])
+        return [v for v in rules.values() if isinstance(v, dict)]
+    return [r for r in (rules or []) if isinstance(r, dict)]
+
+
+def _cel_bad_maps(rules) -> list[tuple[str, str]]:
+    """列出 (modelId, 编译错误)。空 map / "{}" 不校验（装饰档位）。"""
+    bad = []
+    for rule in _cel_rule_entries(rules):
+        mid = str(rule.get("modelId") or rule.get("id") or "?")
+        specs = (rule.get("config") or {}).get("optionSpecs") or {}
+        rl = specs.get("reasoningLevel") or {}
+        if not isinstance(rl, dict):
+            continue
+        expr = str(rl.get("map") or "").strip()
+        if not expr or expr == "{}":
+            continue
+        err = _cel_map_error(expr)
+        if err:
+            bad.append((mid, err))
+    return bad
+
+
+def _report_cel_bad_maps(bad: list[tuple[str, str]], heading: str) -> None:
+    print(heading, file=sys.stderr)
+    for mid, err in bad:
+        print(f"  - {mid}: {err}", file=sys.stderr)
+    print("  修复：对象键加双引号、=== 改 ==、!== 改 !=；"
+          "参考 tools/model_alias.py::_cel_map_error。", file=sys.stderr)
 
 
 def _effort_is_live(entry: dict, reasoning) -> bool:
@@ -1536,6 +1882,12 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
         hop = dict(item)
         hop["price"] = round(float(price), 2)
         abbr = abbreviate(item["base_model"])
+        # 按渠道拆显示名（见 SPLIT_CHANNEL_DISPLAY）：命中的跳用新名字当族键，
+        # 于是它不再并进母条目，而是自成一条独立模型。
+        split_name = SPLIT_CHANNEL_DISPLAY.get(
+            (str(item["base_model"]).lower(), str(item.get("channel") or "")))
+        if split_name:
+            abbr = split_name
         if str(item["base_model"]).lower() in MERGE_ACROSS_PROTOCOL:
             key = (abbr, "merged")
         else:
@@ -2416,7 +2768,11 @@ def main() -> int:
                 print("  - " + line, file=sys.stderr)
             print("  修复：tools/model_alias.py --apply 前先看 _inherit_efforts 的"
                   "继承链；不要靠手改 provider_config.json。", file=sys.stderr)
-        return 1 if (any(drift.values()) or lost_efforts) else 0
+        bad_cel = _cel_bad_maps(model_rules(cfg))
+        if bad_cel:
+            _report_cel_bad_maps(bad_cel,
+                "\n推理档位 map 不是 ZCode 受限 CEL（整份 provider_config 会被拒载）：")
+        return 1 if (any(drift.values()) or lost_efforts or bad_cel) else 0
 
     if not args.apply:
         print("\ndry run；加 --apply 写入 provider_config.json 与 alias map")
@@ -2588,6 +2944,16 @@ def main() -> int:
         pcr["providerRules"] = new_providers
     cfg["config"]["providerOrder"] = PROVIDER_IDS
     cfg["config"]["modelConfigRules"]["providerModelRules"] = new_model_rules
+
+    # 写盘前最后一道：本轮重建出来的 map 若还是旧 JS 方言，ZCode 会整份拒载。
+    # 必须早于 stamp / shutil.copy2 / tmp.write_text，否则会留下 .bak-* 备份。
+    bad_cel = _cel_bad_maps(new_model_rules)
+    if bad_cel:
+        _report_cel_bad_maps(bad_cel,
+            "ERROR: 本轮 reasoningLevel.map 不是 ZCode 受限 CEL，拒绝写盘 —— "
+            "这会让 ZCode 整份 Personal Provider Config 校验失败、用量统计读不出来。")
+        return 1
+
     cfg["config"]["modelConfigRules"]["manualProviderModelRules"] = []
 
     stamp = time.strftime("%Y%m%d-%H%M%S") + "-" + f"{time.time_ns() % 1_000_000:06d}"

@@ -15,6 +15,30 @@
 
 ---
 
+## [0.8.0] — 2026-11-14
+
+### 本版汇总：zgate 管理面收紧、指标外露与转发热路径降分配（2026-11-14，需换二进制）
+
+> **一句话**：这一版把 7871 从「三个端点、管理面裸奔、同一份 body 被反序列化六遍」改成「十个端点、管理面三道校验、body 只扫一遍」—— 内存与首字延迟降在转发路径上，可观测性补在 `/metrics` / `/admin/*` / 请求号上，控制台与 `zgate reload` 同步补头。
+
+- **新增（路由）**：手写零分配 JSON 扫描 `parseBodyFacts`（`internal/router/bodyfacts.go`）一次取出 `model` / `stream` / `reasoning_effort` / `thinking` / `tools`，替代 `wantsStream` / `requestModel` / `reasoningGuardMatches` / `reasoningExpectsThinking` / `injectThinkingEffort` / `rewriteModel` 六处各自 `json.Unmarshal` 同一份 body；`withModel` / `withStringField` 改成字节拼接，不再走 `map[string]any` 往返，也不再触发 `json.Marshal` 的 HTML 转义（`<` `>` `&` 不再被写成 `\u003c`）；旧函数签名保留，调用方零改动。
+- **新增（路由）**：请求级指标 `reqStats` 与 `respRecorder`（`internal/router/stats.go`）—— `requests` / `errors` / `inflight` / `bytes_in` / `bytes_out` / 延迟分桶 p50 p90 p99 / 状态码分布 / 最近 20 条 ≥5s 慢请求样本（带请求号）；`respRecorder` 包一层 `ResponseWriter` 记状态码与出字节，实现 `Flush` 与 `Unwrap`，不破坏流式探测。
+- **新增（路由）**：`internal/router/bufpool.go` 用 `sync.Pool` 复用 32 KB 流式读缓冲，原先每请求 `make([]byte, 32*1024)` 的短命对象在稳态下接近零分配。
+- **新增（请求号与跳头）**：`internal/router/reqid.go` —— 客户端带 `X-Request-Id` 就沿用、否则生成 16 位十六进制；响应回写 `X-Zgate-Request-Id`，同一个 id 带给上游并写进收尾日志 `[req] <id> <METHOD> <path> model=… status=… in=… out=… Nms`（`/health` 与 `/metrics` 不记）。成功转发时还回写 `X-Zgate-Channel` / `X-Zgate-Model` / `X-Zgate-Attempt`（跨回落累计）/ `X-Zgate-Hop`（竞速跳标记），客户端只看响应头就知道命中哪条上游、前面失败过几次。
+- **新增（端点）**：`GET /metrics`（Prometheus 文本：`zgate_requests_total` / `zgate_request_duration_seconds` 直方图 / `zgate_hop_total` / `zgate_alias_models` / `zgate_alias_revision` / `zgate_child_up` / `zgate_draining`）与 `GET /admin/routes`（整张路由表带每跳当前状态）、`GET /admin/explain`（`?model=` 解析结果 + 守卫档位）、`GET /admin/stats`（运行态快照）、`GET /admin/logs`（日志尾部，`?lines=` 缺省 200 / 上限 2000、`?filter=` 子串过滤，只回看末尾 512 KiB）、`GET /admin/pprof/*`（堆 / CPU / trace）、`POST /admin/drain`（置 `draining` 后等手上请求走完，`?wait_ms=` 缺省 5000 / 上限 30000，返回 `{ok,draining,inflight,waited_ms,timed_out}`）。
+- **调整（`/v1/models`）**：响应带 `ETag`（`"zgate-<alias rev>-<scope>"`），`If-None-Match` 命中直接 304、零 body；目录体按别名表版本缓存在进程内，只在 `rev` 变化时重建。客户端每次会话都拉一遍目录，这一条省掉重复序列化。
+- **调整（管理面鉴权）**：`/admin/reload` 过去没有任何请求级校验，任意网页一个 `text/plain` POST 就能让网关重读配置；现在 `adminGuard`（`internal/router/admin.go`）要求回环来源 + `X-Zgate-Admin` 头非空 + `Origin` 若存在必须同源，配了 `adminToken`（或环境变量 `ZGATE_ADMIN_TOKEN`）再加一道 `X-Zgate-Token` / `Bearer` 常量时间比较。`/metrics` 只做回环 + 同源，不要求自定义头。
+- **调整（请求体上限）**：`serveHTTP` 对 `/v1/*` 套 `http.MaxBytesReader`，上限 `maxRequestBodyBytes`（缺省 32 MiB，`zgate.json` 可覆盖），超限回 413 `request body exceeds N bytes`；过去是无限 `io.ReadAll`，本机任意进程一条几 GB 的 POST 就能打满常驻进程内存。
+- **调整（别名热加载节流）**：`refreshAliases` 用 CAS 抢「这一秒的探测权」，热路径上每秒最多 `os.Stat` 一次（原先每请求都 stat 一遍 alias map），`/admin/reload` 后强制归零，下一次请求立刻重读；`alias.Map` 增加 `rev` 与 `Revision()` / `Targets()` / `Legacy()` / `CatalogAt()`，路由表、目录缓存与 `ETag` 从同一份快照取版本号。
+- **调整（`main.go` 的 `http.Server`）**：补 `ReadHeaderTimeout` 15s / `IdleTimeout` 120s / `MaxHeaderBytes` 1 MiB；**不设** `ReadTimeout` / `WriteTimeout` —— 流式响应可能一挂几十分钟，设了会把正常长回答从中间掐断。
+- **调整（优雅退出）**：收到 `SIGTERM` / `Ctrl+C` 先 `SetDraining()` 再 `Shutdown`，`/health.draining` 与 `zgate_draining` 立刻可见，且此后每个响应带 `Connection: close`，客户端不会把新请求复用给即将断开的连接。
+- **调整（换版链路）**：`tools/zgate-lifecycle/deploy-zgate.ps1` 第 3 步在 `Stop-Process -Force` 之前先 `POST /admin/drain?wait_ms=8000`，把「硬切正在流式输出的请求」换成「等它写完再停」；旧二进制没有该端点时回 404，脚本记一行日志后按原行为直接停。
+- **调整（`internal/bridge/bridge.go`）**：`Forward` 不再为了读 `stream` 把 `opts.Body` 整份再 `json.Unmarshal` 一遍，直接用调用方已解析好的 `opts.Stream`；`messagesOf` / `toolsOf` / `rawMap` 合并成 `parseChatParts` 一次解析。
+- **调整（`tools/console/`）**：新增 `/api/routes` / `/api/stats` / `/api/metrics` 三条只读路由（TTL 5s / 5s / 10s），统一补 `X-Zgate-Admin: 1`、配了口令再补 `X-Zgate-Token`；旧二进制 404 归 `NOT_SUPPORTED` 降级，页面照常渲染不 500。前端新增「请求与延迟」卡片、「路由表」页（按渠道分组的跳行 + 模型 → 链总表）、请求账本与 Prometheus 面板。`actions.py` 的 reload 转发同样补头。
+- **修复（门禁）**：`tools/check-project.py` 的 PS1 语法检查改用 `errors="replace"` 并对空输出兜底 —— PS5.1 的本地化（GBK）错误消息会让 `text=True` 的读取线程抛 `UnicodeDecodeError`，`stdout` 变 `None` 后 `.strip()` 直接把整轮门禁崩成 `AttributeError`；同时补回 `tools/zgate-lifecycle/deploy-zgate.ps1` 被写文件工具抹掉的 UTF-8 BOM（无 BOM 时 PS5.1 按 GBK 读脚本，中文注释吞掉引号，`ParseFile` 从第 106 行起连锁报错）。
+- **验收**：`go build ./...` exit 0、`go vet ./...` exit 0、`go test ./...` exit 0（`zgate/internal/router` 17.159s 全 PASS；新增 `admin_test.go` 九例含 `TestAdminGuardMatrix` / `TestAdminTokenRequired` / `TestMetricsEndpoint` / `TestAdminRoutesAndExplain` / `TestAdminLogsTail` / `TestModelsETagCaching` / `TestRequestBodyLimit` / `TestAdminDrainWaitsForInflight` / `TestAdminDrainCleanWhenIdle`，另加 `bodyfacts_test.go` 二十例、`reqid_test.go` 五例、`alias_revision_test.go`）；控制台 `python tools/console/server.py --check` exit 0（三条管理面路由在旧二进制上打 WARN 不计失败），`node --check tools/console/static/app.js` exit 0；文档侧 `python tools/check-docs.py` exit 0。
+- **回退**：`git revert` 本批次提交，再按 `docs/ZGATE-LIFECYCLE.md` 的受控换版流程回旧二进制（`tools/zgate-lifecycle/restart-zgate.cmd`）；配置侧新增键 `maxRequestBodyBytes` / `adminToken` 旧二进制忽略，可先留着不回滚。控制台侧三条新路由在旧网关上自动降级，无需回退。
+
 ## [0.7.0] — 2026-11-12
 
 ### 本版汇总：控制台落地、DSH 主宿主定稿、zgate 自启与探活修复（2026-11-12）

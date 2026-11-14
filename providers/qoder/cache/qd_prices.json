@@ -6,11 +6,11 @@
     "off_peak": {}
   },
   "Qwen3.8-Max": {
-    "price": 0.2,
+    "price": 0.5,
     "peak": 0.5,
     "valley": 0.2,
     "off_peak": {
-      "active": true,
+      "active": false,
       "window_start": "22:00",
       "window_end": "08:00",
       "timezone": "Asia/Shanghai",
@@ -23,11 +23,11 @@
     }
   },
   "Qwen3.8-Flash": {
-    "price": 0.04,
+    "price": 0.1,
     "peak": 0.1,
     "valley": 0.04,
     "off_peak": {
-      "active": true,
+      "active": false,
       "window_start": "22:00",
       "window_end": "08:00",
       "timezone": "Asia/Shanghai",

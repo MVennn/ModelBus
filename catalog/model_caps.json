@@ -102,7 +102,7 @@
         "medium",
         "high"
       ],
-      "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}",
+      "reasoning_map": "{\"extra_body\": {\"google\": {\"thinking_config\": {\"thinking_budget\": reasoningLevel == \"disabled\" ? 0 : reasoningLevel == \"low\" ? 1024 : reasoningLevel == \"medium\" ? 4096 : 16384}}}}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 evidence:GM-v1beta-models+vendor-doc",
@@ -199,7 +199,7 @@
             "medium",
             "high"
           ],
-          "reasoning_map": "{extra_body: {google: {thinking_config: {thinking_budget: reasoningLevel === \"disabled\" ? 0 : reasoningLevel === \"low\" ? 1024 : reasoningLevel === \"medium\" ? 4096 : 16384}}}}"
+          "reasoning_map": "{\"extra_body\": {\"google\": {\"thinking_config\": {\"thinking_budget\": reasoningLevel == \"disabled\" ? 0 : reasoningLevel == \"low\" ? 1024 : reasoningLevel == \"medium\" ? 4096 : 16384}}}}"
         }
       }
     },
@@ -339,7 +339,7 @@
         "xhigh",
         "max"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:beam-free",
@@ -377,7 +377,7 @@
             "xhigh",
             "max"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel}"
         }
       }
     },
@@ -394,7 +394,7 @@
         "disabled",
         "high"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 QN:qiniu/conatus-free",
@@ -427,7 +427,7 @@
             "disabled",
             "high"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },
@@ -446,7 +446,7 @@
         "high",
         "xhigh"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:iceman-contributor-free",
@@ -483,7 +483,7 @@
             "high",
             "xhigh"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel}"
         }
       }
     },
@@ -599,7 +599,7 @@
         "medium",
         "xhigh"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "site-rule",
       "confidence": "high",
       "notes": "命中 providerSiteRules[19]（qwen3\\.8-flash | anthropic-messages | https://opencode\\.ai/zen/go/v1/?）于第 1 跳 OC https://opencode.ai/zen/go/v1；上游接口真值 OC:qwen3.8-flash",
@@ -656,7 +656,7 @@
             "medium",
             "xhigh"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },
@@ -833,7 +833,7 @@
         "disabled",
         "enabled"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "upstream-api",
       "confidence": "high",
       "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：reasoning_map,supports_tool_call；providerSiteRules 无命中；取自 modelRules[77]（.*mimo-v2\\.6-(?:pro|flash).*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；上游接口真值 OC:mimo-v2.6-flash",
@@ -873,7 +873,7 @@
             "xhigh",
             "max"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },
@@ -890,7 +890,7 @@
         "disabled",
         "enabled"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "upstream-api",
       "confidence": "high",
       "notes": "以下字段只由通配 .* 提供，已剔除（不作证据）：reasoning_map,supports_tool_call；providerSiteRules 无命中；取自 modelRules[77]（.*mimo-v2\\.6-(?:pro|flash).*），族级规则，置信度低一档；部分字段来自内置通配 .*，无模型专属证据；上游接口真值 WB:cn:mimo-v2.6-pro",
@@ -940,7 +940,7 @@
             "xhigh",
             "max"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },
@@ -1012,7 +1012,7 @@
         "xhigh",
         "max"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:claude-haiku-5-5",
@@ -1051,7 +1051,7 @@
             "xhigh",
             "max"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },
@@ -1071,7 +1071,7 @@
         "high",
         "xhigh"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:muse-spark-1.3-contributor",
@@ -1109,7 +1109,7 @@
             "high",
             "xhigh"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel}"
         }
       }
     },
@@ -1130,7 +1130,7 @@
         "xhigh",
         "max"
       ],
-      "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}",
+      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
       "source": "current",
       "confidence": "low",
       "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 OC:gpt-6-luna",
@@ -1169,7 +1169,7 @@
             "xhigh",
             "max"
           ],
-          "reasoning_map": "{reasoning_effort: reasoningLevel === \"disabled\" ? \"none\" : reasoningLevel, enable_thinking: reasoningLevel !== \"disabled\"}"
+          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
         }
       }
     },

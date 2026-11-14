@@ -3,7 +3,9 @@
 
 三条硬约束，任一被打破就该红：
 1. 真实 family_entries() 里 WB 跳排链首，哪怕它比 OC 贵；
-2. QW 尾跳（一年期预付）永远在链尾，机场孪生跳紧随其后；
+2. QW 尾跳（一年期预付）永远在母条目链尾；OC 跳自 2026-11-14 起按渠道拆成
+   独立条目 DeepSeek-4.1-Flash-OC（用户口径：OC 额度到期前先烧），机场孪生跳
+   跟在 OC 直连后面、排该条目链尾；
 3. 生成器里不存在任何「临时降级」开关 —— 2026-11-05 的 DEMOTE_HOPS 曾把
    WB 降到 OC 之后，整条会话静默跑在 opencode 上计费，不能再有第二次。
 """
@@ -46,7 +48,8 @@ def _hop(channel: str, upstream: str, price: float, protocol: str = "chat",
     return h
 
 
-def _chain(wb_price: float) -> list[dict]:
+def _chains(wb_price: float) -> tuple[list[dict], list[dict]]:
+    """返回 (母条目链, OC 拆分条目链)。SPLIT_CHANNEL_DISPLAY 把 OC 跳单列成一条。"""
     items = [
         _hop("OC", "deepseek-v4.1-flash", 0.11),
         _hop("WB", "cn:deepseek-v4.1-flash", wb_price),
@@ -54,36 +57,41 @@ def _chain(wb_price: float) -> list[dict]:
         _hop("QW", "deepseek-v4.1-flash", 0.00, protocol="messages"),
     ]
     entries = ma.family_entries(items, {}, {}, "auto")
-    deepseek = [e for e in entries if e["base_model"] == "deepseek-v4.1-flash"]
-    if len(deepseek) != 1:
-        raise AssertionError(f"deepseek-v4.1-flash 应只有一条链，实际 {len(deepseek)}")
-    return deepseek[0]["chain"]
+    main = [e for e in entries if e["name"] == "DeepSeek-4.1-Flash"]
+    oc = [e for e in entries if e["name"] == "DeepSeek-4.1-Flash-OC"]
+    if len(main) != 1 or len(oc) != 1:
+        raise AssertionError(
+            f"应各有一条链：DeepSeek-4.1-Flash={len(main)}、"
+            f"DeepSeek-4.1-Flash-OC={len(oc)}（共 {len(entries)} 条）")
+    return main[0]["chain"], oc[0]["chain"]
 
 
 class HopOrderTest(unittest.TestCase):
     def test_wb_leads_at_equal_price(self):
-        chain = _chain(0.11)
-        self.assertEqual(chain[0]["channel"], "WB", "WB 必须在链首")
+        main, oc = _chains(0.11)
+        self.assertEqual(main[0]["channel"], "WB", "WB 必须在母条目链首")
         self.assertEqual(
-            [(h["channel"], h["upstream"]) for h in chain][:3],
+            [(h["channel"], h["upstream"]) for h in main],
             [
                 ("WB", "cn:deepseek-v4.1-flash"),
-                ("OC", "deepseek-v4.1-flash"),
-                ("OC", "deepseek-v4.1-flash"),
+                ("QW", "deepseek-v4.1-flash"),
             ],
         )
+        # OC 拆条：直连在前、机场孪生在后，链上不再有 WB / QW 跳。
+        self.assertEqual([h["channel"] for h in oc], ["OC", "OC"])
+        self.assertEqual(str(oc[0].get("proxy") or ""), "", "OC 直连跳排链首")
 
     def test_wb_leads_even_when_more_expensive(self):
         # 贵 3 倍也必须打头：WB 是额度优先消费对象，不是价格最优对象。
-        chain = _chain(0.33)
-        self.assertEqual(chain[0]["channel"], "WB", "价格不能让 WB 让位")
+        main, _ = _chains(0.33)
+        self.assertEqual(main[0]["channel"], "WB", "价格不能让 WB 让位")
 
     def test_qw_tail_and_airport_twin_stay_last(self):
-        chain = _chain(0.11)
-        self.assertEqual(chain[-1]["channel"], "QW", "QW 尾跳不能被挤掉")
-        airport = [i for i, h in enumerate(chain) if str(h.get("proxy") or "") == ma.AIRPORT_PROXY]
+        main, oc = _chains(0.11)
+        self.assertEqual(main[-1]["channel"], "QW", "QW 尾跳不能被挤掉")
+        airport = [i for i, h in enumerate(oc) if str(h.get("proxy") or "") == ma.AIRPORT_PROXY]
         self.assertEqual(len(airport), 1, "机场孪生跳必须且只能有一条")
-        self.assertEqual(airport[0], len(chain) - 2, "机场孪生跳紧邻 QW 之前")
+        self.assertEqual(airport[0], len(oc) - 1, "机场孪生跳排在 OC 条目链尾")
 
     def test_no_demote_switch_left(self):
         self.assertFalse(
@@ -192,9 +200,10 @@ class GeminiHopOrderTest(unittest.TestCase):
         )
 
     def test_non_gemini_hops_keep_default_priority(self) -> None:
-        chain = _chain(0.11)
-        order = [ma.HOP_PRIORITY.get(h["upstream"], ma.HOP_PRIORITY_DEFAULT) for h in chain]
-        self.assertEqual(set(order), {ma.HOP_PRIORITY_DEFAULT}, "非 GM 跳一律取默认优先级")
+        main, oc = _chains(0.11)
+        for chain in (main, oc):
+            order = [ma.HOP_PRIORITY.get(h["upstream"], ma.HOP_PRIORITY_DEFAULT) for h in chain]
+            self.assertEqual(set(order), {ma.HOP_PRIORITY_DEFAULT}, "非 GM 跳一律取默认优先级")
 
     @unittest.skipUnless(ALIAS_MAP.exists(), "本机没有 alias map，跳过磁盘守卫")
     def test_on_disk_alias_map_keeps_gemini_ais_three_hops(self) -> None:

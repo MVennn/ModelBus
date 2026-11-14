@@ -114,7 +114,7 @@ class NonChatEffortTest(unittest.TestCase):
     def test_messages_protocol_keeps_reasoning_effort_map(self):
         cfg = self._cfg_with(
             ["disabled", "low", "high"],
-            '{reasoning_effort: reasoningLevel === "disabled" ? "none" : reasoningLevel}',
+            '{"reasoning_effort": reasoningLevel == "disabled" ? "none" : reasoningLevel}',
         )
         entry = {"channel": "OC", "protocol": "messages"}
         A._enforce_non_chat_effort(cfg, entry)
@@ -125,7 +125,7 @@ class NonChatEffortTest(unittest.TestCase):
         # 哈基米/AIS 这类渠道：只要 map 是能求值的表达式，档位就真能生效
         cfg = self._cfg_with(
             ["disabled", "low", "medium", "high"],
-            "{extra_body: {google: {thinking_config: {thinking_budget: 4096}}}}",
+            '{"extra_body": {"google": {"thinking_config": {"thinking_budget": 4096}}}}',
         )
         entry = {"channel": "GM", "protocol": "chat"}
         A._enforce_non_chat_effort(cfg, entry)
@@ -142,7 +142,7 @@ class NonChatEffortTest(unittest.TestCase):
         self.assertTrue(A._effort_is_live({"channel": "WB"}, {"values": ["low"]}))
         self.assertFalse(A._effort_is_live({"channel": "GM"}, {"values": ["low"], "map": "{}"}))
         self.assertFalse(A._effort_is_live({"channel": "GM"}, {"values": ["low"]}))
-        self.assertTrue(A._effort_is_live({"channel": "GM"}, {"values": ["low"], "map": "{a: 1}"}))
+        self.assertTrue(A._effort_is_live({"channel": "GM"}, {"values": ["low"], "map": '{"a": 1}'}))
 
 
 class DriftGateTest(unittest.TestCase):

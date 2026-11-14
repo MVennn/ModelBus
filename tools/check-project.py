@@ -286,10 +286,14 @@ def check_ps1(results: list) -> None:
         ps = ("$e=$null; [System.Management.Automation.Language.Parser]::ParseFile("
               "'" + p + "',[ref]$null,[ref]$e) > $null; "
               "if($e){ $e | ForEach-Object { Write-Output $_.Message }; exit 1 }")
+        # errors="replace"：PS5.1 的错误消息跟着系统语言走，本机是 GBK；
+        # 一旦某个字节序列解不出来，text=True 的读取线程会抛 UnicodeDecodeError，
+        # stdout 变成 None，下面 .strip() 直接 AttributeError 把整个检查器带崩。
         r = subprocess.run([exe, "-NoProfile", "-NonInteractive", "-Command", ps],
-                           capture_output=True, text=True, timeout=60)
+                           capture_output=True, text=True, errors="replace", timeout=60)
         if r.returncode != 0:
-            results.append(("FAIL", rel + ": PS1 语法 " + r.stdout.strip() + " " + r.stderr.strip()))
+            detail = ((r.stdout or "") + " " + (r.stderr or "")).strip()
+            results.append(("FAIL", rel + ": PS1 语法 " + (detail or "(解析失败但没有任何输出)")))
     if len(results) == before:
         results.append(("OK", "PS1 语法: " + str(len(files)) + " 个脚本 Parser 通过（" + exe + "）"))
 

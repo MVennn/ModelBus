@@ -27,7 +27,10 @@ type hopCounters struct {
 //
 // 只做观测，不参与任何决策；进程重启清空，不落盘。
 type hopStats struct {
-	mu sync.Mutex
+	// RWMutex 而不是 Mutex：读侧（每跳每次请求一次 get）占绝对多数，
+	// 写只在懒建新跳时发生一次。旧实现每次 get 都 Lock/Unlock，链长时等于
+	// 把一个串行点塞进了并发转发路径。
+	mu sync.RWMutex
 	m  map[string]*hopCounters
 }
 
@@ -36,8 +39,14 @@ func newHopStats() *hopStats { return &hopStats{m: map[string]*hopCounters{}} }
 // get 懒建一跳的计数器。跳数是有限的（几十条），不设上限回收。
 func (h *hopStats) get(hop alias.Hop) *hopCounters {
 	k := hopKey(hop)
-	h.mu.Lock()
+	h.mu.RLock()
 	c := h.m[k]
+	h.mu.RUnlock()
+	if c != nil {
+		return c
+	}
+	h.mu.Lock()
+	c = h.m[k]
 	if c == nil {
 		c = &hopCounters{}
 		h.m[k] = c
@@ -46,24 +55,18 @@ func (h *hopStats) get(hop alias.Hop) *hopCounters {
 	return c
 }
 
-// view 输出可直接塞进 /health 的 JSON：键与 hopKey 一致（渠道|上游|代理），
-// 名字排过序，方便人读也方便 diff。
-func (h *hopStats) view() map[string]any {
-	h.mu.Lock()
-	keys := make([]string, 0, len(h.m))
-	for k := range h.m {
-		keys = append(keys, k)
+// snapshot 是一次性取出所有跳的计数（纯值，不持锁返回），
+// 给 /metrics 与 /health 用：旧 view 里每个键都要再锁一次，跳多时等于
+// 把表的锁抢了十几遍。
+func (h *hopStats) snapshot() map[string]map[string]int64 {
+	h.mu.RLock()
+	cur := make(map[string]*hopCounters, len(h.m))
+	for k, c := range h.m {
+		cur[k] = c
 	}
-	h.mu.Unlock()
-	sort.Strings(keys)
-	out := make(map[string]any, len(keys))
-	for _, k := range keys {
-		h.mu.Lock()
-		c := h.m[k]
-		h.mu.Unlock()
-		if c == nil {
-			continue
-		}
+	h.mu.RUnlock()
+	out := make(map[string]map[string]int64, len(cur))
+	for k, c := range cur {
 		out[k] = map[string]int64{
 			"try":            c.try.Load(),
 			"ok":             c.ok.Load(),
@@ -72,6 +75,22 @@ func (h *hopStats) view() map[string]any {
 			"silent":         c.silent.Load(),
 			"no_first_block": c.nofirst.Load(),
 		}
+	}
+	return out
+}
+
+// view 输出可直接塞进 /health 的 JSON：键与 hopKey 一致（渠道|上游|代理），
+// 名字排过序，方便人读也方便 diff。
+func (h *hopStats) view() map[string]any {
+	snap := h.snapshot()
+	keys := make([]string, 0, len(snap))
+	for k := range snap {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	out := make(map[string]any, len(keys))
+	for _, k := range keys {
+		out[k] = snap[k]
 	}
 	return out
 }

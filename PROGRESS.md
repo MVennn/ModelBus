@@ -3721,3 +3721,82 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 边界：未 git add / commit / push；docs/reports/README.md、providers/qoder/cache/qd_prices.json、docs/reports/MODEL-SYNC-20261113-1210.md、evidence/go-model-sync-20261113-120007.md 为他人产物未碰；ZCode 长驻网关零重启。
 
 [[TASK_ALL_DONE]]
+
+---
+
+## 批次：2026-11-14 主力新增 DeepSeek-4.1-Flash-OC（OpenCode-Go 单独成条）
+
+- 判定：单一写域（`tools/model_alias.py` + 一处测试夹具）、依赖链必须串行（改代码 → 重算 → 投影 → 真机实测），命中 §7 白名单「依赖链必须串行」→ 主线直做；PROGRESS.md 单写者。
+- 任务目标（用户 2026-11-14 口径）：OpenCode-Go 的 DeepSeek 4.1 Flash 单列成 `DeepSeek-4.1-Flash-OC`，排主力第一位；OC 额度本月到期前先烧完；每日同步重算不得把它冲掉。
+- 已完成变更：
+  - [x] `tools/model_alias.py` 新增 `SPLIT_CHANNEL_DISPLAY = {("deepseek-v4.1-flash", "OC"): "DeepSeek-4.1-Flash-OC"}`：`family_entries()` 算族键时命中即换显示名，OC 跳自成一族；母条目只留 WB + QW 跳。
+  - [x] `tools/model_alias.py` 新增 `SPLIT_PARENT_DISPLAY`，并在 `pick_rule_config()` 的 keys 末尾回退母名 —— 新条目继承母条目的 contextWindow 1000000 / supportsImage / supportsToolCall / reasoningLevel / maxOutputTokens。
+  - [x] `MAIN_ORDER` 首位插入 `"chat:oc:deepseek-v4.1-flash"`（显式 `oc:` 前缀，避免与裸名条目争同一个跳），原 `chat:cn:deepseek-v4.1-flash` / `chat:deepseek-v4.1-flash` 顺延。
+  - [x] `tests/test_model_alias_hop_order.py`：夹具 `_chain` 改为 `_chains` 返回（母条目链, OC 条目链），三条用例按拆分口径重写（WB 仍领链、QW 尾跳留在母条目、机场孪生跳改排 OC 条目链尾）。
+- 验收（可复现）：
+  - `python -m unittest discover -s tests -p "test_model_alias_*.py"` → Ran 62 tests, OK（exit 0）。
+  - `python tools/model_alias.py --slot auto --apply --arena` → 写入 `~/.zcode/v2/provider_config.json`（备份 `provider_config.json.bak-alias-20261114-180549-751200`）与 `model-alias-map.json`；末尾自动投影 DSH「同步：3 个 provider / 20 个模型」。
+  - `python tools/model_alias.py --check --arena` → 无漂移（exit 0）；主力组顺序 `DeepSeek-4.1-Flash-OC` → `DeepSeek-4.1-Flash` → `Gemini-AIS`。
+  - 落盘核对：主力 `personalModelIds` 首位 = 新条目；新条目 providerModelRules 的 `providerId=opencode-go-chat`、`properties={"contextWindow":1000000,...}`、`optionSpecs` 含 reasoningLevel + maxOutputTokens；alias map 新条目 `channel=OC`、`base=https://opencode.ai/zen/go/v1`、`price=0.11`、`group=主力`、`main_reason=manual`、`chain=OC 直连 → OC 机场(10.0.0.1:7896)`；legacy 裸名 `deepseek-v4.1-flash` 仍指向母条目。
+  - DSH 投影：`~/.dsh/profiles/desktop/cordis.patch.yml` 的 `llm-pi-ai` → `zcode-main` models 首位 = `DeepSeek-4.1-Flash-OC`；`python tools/dsh_sync.py --check` → 无变化（exit 0）。
+  - 真机路由：`POST http://127.0.0.1:7871/v1/chat/completions` model=DeepSeek-4.1-Flash-OC → 200，回包 `model=deepseek-v4.1-flash`，`usage.opencode.billing_source=go`（烧 OC Go 额度、cost 0）；流式 16 chunks / 2.6 s 且带 usage 尾块；`/v1/models` 20 条已含新名字。
+  - `python tools/check-project.py` → exit 0（8 项通过）。
+- 为什么不会被每日更新冲掉：拆分规则是 `model_alias.py` 里的常量，每日 12:00 的 `sync-models.ps1` 走同一份代码重算，不是手改配置；`go_model_sync.py` 的 `probe_targets()` 按 alias map 把显示名还原成 `deepseek-v4.1-flash`、`channel=OC` 正常探测，上游仍在就不会 prune；`--check` 与 `--apply` 同参数，漂移守门已绿。
+- 抗冲掉实测（模拟 2026-11-15 12:00 的每日链）：`python providers/opencode-go/ops/go_model_sync.py --apply` → 已配置 20 个（Go 7 / 非 Go 跳过 13）、「无需移除」，新条目未被删；随后 `model_alias.py --slot auto --apply --arena` 连跑两轮收敛 → 第二轮「无漂移」+ DSH 投影「无变化」（幂等成立），主力首位仍是 `DeepSeek-4.1-Flash-OC`。
+- 流式准入（`python tools/model_stream_check.py --changed --soft`，exit 0）：`DeepSeek-4.1-Flash-OC` = WARN / chunks 74 / maxDelta 184，同档位 8192 预算补测出正文 —— 小预算下正文为空是「思考 token 占满 max_tokens」所致，不是链断；同批 GPT-6-Luna 亦 WARN，FAIL 0。报告 `.work/model-stream/latest.json`（全量 20 条）。
+- 边界：未动 `gateways/zgate`（无需换版）；未 `git add` / `commit` / `push`。
+
+---
+
+## 批次：2026-11-14 ModelBus 优化批次（zgate 转发热路径降分配 + 管理面收紧 + 可观测面 + 控制台接入）
+
+- 判定：≥3目标=是（降内存 / 提速 / 补漏洞 / 更好的实现 / 联动适配 / 补该有功能）、≥3处同类=是（六处重复 `json.Unmarshal`、每请求 `os.Stat`、每请求 `make` 缓冲）、≥10次工具=是、多视角=是 → 命中 §7/§14 闸门，同批 3 路互斥写域子代理（tests / docs / console），主线负责网关主改造、验收与文档落盘；PROGRESS.md 单写者。
+- 用户原话（m00001）：「对ModelBus的现有功能进行优化，优化方向为 降低内存占用 提高速度 修补可能会产生的漏洞 更好的实现方法 为可能会产生联动性的功能搭桥做相对应的适配，增加此类项目该有的一些功能。」
+- 新增（`gateways/zgate/internal/router/bodyfacts.go`）：零分配 JSON 扫描 `parseBodyFacts` 一次取 `model` / `stream` / `reasoning_effort` / `thinking` / `tools`，替代 `wantsStream` / `requestModel` / `reasoningGuardMatches` / `reasoningExpectsThinking` / `injectThinkingEffort` / `rewriteModel` 六处各自 `json.Unmarshal` 同一份 body；`withModel` / `withStringField` 改字节拼接，不再 `map[string]any` 往返、不再触发 `json.Marshal` 的 HTML 转义；旧签名全部保留，调用方零改动。
+- 新增（`internal/router/bufpool.go`）：`streamBufSize = 32*1024` + `sync.Pool`，流式读缓冲不再每请求新造。
+- 新增（`internal/router/stats.go`）：`reqStats` 计数 / 字节 / 13 档延迟分桶（p50 p90 p99）/ 状态码分布 / 最近 20 条 ≥5s 慢请求；`respRecorder` 记状态码与出字节并实现 `Flush` + `Unwrap`（不实现 `Flush` 会把 SSE 退化成缓冲）。
+- 新增（`internal/router/admin.go`）：`adminGuard`（回环 `RemoteAddr` + `X-Zgate-Admin` 头 + 同源 `Origin`，可选 `adminToken` / `ZGATE_ADMIN_TOKEN` 常量时间比较）；`/admin/routes`、`/admin/explain`、`/admin/stats`、`/admin/logs`（`tailFileLines` 只读末尾 512 KiB）、`/admin/pprof/*`、`/metrics`（Prometheus 0.0.4，仅回环 + 同源）。
+- 新增（`internal/router/reqid.go`）：`X-Request-Id` 沿用或生成 16 位 hex，响应回写 `X-Zgate-Request-Id`、带给上游、进 `[req]` 收尾日志与慢请求样本；`reqCounter` + `bumpAttempt` 跨回落累计 `X-Zgate-Attempt`；跳头 `X-Zgate-Channel` / `X-Zgate-Model` / `X-Zgate-Hop` 在 `copyHeaders` 之后、建请求之前写。
+- 改（`internal/router/router.go`）：`serveHTTP` 重写 —— `respRecorder` 包一层、`/health` `/models` `/metrics` 三旁路、`/admin/` 先过 `adminGuard`、`MaxBytesReader` 上限 32 MiB 回 413、facts 一次扫描、`refreshAliases` 每秒最多 stat 一次、draining 时回 `Connection: close`、`/health` 与 `/metrics` 不记访问日志；`/v1/models` 加 `ETag`（`"zgate-<rev>-<scope>"`）+ 304 + 进程内按 rev 缓存；`forward` / `forwardChain` 补 `channel string` 形参（原先只有竞速路径传 `hop.Channel`，渠道头恒空），四个调用点一起补。
+- 改（`internal/router/alias.go` 侧 `alias.Map`）：加 `rev` 与 `Revision()` / `Targets()` / `Legacy()` / `CatalogAt()`；`Catalog` 拆 `Catalog()` + `catalogLocked()`，alias 侧 Reload 不加节流（`alias_test.go:44-75` 要求立即生效）。
+- 改（`internal/bridge/bridge.go`）：`Forward` 用 `opts.Stream` 不再二次反序列化；`messagesOf` / `toolsOf` / `rawMap` 合并成 `chatParts` + `parseChatParts`。
+- 改（`internal/config/config.go` / `main.go`）：`MaxRequestBodyBytes`（缺省 32<<20）与 `AdminToken`；`http.Server` 补 `ReadHeaderTimeout` 15s / `IdleTimeout` 120s / `MaxHeaderBytes` 1<<20，**不设** Read/WriteTimeout（会掐断长流）；`SIGTERM` 先 `SetDraining()`；CLI `reload` 改 `NewRequest` + `X-Zgate-Admin: 1`。
+- 修（`doForwardWith`）：注入 `reasoning_effort` 后 `facts = parseBodyFacts(body)` 重扫一次 —— 否则守卫看不到刚补的档位，`TestReasoningGuardForcesEffortThenRedraws` 报「上游调用次数 = 1, want 2」。
+- 改（`tools/console/`，console 子代理）：新增 `/api/routes` / `/api/stats` / `/api/metrics`（TTL 5s / 5s / 10s，`_admin_headers()` 统一补头，404/405 归 `NOT_SUPPORTED` 降级不 500）；前端新增「请求与延迟」卡片、「路由表」页（渠道分组跳行 + 模型 → 链总表）、请求账本与 Prometheus 面板；`actions.py` reload 补头。手写静态 41,816 → 50,999 B。
+- 测试（tests 子代理 + 主线）：新增 `bodyfacts_test.go`（11 例，含 `withModel` 字节保真断言不含 `\u003c`）、`alias_revision_test.go`（6 例）、`admin_test.go`（7 例，含 `adminGuard` 矩阵、token 三例、`/metrics` 跨站 403、ETag 304、413 上限、日志尾部）、`reqid_test.go`（5 例，含跨回落 `Attempt=2`、上游收到 `X-Request-Id`、draining 的 `resp.Close`）。
+- 文档：`docs/ARCHITECTURE.md` §3.5 第 2 条改写 + 新增 §3.6「HTTP 面」（十端点表、管理面三道与四类 403 文案、请求号与跳头、32 MiB、`Connection: close`）；`docs/CONSOLE.md` 端点表三行改写 + 追加六行、行号引用改符号名、体积数刷新为 50,999 B、§11 加 v4 行、§12 加第 12 项；`docs/PITFALLS.md` 新增 `## 52`（管理面裸奔 + body 无上限）、`## 53`（facts 会过期）、`## 54`（三处写了看不见的头）；`CHANGELOG.md` 新增 `## [0.8.0] — 2026-11-14`；`docs/VERSIONING.md` 当前版本 0.7.0 → 0.8.0；新建 `docs/release-notes/0.8.0.md`。
+- 验收（20:40 实跑，workdir `gateways/zgate`）：`go build ./...` = 0、`go vet ./...` = 0、`go test ./...` = 0（`router 17.159s` 全 PASS）；`node --check tools/console/static/app.js` = 0；`python tools/console/server.py --check` = 0（`handwritten static bytes = 50999` / `vendor 686736` / 三条管理面 WARN = 旧二进制 404 / `result = PASS (0 failure(s))`）；`python tools/check-docs.py` = 0（`[OK] 50 篇文档全部通过`）。
+- 部署边界：7871 仍跑 2026-11-11 的旧二进制（10832896 B，PID 19724），`/admin/*` 与 `/metrics` 现为 404；按 AGENTS §6「长驻网关禁止会话自动重启」，换版留给受控流程 `tools/zgate-lifecycle/restart-zgate.cmd`。
+- 边界：未 `git add` / `commit` / `push`（仅对新建 `docs/release-notes/0.8.0.md` 做 `git add -N`，让 `check-docs.py` 的 `git ls-files` 认到链接目标）；用户既有未提交改动（`catalog/model_caps.json`、`providers/qoder/cache/qd_prices.json`、`tests/test_model_alias_*.py`、`tools/model_alias.py`、`evidence/go-model-sync-20261114-180902.md`、`tests/test_cel_map_guard.py`）原样未碰。
+
+---
+
+## 批次补做：2026-11-14 zgate 收尾链路（`/admin/drain` + 预分配读体 + 指标修正）
+
+- 新增 `POST /admin/drain`（`internal/router/admin.go` 的 `adminDrain`，挂在 `router.go` 的 `/admin/` switch）：置 `draining` 后轮询 `stats.inflight`，`?wait_ms=` 缺省 5000 / 上限 30000，返回 `{ok,draining,inflight,waited_ms,timed_out}`；判据是 `inflight <= 1`（这条请求自己也计数）；幂等、不撤销 `draining`；`s.stats == nil` 时直接回干净结果。
+- 改 `tools/zgate-lifecycle/deploy-zgate.ps1` 第 3 步：`Stop-Process -Force` 之前先 `POST /admin/drain?wait_ms=8000`（带 `X-Zgate-Admin: 1`，`ZGATE_ADMIN_TOKEN` 非空再带 `X-Zgate-Token`），旧二进制 404 时记一行日志退回原行为；后续步骤重编号 4→5、5→6、6→7。
+- 改 `internal/router/router.go`：新增 `readBodyLimited` + `bodyHintCap = 8<<20`，`serveHTTP` 用 `r.ContentLength` 预分配请求体（`io.ReadAll` 从 512 B 起逐次翻倍，几十 KB 的 chat body 要拷 7~8 次）；离谱的 `Content-Length` 不采信但仍完整读出，`MaxBytesReader` 照旧兜上限。
+- 改 `internal/router/stats.go`：`sumSec` 记总耗时并输出 `zgate_request_duration_seconds_sum`（此前只有 bucket / count，histogram 不完整）；`quantile` 由截断改 `math.Ceil`（total=3、q=0.5 时截断会把 p50 报小）；`zgate_child_up` 按子进程名排序输出（map 遍历无序，两次抓取无法 diff）；删掉 `observe` 上方重复的注释行。
+- 测试：`admin_test.go` 追加 `TestAdminDrainWaitsForInflight`（占住 inflight + `wait_ms=0` → `timed_out=true`、`inflight=1`、`/health.draining=true`）、`TestAdminDrainCleanWhenIdle`（空闲干净返回 + 无头 403）、`TestReadBodyLimited`（有提示 / chunked / 离谱提示三态）。
+- 文档：`docs/ARCHITECTURE.md` §3.6 表加 `/admin/drain` 行、收尾期段补「换版脚本先 drain」；`docs/CONSOLE.md` 端点计数 九个→十个并点名 drain；`CHANGELOG.md` 端点条目追加 drain、新增「换版链路」条、验收例数 七例→九例；`docs/release-notes/0.8.0.md` 加 drain 与换版脚本两条。
+- 验收：`go build ./...` = 0、`go vet ./...` = 0、`go test -count=1 ./...` = 0（`router 17.696s`）；`gofmt -l` 无输出；`python tools/check-docs.py` = 0（50 篇）；`deploy-zgate.ps1` PowerShell 语法解析 PARSE_OK（230 行）。`go test -race` 在本机不可用：`go: -race requires cgo`。
+- 边界：未 `git add` / `commit` / `push`；7871 未重启（旧二进制没有 drain，换版脚本会自动退回直接停）。
+- 修 `tools/zgate-lifecycle/deploy-zgate.ps1`：写文件工具把开头的 UTF-8 BOM 抹掉了，PS5.1 按 GBK 解码中文注释，`ParseFile` 报 `106: The Try statement is missing its Catch or Finally block.` 等一串行号 —— 补回 BOM（`Buffer.concat([Buffer.from([0xEF,0xBB,0xBF]), ...])`），PS5.1 解析回 `PARSE_OK`。
+- 修 `tools/check-project.py` 的 `check_ps1`：`subprocess.run(..., text=True)` 用 GBK 解码 PS5.1 的中文报错时抛 `UnicodeDecodeError`，读取线程死掉后 `r.stdout` 变 `None`，`.strip()` 抛 `AttributeError` 把门禁带崩；加 `errors="replace"` 与 `(r.stdout or "")` 兜底，失败时打完整 detail。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+---
+
+## 批次：2026-11-14 opencode deepseek1017 多会话掉速定责（只读取证 + A/B 实测，配置零改动）
+
+- 定责结论：本地 zgate 无跨会话全局信号量/排队闸（main.go:198-205、race.go:353-354、config.go:126-127），20:24–20:54 OC_POST=572、THROTTLE_HITS=0、RACE_EMIT=0、cooling=0、upstream.busy=0；「掉到 100 以下」主因在模型默认思考档与 OpenCode Go 通道稳态输出速率，不是本地限速。
+- 三轮 A/B：短请求 1/2/4 路全 200、TTFT 中位数 2873–3532ms 无退化；长请求默认档 1200 token 全部 content_chars=0 / usage_out=1200 / finish=length，经 zgate 与直连 OC 一致（默认 effort=high 吃满预算）；reasoning_effort=none 关思考后单会话 usage 58.0–62.1 tok/s、4 会话 49.7–61.3 tok/s，直连与本地同量级，单会话即低于 100。
+- 上游事实卡：现行正本 https://opencode.ai/docs/go.md（HTTP 200 / 99,695 chars），旧 /docs/zen/go 404；Go 页 concurrency / rate limit / 429 全 0 命中（1661 文本行）；DeepSeek 官方默认 effort=high、直连 API 并发 2500（不直接套用 Go）；社区 ttft_admission_refused 429 仅见于 opencode-go+flash；采样 12:2x UTC 属 off-peak。
+- 三路分片验收：evidence/agent-chain.md 14766/77、agent-logs.md 21310/171、agent-upstream.md 16182/93（BYTES/LINES），SHA256 与自报一致；lead 独立复现 OC_POST=572、RACE_LINES=3、RACE_EMIT=0、THROTTLE_HITS=0。
+- 产物：.work/ab-concurrency-probe.mjs、ab-long-probe.mjs、ab-thinkoff-probe.mjs 与三个 -result.json、.work/fact-cards.md（纠偏现行 URL）、.work/answer.md；凭据仅运行时从 provider_config.json 读取，零落盘/零聊天/零日志。
+- 边界：配置、zgate.json、provider_config.json、docs/、tests/ 零改动；网关保持运行态；未抓真实客户端请求体、未绑定 requestId、用户多会话确切起止秒未给；未 add/commit/push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成

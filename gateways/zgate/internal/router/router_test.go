@@ -280,12 +280,7 @@ func TestAdminReloadAppliesPolicy(t *testing.T) {
 	defer front.Close()
 
 	writeConfig(`{"qoder":{"policy":"ondemand","idleSeconds":60,"windows":["09:00-09:10"]}}`)
-	resp, err := http.Post(front.URL+"/admin/reload", "application/json", nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	raw, _ := io.ReadAll(resp.Body)
-	resp.Body.Close()
+	resp, raw := adminPost(t, front.URL+"/admin/reload")
 	if resp.StatusCode != 200 {
 		t.Fatalf("reload failed: %d %s", resp.StatusCode, raw)
 	}
@@ -294,11 +289,7 @@ func TestAdminReloadAppliesPolicy(t *testing.T) {
 		t.Fatalf("policy not reloaded: %v", state["policy"])
 	}
 
-	getResp, err := http.Get(front.URL + "/admin/reload")
-	if err != nil {
-		t.Fatal(err)
-	}
-	getResp.Body.Close()
+	getResp, _ := adminGet(t, front.URL+"/admin/reload")
 	if getResp.StatusCode != 405 {
 		t.Fatalf("GET must be rejected, got %d", getResp.StatusCode)
 	}

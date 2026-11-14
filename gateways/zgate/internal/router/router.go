@@ -21,6 +21,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"zgate/internal/alias"
@@ -84,6 +85,25 @@ type Server struct {
 	// sem 是「上游语义」这一层的计数：忙了几次、剥思考参数重发几次、补了几次
 	// 截断收口。这些分支都是 2026-11-11 新加的，没有计数就只能靠日志猜。
 	sem *upstreamStats
+	// stats 是请求级指标（QPS / 分位延迟 / 字节数 / 状态码分布 / 慢请求样本），
+	// 供 /health.stats、/admin/stats 与 /metrics 三处共用一份原子计数。
+	stats *reqStats
+	// draining 在 SIGTERM 收尾时置位：/health 与 /metrics 立刻可见，压测脚本据此
+	// 停止灌流量，避免「进程已经在关，前端还在往里塞」的半死状态。
+	draining atomic.Bool
+	// aliasAt/aliasRefresh 是 alias 热加载的节流：每个请求都 os.Stat 一次别名表
+	// （约 93 条模型）纯属浪费，默认 1 秒最多探一次，reload 后强制归零。
+	aliasAt      atomic.Int64
+	aliasRefresh time.Duration
+	// modelsMu/modelsBody/modelsTag 缓存 /v1/models 的序列化结果：目录只在别名表
+	// 换版本（rev 变）时才需要重建，而客户端每次会话都会拉一次。
+	modelsMu   sync.Mutex
+	modelsRev  uint64
+	modelsTag  string
+	modelsBody []byte
+	// ver 是进程版本号（main 包常量注入），让 /health 与 /admin/stats 能回答
+	// 「现在跑的是哪一版」——换版排障时这是第一个要问的问题。
+	ver string
 }
 
 // hopCooldown 是死跳的默认冷却时长；与额度窗口同一量级的短周期，够跨过一轮使用。
@@ -344,7 +364,68 @@ func New(cfg *config.Config, ks keys.Set, am *alias.Map, sup *supervisor.Supervi
 		started: time.Now(), cool: map[string]time.Time{}, silence: map[string]time.Time{},
 		off: map[string]time.Time{}, raceStat: map[string]hopStatSnap{},
 		serialAt: map[string]time.Time{}, early: newEarlyStats(), sem: newUpstreamStats(),
-		hops: newHopStats()}
+		hops: newHopStats(), stats: newReqStats()}
+}
+
+// SetVersion 由 main 注入进程版本号（编译期常量），只影响观测字段。
+func (s *Server) SetVersion(v string) {
+	if s == nil {
+		return
+	}
+	s.ver = v
+}
+
+// version 返回注入的版本号；未注入时回 "dev"，绝不让 /health 出现空串。
+func (s *Server) version() string {
+	if s == nil || s.ver == "" {
+		return "dev"
+	}
+	return s.ver
+}
+
+// SetDraining 标记「正在优雅退出」，供探活与压测端观察。
+func (s *Server) SetDraining() {
+	if s != nil {
+		s.draining.Store(true)
+	}
+}
+
+// maxRequestBody 是请求体上限。缺省 32 MiB：足以放下长上下文 chat 请求，
+// 又能挡住「本地任意进程一条几 GB 的 POST 打爆内存」。
+func (s *Server) maxRequestBody() int64 {
+	if cfg := s.Config(); cfg != nil && cfg.MaxRequestBodyBytes > 0 {
+		return cfg.MaxRequestBodyBytes
+	}
+	return 32 << 20
+}
+
+// aliasRefreshInterval 是别名表 os.Stat 的默认节流间隔。
+const aliasRefreshInterval = time.Second
+
+// refreshAliases 是热路径上的别名表重载：默认每秒最多真 stat 一次，
+// 用 CAS 抢「这一秒的探测权」，其余并发请求直接复用当前快照。
+// aliasRefresh < 0 表示不节流（测试与 reload 后的一次性强制探测）。
+func (s *Server) refreshAliases() {
+	if s == nil || s.aliases == nil {
+		return
+	}
+	interval := s.aliasRefresh
+	if interval == 0 {
+		interval = aliasRefreshInterval
+	}
+	if interval < 0 {
+		s.aliases.Reload()
+		return
+	}
+	now := time.Now().UnixNano()
+	last := s.aliasAt.Load()
+	if last != 0 && now-last < int64(interval) {
+		return
+	}
+	if !s.aliasAt.CompareAndSwap(last, now) {
+		return
+	}
+	s.aliases.Reload()
 }
 
 // headerTimeout 解析「等上游响应头」的实际容忍上限，优先级：测试/显式字段 >
@@ -567,6 +648,46 @@ func (s *Server) keyset() keys.Set {
 func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serveHTTP) }
 
 func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
+	// 出口埋点：状态码与出字节只能在这一层拿到（提前交卷会把状态码改写成 200）。
+	rec := &respRecorder{ResponseWriter: w}
+	w = rec
+	path, search := normalizePath(r)
+	startedAt := time.Now()
+	model := ""
+	var bodyIn int64
+	// 请求号：客户端自己带了就沿用（同一条链路上能串起来），没带就现生成一个。
+	// 之后响应头、/admin/stats 的慢请求表、日志都用同一个值。
+	reqID := strings.TrimSpace(r.Header.Get("X-Request-Id"))
+	if reqID == "" {
+		reqID = newReqID()
+	}
+	if reqID != "" {
+		w.Header().Set("X-Zgate-Request-Id", reqID)
+		r = r.WithContext(withReqID(r.Context(), reqID))
+	}
+	r = r.WithContext(withReqCounter(r.Context()))
+	if s.draining.Load() {
+		// 正在收尾：让客户端这一轮结束就别再复用这条连接。
+		// 不这么做的话，长连接会在进程退出瞬间被掐，客户端看到的是「连接重置」，
+		// 而不是一次干净的 close —— 重试逻辑与用户都更难判断到底发生了什么。
+		w.Header().Set("Connection", "close")
+	}
+	s.stats.begin()
+	// 这个 defer 必须先注册（最后执行）：panic 分支会补写 500，
+	// 统计若跑在它前面，指标里记的就是 0 而不是客户端真拿到的 500。
+	defer func() {
+		d := time.Since(startedAt)
+		s.stats.observe(path, model, reqID, rec.statusCode(), bodyIn, rec.bytes, d)
+		s.stats.done()
+		// 每个请求一行收尾日志，带请求号：出问题时客户端贴出响应头里的
+		// X-Zgate-Request-Id，日志里 grep 同一个值就能定位到这一次。
+		// 健康检查与指标是面板轮询的高频旁路，记了只会把日志刷满。
+		if path != "/health" && path != "/metrics" {
+			s.log.Infof("[req] %s %s %s model=%s status=%d in=%d out=%d %dms",
+				orDash(reqID), r.Method, path, orDash(model), rec.statusCode(), bodyIn, rec.bytes, d.Milliseconds())
+		}
+	}()
+
 	var early *earlySSEWriter
 	defer func() {
 		if rec := recover(); rec != nil {
@@ -579,7 +700,6 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	path, search := normalizePath(r)
 	if path == "/health" {
 		s.health(w)
 		return
@@ -588,26 +708,59 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		s.models(w, r)
 		return
 	}
-	if path == "/admin/reload" {
-		s.reload(w, r)
+	if path == "/metrics" {
+		s.metrics(w, r)
+		return
+	}
+	// 管理面统一在这里过闸：回环地址 + 自定义头 + 同源 + 可选 token。
+	// 以前 /admin/reload 是裸奔的（任何网页都能 POST 触发一次热加载）。
+	if strings.HasPrefix(path, "/admin/") {
+		if !s.adminGuard(w, r) {
+			return
+		}
+		switch {
+		case path == "/admin/reload":
+			s.reload(w, r)
+		case path == "/admin/routes":
+			s.adminRoutes(w)
+		case path == "/admin/explain":
+			s.adminExplain(w, r)
+		case path == "/admin/stats":
+			s.adminStats(w)
+		case path == "/admin/drain":
+			s.adminDrain(w, r)
+		case path == "/admin/logs":
+			s.adminLogs(w, r)
+		case strings.HasPrefix(path, "/admin/pprof"):
+			s.adminPprof(w, r)
+		default:
+			writeJSON(w, 404, errorBody("unknown admin endpoint: "+path, "invalid_request_error"))
+		}
 		return
 	}
 
-	body, err := io.ReadAll(r.Body)
+	// 请求体上限：以前是无限 io.ReadAll，本地任意进程一条几 GB 的 POST 就能把
+	// 网关的内存打满（而且它还是常驻进程）。超限走 413，不是 400。
+	r.Body = http.MaxBytesReader(w, r.Body, s.maxRequestBody())
+	body, err := readBodyLimited(r.Body, r.ContentLength)
 	if err != nil {
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			writeJSON(w, 413, errorBody(fmt.Sprintf("request body exceeds %d bytes", s.maxRequestBody()), "invalid_request_error"))
+			return
+		}
 		writeJSON(w, 400, errorBody("invalid request body", "invalid_request_error"))
 		return
 	}
 	_ = r.Body.Close()
+	bodyIn = int64(len(body))
 
-	model := ""
+	// 一次线性扫描取出 model / stream / reasoning_effort / thinking 等字段，
+	// 替代过去 6 处各自 json.Unmarshal 同一份 body 的写法。
+	facts := bodyFacts{}
 	if len(body) > 0 && strings.Contains(r.Header.Get("Content-Type"), "application/json") {
-		var probe struct {
-			Model string `json:"model"`
-		}
-		if err := json.Unmarshal(body, &probe); err == nil {
-			model = probe.Model
-		}
+		facts = parseBodyFacts(body)
+		model = facts.model
 	}
 
 	isChat := path == "/chat/completions"
@@ -619,7 +772,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// 流式请求先交卷：等上游响应头的空窗里就给客户端 200 + text/event-stream 和心跳，
 	// 免得它自己判死重试（判死权归上游，见 docs/TROUBLESHOOTING.md 18.4）。
 	// 窗口内上游就回话的走老路径，状态码原样透出；非流式请求不适用（它要确定的 JSON + 状态码）。
-	if isChat && wantsStream(body) {
+	if isChat && facts.stream {
 		if window := s.earlyCommitWindow(); window > 0 {
 			early = newEarlySSEWriter(w)
 			defer early.finish()
@@ -635,12 +788,30 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	// 预算到点由 doForward 统一收口（504 + 不埋冷却、不再换跳）。
 	r = r.WithContext(withChainContext(r.Context(), s.chainBudget(), false))
 
-	s.aliases.Reload()
+	s.refreshAliases()
 	if target, ok := s.aliases.Resolve(model); ok {
 		s.routeAlias(w, r, body, model, target, path, search, isChat)
 		return
 	}
 	s.routeFallback(w, r, body, model, path, search, isChat)
+}
+
+// bodyHintCap 是「按 Content-Length 预分配」的上限：超过它就不信这个提示值，
+// 免得一个声称 3 GB 的 Content-Length 让网关先分配再被 MaxBytesReader 拦住。
+const bodyHintCap = 8 << 20
+
+// readBodyLimited 读请求体；已知 Content-Length 且不夸张时按它一次性分配。
+// io.ReadAll 从 512 B 起逐次翻倍，几十 KB 的长上下文 chat body 要拷 7~8 次；
+// 这里一次分配到位，省的是稳态下每请求的那几次拷贝。
+func readBodyLimited(r io.Reader, hint int64) ([]byte, error) {
+	if hint <= 0 || hint > bodyHintCap {
+		return io.ReadAll(r)
+	}
+	buf := bytes.NewBuffer(make([]byte, 0, hint))
+	if _, err := buf.ReadFrom(r); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
 }
 
 func (s *Server) routeAlias(w http.ResponseWriter, r *http.Request, body []byte, model string, t alias.Target, path, search string, isChat bool) {
@@ -693,7 +864,7 @@ func (s *Server) routeAlias(w http.ResponseWriter, r *http.Request, body []byte,
 	}
 	if len(chain) > 1 {
 		s.log.Infof("%s %s%s model=%s -> %s (%s)", r.Method, path, search, model, channel, strings.Join(chain, " -> "))
-		s.forwardChain(w, r, body, t.Base, path, search, headers, chain, 0)
+		s.forwardChain(w, r, body, t.Base, path, search, channel, headers, chain, 0)
 		return
 	}
 	rewritten, ok := rewriteModel(body, t.Upstream)
@@ -702,7 +873,7 @@ func (s *Server) routeAlias(w http.ResponseWriter, r *http.Request, body []byte,
 		return
 	}
 	s.log.Infof("%s %s%s model=%s -> %s", r.Method, path, search, model, channel)
-	s.forward(w, r, rewritten, t.Base, path, search, headers)
+	s.forward(w, r, rewritten, t.Base, path, search, channel, headers)
 }
 
 func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []byte, model, path, search string, isChat bool) {
@@ -712,8 +883,10 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 	label := "opencode"
 	ks := s.keyset()
 	key := ks.OC
-	switch {
-	case isChat && isQoder(model):
+	// 渠道判据抽成 fallbackChannelFor：/admin/explain 要回答「这条请求会去哪」，
+	// 以前只有这一个 switch 知道答案，排障时问不出来。
+	switch fallbackChannelFor(model, isChat) {
+	case "QD":
 		channel, label, key = "QD", "qoder", ks.QD
 		base = cfg.Upstreams["QD"].Base
 		if key == "" {
@@ -726,7 +899,7 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 			return
 		}
 		body = rewritten
-	case isChat && isQwen(model):
+	case "QW":
 		// 千问平台只认 Anthropic Messages；裸 `qwen:` id 还没进 alias map 时
 		// （播种后、归一化前）也要能落到正确上游，而不是被当成 OpenCode 模型。
 		channel, label, key = "QW", "qwen", ks.QW
@@ -751,7 +924,7 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 		})
 		finishBridge(w, cw, result)
 		return
-	case isChat && isQiniu(model):
+	case "QN":
 		// 七牛云 AI 网关：同样只认 Anthropic Messages，裸 `qn:` id 还没进 alias map
 		// 时（播种后、归一化前）也要能落到正确上游。
 		channel, label, key = "QN", "qiniu", ks.QN
@@ -776,7 +949,7 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 		})
 		finishBridge(w, cw, result)
 		return
-	case isChat && isWorkBuddy(model):
+	case "WB":
 		channel, label, key = "WB", "workbuddy", ks.WB
 		base = cfg.Upstreams["WB"].Base
 		if key == "" {
@@ -795,7 +968,25 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 		return
 	}
 	s.log.Infof("%s %s%s model=%s -> %s", r.Method, path, search, orDash(model), label)
-	s.forward(w, r, body, base, path, search, headers)
+	s.forward(w, r, body, base, path, search, channel, headers)
+}
+
+// fallbackChannelFor 只回答「没进 alias map 的裸 model 会落到哪个渠道」。
+// routeFallback 与 /admin/explain 共用这一份判据，避免「排障看到的去向」
+// 与「实际转发去向」两套前缀规则各写一遍。
+func fallbackChannelFor(model string, isChat bool) string {
+	switch {
+	case isChat && isQoder(model):
+		return "QD"
+	case isChat && isQwen(model):
+		return "QW"
+	case isChat && isQiniu(model):
+		return "QN"
+	case isChat && isWorkBuddy(model):
+		return "WB"
+	default:
+		return "OC"
+	}
 }
 
 // prepare starts an on-demand child and marks the channel as recently used.
@@ -845,11 +1036,11 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 	return h
 }
 
-func (s *Server) forward(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header) {
-	s.doForwardWith(w, r, body, base, path, search, "", headers, nil, nil, nil, nil, nil)
+func (s *Server) forward(w http.ResponseWriter, r *http.Request, body []byte, base, path, search, channel string, headers http.Header) {
+	s.doForwardWith(w, r, body, base, path, search, channel, headers, nil, nil, nil, nil, nil)
 }
 
-func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byte, base, path, search string, headers http.Header, chain []string, index int) {
+func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byte, base, path, search, channel string, headers http.Header, chain []string, index int) {
 	if index >= len(chain) {
 		writeJSON(w, 502, errorBody("all upstreams failed: "+strings.Join(chain, " -> "), "proxy_error"))
 		return
@@ -862,12 +1053,12 @@ func (s *Server) forwardChain(w http.ResponseWriter, r *http.Request, body []byt
 	retry := func(reason string) {
 		if index+1 < len(chain) {
 			s.log.Infof("[router] %s -> %s, fallback %s", chain[index], reason, chain[index+1])
-			s.forwardChain(w, r, body, base, path, search, headers, chain, index+1)
+			s.forwardChain(w, r, body, base, path, search, channel, headers, chain, index+1)
 			return
 		}
 		writeJSON(w, 502, errorBody("unified-router upstream error: "+reason, "proxy_error"))
 	}
-	s.doForwardWith(w, r, rewritten, base, path, search, "", headers, chainAccept, retry, nil, nil, nil)
+	s.doForwardWith(w, r, rewritten, base, path, search, channel, headers, chainAccept, retry, nil, nil, nil)
 }
 
 // errUpstreamSilent 表示「连上了上游，但它在 s.headerTimeout() 内一个响应头都没给」。
@@ -953,11 +1144,20 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	target := strings.TrimRight(base, "/") + path + search
 	// 客户端没声明思考档位时由网关补一档（config.ReasoningGuard.ForceEffort）。
 	// 必须在上游请求、requestModel 与 guardApplies 之前替换 body —— 三者用的都是这份字节。
-	if injected, ok := injectThinkingEffort(s.Config().ReasoningGuard, body); ok {
+	//
+	// 这份 body 在这一层只扫描一次：注入、取 model、判流式、判守卫全部复用同一份
+	// 扫描结果。注入只在末尾插一个字段，model/stream 仍然有效（只有 closeAt 偏移
+	// 会变），但注入之后必须重扫一次 —— 守卫判「客户端是否已经要了思考」看的就是
+	// reasoning_effort，沿用注入前的事实会让刚补上的档位在守卫眼里不存在。
+	guard := s.Config().ReasoningGuard
+	facts := parseBodyFacts(body)
+	if injected, ok := injectThinkingEffortFacts(guard, facts, body); ok {
 		s.log.Infof("[router] %s 客户端未声明思考档位，按配置补 reasoning_effort=%q",
-			target, s.Config().ReasoningGuard.ForceEffort)
+			target, guard.ForceEffort)
 		body = injected
+		facts = parseBodyFacts(body)
 	}
+	modelName := facts.model
 	// 429 就地退避重试一次：限流窗口通常很短，先等一小会儿再试同一跳，
 	// 比立刻回落/直接失败更划算。重试仍 429 时再交给 onThrottled 冷却。
 	// txRetry 与 retry429 各自单独计数：传输层失败的重试不能消耗 429 的退避预算，
@@ -985,8 +1185,16 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 	if at != nil && at.policy.FirstBlockMs > 0 {
 		firstBlock = time.Duration(at.policy.FirstBlockMs) * time.Millisecond
 	}
+	// attempts：本请求打上游的总次数（含传输重试、429 退避、重抽），只用于响应头。
+	attempts := 0
 	startedAt := time.Now()
 	for {
+		attempts++
+		// 跨跳累计：回落时新的一跳是新的一次 doForwardWith 调用，局部计数会从头
+		// 开始，响应头里的 Attempt 就永远显示 1。以 context 计数器为准。
+		if n := bumpAttempt(r.Context()); n > 0 {
+			attempts = n
+		}
 		req, err := http.NewRequestWithContext(r.Context(), r.Method, target, bytes.NewReader(body))
 		if err != nil {
 			writeJSON(w, 502, errorBody("unified-router upstream error: "+err.Error(), "proxy_error"))
@@ -996,6 +1204,11 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			s.hopTry(*hop)
 		}
 		req.Header = headers.Clone()
+		// 请求号也带给上游：上游日志/工单里能对上同一次调用。
+		// 上游不认识这个头也无害，认识（多数兼容 OpenAI 的实现会忽略）就多一层关联。
+		if id := reqIDFrom(r.Context()); id != "" {
+			req.Header.Set("X-Request-Id", id)
+		}
 		if guardRetries > 0 {
 			// 重抽必须换「连接 + 会话」两样：2026-11-10 12:01 实测 3 次重抽全部落回
 			// 同一路加密后端（同一 keep-alive 连接、同一个写死的 X-Opencode-Session），
@@ -1031,7 +1244,7 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 					budgetHit = se.budget
 				}
 				s.log.Warnf("[router] %s（channel=%s model=%s）上游 %v 内没给响应头，判这一跳沉默并换跳",
-					base, channel, requestModel(body), applied)
+					base, channel, modelName, applied)
 				if hop != nil && !budgetHit {
 					// 只统计「这一跳自己的沉默」：预算耗尽（budgetHit）说明是整条链
 					// 的时间用完了，记到最后一跳头上会让人误判它不行。
@@ -1163,10 +1376,9 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		// 先判首段 SSE：零明文 thinking delta 且带加密 detail → 丢弃缓冲、重抽同一跳，
 		// 直到拿到明文思考流或达上限。重抽绝不调用 retry（不走 fallback），也绝不写 header。
 		var streamSrc io.Reader = resp.Body
-		guard := s.Config().ReasoningGuard
-		model := requestModel(body)
-		if resp.StatusCode < 300 && wantsStream(body) && isEventStreamGuard(resp) &&
-			s.guardWanted(model, channel, guard, body) {
+		model := modelName
+		if resp.StatusCode < 300 && facts.stream && isEventStreamGuard(resp) &&
+			s.guardWantedFacts(model, channel, guard, facts) {
 			// 重抽预算已经花完，或者这个模型正处在「近期拿不到明文思考」的窗口期：都不再探测。
 			// 加密那一路探针要么等到整段思考结束才判得出（实测 11 s / 61 s），
 			// 要么白等满上限；而窗口期内重抽几乎必然落回同一路后端（12:01 连续 3/3、
@@ -1273,6 +1485,19 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		defer resp.Body.Close()
 		copyHeaders(w.Header(), resp.Header)
+		// 把「这一跳是谁服务的、第几次尝试」写进响应头：客户端和控制台不必再翻
+		// 网关日志就知道实际命中哪条上游、前面失败过几次。
+		// 边界：提前交卷（earlySSE）的流式请求头早发出去了，这里设不进去。
+		if ch := channel; ch != "" {
+			w.Header().Set("X-Zgate-Channel", ch)
+		} else if at != nil && at.hop.Channel != "" {
+			w.Header().Set("X-Zgate-Channel", at.hop.Channel)
+		}
+		w.Header().Set("X-Zgate-Model", model)
+		w.Header().Set("X-Zgate-Attempt", strconv.Itoa(attempts))
+		if at != nil && at.hopTag != "" {
+			w.Header().Set("X-Zgate-Hop", at.hopTag)
+		}
 		sse := isEventStreamGuard(resp)
 		// tracker 只对事件流有意义：普通 JSON 没有 finish_reason 概念，给它补帧会毁掉响应体。
 		var tracker *streamTracker
@@ -1302,7 +1527,11 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		if len(head) > 0 && flusher != nil {
 			flusher.Flush()
 		}
-		buf := make([]byte, 32*1024)
+		// 转发缓冲从池里拿：每个流式请求过去都要 make 一个 32 KiB 的切片，
+		// 流一多就是「请求数 × 32 KiB」的瞬时分配。defer 归还覆盖本块所有 return。
+		bufp := getStreamBuf()
+		defer putStreamBuf(bufp)
+		buf := *bufp
 		heartbeat := time.Duration(s.Config().StreamIdleHeartbeatSeconds) * time.Second
 		if heartbeat > 0 && !sse {
 			// 心跳只对 SSE 有意义：往普通 JSON 报文里插注释行会直接毁掉响应体，
@@ -1332,22 +1561,30 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		// 空闲心跳：上游思考阶段常静默 30-60 秒（2026-11-10 实测 iceman 正文中断
 		// 51.9 秒），中间层和宿主都会把这当成「连上了但没说话」。SSE 注释行对任何
 		// 合规客户端都是无操作，但足以证明连接还活着，也让用户看到界面还在动。
+		// 每个块用池里的一块缓冲「交接」给写端：读端读进自己的缓冲，写完由写端
+		// 归还。过去是 append([]byte(nil), buf[:n]...) 每块新分配一次 ——
+		// 一条 30 分钟的长回答能因此产生几千次分配。
 		type streamRead struct {
 			data []byte
+			buf  *[]byte
 			err  error
 		}
 		ch := make(chan streamRead, 4)
 		go func() {
 			for {
-				n, readErr := streamSrc.Read(buf)
+				pb := getStreamBuf()
+				n, readErr := streamSrc.Read(*pb)
 				var data []byte
 				if n > 0 {
-					// 主循环要立刻写出去，必须复制：buf 会被下一次 Read 覆盖。
-					data = append([]byte(nil), buf[:n]...)
+					data = (*pb)[:n]
+				} else {
+					putStreamBuf(pb)
+					pb = nil
 				}
 				select {
-				case ch <- streamRead{data: data, err: readErr}:
+				case ch <- streamRead{data: data, buf: pb, err: readErr}:
 				case <-r.Context().Done():
+					putStreamBuf(pb)
 					return
 				}
 				if readErr != nil {
@@ -1362,12 +1599,17 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			case rr := <-ch:
 				if len(rr.data) > 0 {
 					tracker.feed(rr.data)
-					if _, writeErr := w.Write(rr.data); writeErr != nil {
+					_, writeErr := w.Write(rr.data)
+					// 写完立刻把缓冲还给池：这一块之后不再被引用。
+					putStreamBuf(rr.buf)
+					if writeErr != nil {
 						return
 					}
 					if flusher != nil {
 						flusher.Flush()
 					}
+				} else {
+					putStreamBuf(rr.buf)
 				}
 				if rr.err != nil {
 					s.closeTruncated(w, flusher, model, true, tracker)
@@ -1383,7 +1625,15 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				}
 				resetTimer(timer, heartbeat)
 			case <-r.Context().Done():
-				return
+				// 客户端走了：把还在通道里的缓冲捞回来再退出，别让它们白等 GC。
+				for {
+					select {
+					case rr := <-ch:
+						putStreamBuf(rr.buf)
+					default:
+						return
+					}
+				}
 			}
 		}
 	}
@@ -1423,7 +1673,7 @@ func healthSegmentName(channel string) string {
 }
 
 func (s *Server) health(w http.ResponseWriter) {
-	s.aliases.Reload()
+	s.refreshAliases()
 	states := s.sup.States()
 	upstreamView := func(channel string) map[string]any {
 		u := s.Config().Upstreams[channel]
@@ -1458,12 +1708,18 @@ func (s *Server) health(w http.ResponseWriter) {
 	payload := map[string]any{
 		"ok": true,
 		"alias": map[string]any{
-			"path":   s.aliases.Path(),
-			"models": s.aliases.Count(),
+			"path":     s.aliases.Path(),
+			"models":   s.aliases.Count(),
+			"revision": s.aliases.Revision(),
 		},
 		"children": states,
 		"cooling":  s.coolingCount(),
 		"uptime_s": int(time.Since(s.started).Seconds()),
+		"version":  s.version(),
+		"draining": s.draining.Load(),
+		// stats 段：QPS / 分位延迟 / 字节数 / 状态码分布 / 最近慢请求。
+		// 以前 /health 只有「冷却与计数」，回答不了「现在到底多快、多忙」。
+		"stats": s.stats.view(),
 	}
 	// 段名与渠道的对应关系只由 keys.Channels 驱动：加渠道不用再回来改这里。
 	for _, channel := range keys.Channels {
@@ -1509,37 +1765,62 @@ func (s *Server) health(w http.ResponseWriter) {
 // id），面板上没法挑；而 legacy id 又不能删——历史会话里还写着它们。分开取用，
 // 谁需要谁自己点名要 legacy。
 func (s *Server) models(w http.ResponseWriter, r *http.Request) {
-	all := s.aliases.Catalog()
+	s.refreshAliases()
+	all, rev := s.aliases.CatalogAt()
 	scope := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("scope")))
 	if scope == "" {
 		scope = "canonical"
 	}
-	data := all
 	switch scope {
-	case "all":
-	case "canonical", "legacy":
-		data = make([]alias.CatalogEntry, 0, len(all))
-		for _, e := range all {
-			isCanonical := e.CanonicalID == e.ID
-			if isCanonical == (scope == "canonical") {
-				data = append(data, e)
-			}
-		}
+	case "all", "canonical", "legacy":
 	default:
 		writeJSON(w, 400, errorBody("unknown scope: "+scope+" (want canonical|legacy|all)", "invalid_request_error"))
 		return
 	}
-	// total 是**本次返回**的条数（客户端直接拿来数「我有几个模型」），
-	// 全量目录的条数单独放 catalog_total —— 两个数混成一个会让 20 条的响应
-	// 写着 93，看起来像分页没给完。
-	writeJSON(w, 200, map[string]any{
-		"object":        "list",
-		"owned_by":      "zgate",
-		"scope":         scope,
-		"total":         len(data),
-		"catalog_total": len(all),
-		"data":          data,
-	})
+	// ETag 由「别名表版本 + scope」拼成：目录只在 alias map 真换了版本时变，
+	// 客户端每次会话都拉一遍 /v1/models，带 If-None-Match 就能直接拿 304。
+	tag := "\"zgate-" + strconv.FormatUint(rev, 10) + "-" + scope + "\""
+	if inm := strings.TrimSpace(r.Header.Get("If-None-Match")); inm != "" && inm == tag {
+		w.Header().Set("ETag", tag)
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	s.modelsMu.Lock()
+	if s.modelsRev != rev || s.modelsTag != scope || s.modelsBody == nil {
+		data := all
+		if scope != "all" {
+			data = make([]alias.CatalogEntry, 0, len(all))
+			for _, e := range all {
+				isCanonical := e.CanonicalID == e.ID
+				if isCanonical == (scope == "canonical") {
+					data = append(data, e)
+				}
+			}
+		}
+		// total 是**本次返回**的条数（客户端直接拿来数「我有几个模型」），
+		// 全量目录的条数单独放 catalog_total —— 两个数混成一个会让 20 条的响应
+		// 写着 93，看起来像分页没给完。
+		payload := map[string]any{
+			"object":        "list",
+			"owned_by":      "zgate",
+			"scope":         scope,
+			"total":         len(data),
+			"catalog_total": len(all),
+			"data":          data,
+		}
+		body, err := json.Marshal(payload)
+		if err != nil {
+			body = []byte(`{"error":{"message":"encode failed","type":"proxy_error"}}`)
+		}
+		s.modelsRev, s.modelsTag, s.modelsBody = rev, scope, body
+	}
+	body := s.modelsBody
+	s.modelsMu.Unlock()
+	w.Header().Set("Content-Type", "application/json; charset=utf-8")
+	w.Header().Set("Content-Length", itoa(len(body)))
+	w.Header().Set("ETag", tag)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // routeChain walks a merged chain: every hop carries its own base, channel and
@@ -1976,6 +2257,8 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile, next.HajimiEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)
+	// 强制下一次探测别名表：热加载之后不该再等一个节流窗口。
+	s.aliasAt.Store(0)
 	s.aliases.Reload()
 	s.log.Infof("配置已热加载: %s（生效 %v）", next.Path, applied)
 	writeJSON(w, 200, map[string]any{
@@ -2016,32 +2299,27 @@ func normalizePath(r *http.Request) (string, string) {
 	return path, ""
 }
 
+// rewriteModel 把 body 里的 model 换成 upstream 名。
+//
+// 过去是 map[string]any 全量 Unmarshal + Marshal：一次 200 KB 的请求要分配
+// 上千个 interface{}，还把 prompt 里的 < > & 全部转义成 \u003c 之类（同一个
+// 请求重发时字节都变了，缓存与日志比对全失真）。现在只在 model 值那一段
+// 做字节拼接，其余字节原样不动。
 func rewriteModel(body []byte, upstream string) ([]byte, bool) {
 	if len(body) == 0 {
 		return body, true
 	}
-	var obj map[string]any
-	if err := json.Unmarshal(body, &obj); err != nil {
+	f := parseBodyFacts(body)
+	if !f.ok || !f.hasModel {
 		return nil, false
 	}
-	obj["model"] = upstream
-	out, err := json.Marshal(obj)
-	if err != nil {
-		return nil, false
-	}
-	return out, true
+	return f.withModel(body, upstream)
 }
 
 // wantsStream 返回客户端（ZCode）是否请求了 SSE 流式输出。桥接模型上游也按流式请求，
 // 让首字即时到达；非流式时桥接器退化为「整段合成一个 chunk」。
 func wantsStream(body []byte) bool {
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(body, &probe); err != nil {
-		return false
-	}
-	return probe.Stream
+	return parseBodyFacts(body).stream
 }
 
 // ---- reasoningGuard：上游加密思考分流的透明重抽 ----------------------------
@@ -2058,17 +2336,17 @@ const (
 // doForwardWith 拿到的是 rewriteModel 之后的 body，model 已是 upstream 名，
 // 因此白名单同时写别名（Iceman）与 upstream（iceman-contributor-free）。
 func reasoningGuardMatches(models []string, body []byte) bool {
-	if len(models) == 0 {
-		return false
-	}
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(body, &probe) != nil {
+	return guardMatchesFacts(models, parseBodyFacts(body))
+}
+
+// guardMatchesFacts 是 reasoningGuardMatches 的零分配版本：body 已经扫描过时
+// 直接比对 model 字段，不再为一次白名单匹配重新解析整份 JSON。
+func guardMatchesFacts(models []string, f bodyFacts) bool {
+	if len(models) == 0 || !f.modelStr || f.model == "" {
 		return false
 	}
 	for _, m := range models {
-		if m != "" && strings.EqualFold(m, probe.Model) {
+		if m != "" && strings.EqualFold(m, f.model) {
 			return true
 		}
 	}
@@ -2078,20 +2356,7 @@ func reasoningGuardMatches(models []string, body []byte) bool {
 // reasoningExpectsThinking 判断这次请求是否声明要思考。用户显式关思考
 // （reasoning_effort=off / thinking.type=disabled）时守卫跳过，不重抽。
 func reasoningExpectsThinking(body []byte) bool {
-	var probe struct {
-		ReasoningEffort *string `json:"reasoning_effort"`
-		Thinking        *struct {
-			Type string `json:"type"`
-		} `json:"thinking"`
-	}
-	if json.Unmarshal(body, &probe) != nil {
-		return false
-	}
-	if probe.ReasoningEffort != nil && *probe.ReasoningEffort != "" &&
-		!strings.EqualFold(*probe.ReasoningEffort, "off") {
-		return true
-	}
-	return probe.Thinking != nil && strings.EqualFold(probe.Thinking.Type, "enabled")
+	return parseBodyFacts(body).expectsThinking()
 }
 
 // injectThinkingEffort 在客户端没声明思考档位时替它补上 reasoning_effort。
@@ -2099,6 +2364,12 @@ func reasoningExpectsThinking(body []byte) bool {
 // 客户端自带 reasoning_effort / thinking.type 时一律不动它 —— 用户显式关思考（off）
 // 也要原样保留，否则「关掉思考」这个操作会被网关偷偷改回去。
 func injectThinkingEffort(g config.ReasoningGuard, body []byte) ([]byte, bool) {
+	return injectThinkingEffortFacts(g, parseBodyFacts(body), body)
+}
+
+// injectThinkingEffortFacts 是 injectThinkingEffort 的实现体：调用方已经扫描过
+// body 时直接复用结果，避免为「补一个字段」再全量解析一遍 JSON。
+func injectThinkingEffortFacts(g config.ReasoningGuard, f bodyFacts, body []byte) ([]byte, bool) {
 	if !g.Enabled || g.ForceEffort == "" || len(body) == 0 {
 		return body, false
 	}
@@ -2106,37 +2377,21 @@ func injectThinkingEffort(g config.ReasoningGuard, body []byte) ([]byte, bool) {
 	if len(models) == 0 {
 		models = g.Models
 	}
-	if !reasoningGuardMatches(models, body) {
+	if !guardMatchesFacts(models, f) {
 		return body, false
 	}
-	var raw map[string]json.RawMessage
-	if json.Unmarshal(body, &raw) != nil {
-		return body, false
-	}
-	if _, ok := raw["model"]; !ok {
+	if !f.hasModel {
 		return body, false
 	}
 	// 客户端自己带了档位就一律不动 —— 注意不能只看 reasoningExpectsThinking：
 	// 那个函数把 "off" 判成「不期待思考」，照它来的话用户点「关掉思考」会被悄悄改回 high。
-	if v, ok := raw["reasoning_effort"]; ok {
-		var s string
-		if json.Unmarshal(v, &s) != nil || s != "" {
-			return body, false
-		}
-	}
-	if _, ok := raw["thinking"]; ok {
+	if f.hasEffort && (!f.effortStr || f.effort != "") {
 		return body, false
 	}
-	effort, err := json.Marshal(g.ForceEffort)
-	if err != nil {
+	if f.hasThink {
 		return body, false
 	}
-	raw["reasoning_effort"] = effort
-	out, err := json.Marshal(raw)
-	if err != nil {
-		return body, false
-	}
-	return out, true
+	return f.withStringField(body, "reasoning_effort", g.ForceEffort)
 }
 
 func isEventStreamGuard(resp *http.Response) bool {
@@ -2272,13 +2527,7 @@ type guardModelStat struct {
 
 // requestModel 取请求体里的 model（此时已是 rewriteModel 之后的 upstream 名）。
 func requestModel(body []byte) string {
-	var probe struct {
-		Model string `json:"model"`
-	}
-	if json.Unmarshal(body, &probe) != nil {
-		return ""
-	}
-	return probe.Model
+	return parseBodyFacts(body).model
 }
 
 // guardRetrySession 给第 attempt 次重抽造一个新的会话标识。
@@ -2314,7 +2563,7 @@ func (s *Server) guardStat(model string) *guardModelStat {
 // 反过来，某个模型连续 giveUpAfter 轮重抽都没拿到明文时会被记进跳过表：
 // 它本来就是「天生只给加密」，再重抽只是让用户白等，跳过更划算；到期自动复探。
 func (s *Server) guardApplies(model, channel string, g config.ReasoningGuard, body []byte) bool {
-	return s.guardWanted(model, channel, g, body) && !s.guardInSkip(model)
+	return s.guardWantedFacts(model, channel, g, parseBodyFacts(body)) && !s.guardInSkip(model)
 }
 
 // guardWanted 只回答「这一跳的形态是否命中守卫条件」，不看跳过表。
@@ -2330,18 +2579,23 @@ func (s *Server) guardApplies(model, channel string, g config.ReasoningGuard, bo
 //	          名单非空时再叠一层收窄（谁写了名单就是想只盯这些名字）。
 //	models    老口径：只看 Models 白名单。
 func (s *Server) guardWanted(model, channel string, g config.ReasoningGuard, body []byte) bool {
-	if !g.Enabled || !reasoningExpectsThinking(body) {
+	return s.guardWantedFacts(model, channel, g, parseBodyFacts(body))
+}
+
+// guardWantedFacts 是 guardWanted 的零分配版本：body 已扫描过时直接复用。
+func (s *Server) guardWantedFacts(model, channel string, g config.ReasoningGuard, f bodyFacts) bool {
+	if !g.Enabled || !f.expectsThinking() {
 		return false
 	}
 	switch {
 	case strings.EqualFold(g.Mode, "models"):
-		return reasoningGuardMatches(g.Models, body)
+		return guardMatchesFacts(g.Models, f)
 	case strings.EqualFold(g.Mode, "channels"):
 		if !s.Config().Upstreams[channel].GuardReasoning {
 			return false
 		}
 		if len(g.Models) > 0 {
-			return reasoningGuardMatches(g.Models, body)
+			return guardMatchesFacts(g.Models, f)
 		}
 		return true
 	default:

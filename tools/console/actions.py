@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 from datetime import datetime
 from urllib.error import HTTPError, URLError
@@ -34,9 +35,16 @@ def reload_gateway():
         _STATE["running"] = True
     entry = {"action": "reload", "at": datetime.now().astimezone().isoformat(timespec="seconds")}
     try:
+        # 网关管理面要求 X-Zgate-Admin（挡住浏览器跨站表单）；配了 adminToken
+        # 的话再从环境变量带口令，控制台不把口令写进代码。
+        headers = {"Content-Type": "application/json",
+                   "Accept": "application/json",
+                   "X-Zgate-Admin": "1"}
+        token = os.environ.get("ZGATE_ADMIN_TOKEN", "").strip()
+        if token:
+            headers["X-Zgate-Token"] = token
         req = Request(sources.GATEWAY + "/admin/reload", data=b"{}", method="POST",
-                      headers={"Content-Type": "application/json",
-                               "Accept": "application/json"})
+                      headers=headers)
         with urlopen(req, timeout=10) as resp:
             raw = resp.read(65536).decode("utf-8", "replace")
             entry["status"] = resp.status

@@ -64,6 +64,9 @@ type Map struct {
 	mtime time.Time
 	size  int64
 	data  *file
+	// rev 是快照版本号：每次成功换快照 +1，进程内单调递增。
+	// 路由层靠它判断「目录视图要不要重建」，比每次都排序一遍 93 条便宜得多。
+	rev uint64
 }
 
 // New returns a Map bound to path; a missing file is not an error.
@@ -102,7 +105,44 @@ func (m *Map) Reload() {
 	m.data = &next
 	m.mtime = stat.ModTime()
 	m.size = stat.Size()
+	m.rev++
 	m.mu.Unlock()
+}
+
+// Revision 是当前快照的版本号（0 = 还没成功读过文件）。
+func (m *Map) Revision() uint64 {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.rev
+}
+
+// Targets 返回别名表的浅拷贝（map 值类型，Hop 切片仍共享底层数组但只读）。
+// 给管理面 dump 路由用：调用方拿不到 *Map，也就改不了内部状态。
+func (m *Map) Targets() map[string]Target {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.data == nil {
+		return map[string]Target{}
+	}
+	out := make(map[string]Target, len(m.data.Models))
+	for k, v := range m.data.Models {
+		out[k] = v
+	}
+	return out
+}
+
+// Legacy 返回 legacy id → 显示名的映射拷贝。
+func (m *Map) Legacy() map[string]string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	if m.data == nil {
+		return map[string]string{}
+	}
+	out := make(map[string]string, len(m.data.Legacy))
+	for k, v := range m.data.Legacy {
+		out[k] = v
+	}
+	return out
 }
 
 // Count is how many display names the file carries (0 when it is missing).
@@ -197,6 +237,19 @@ func (m *Map) Catalog() []CatalogEntry {
 	m.Reload()
 	m.mu.RLock()
 	defer m.mu.RUnlock()
+	return m.catalogLocked()
+}
+
+// CatalogAt 返回当前快照的目录与版本号，不碰文件系统。
+// 路由层的 /models 缓存用它：先按节流刷新别名，再取一次快照，版本没变就直接
+// 复用上一次序列化好的字节。
+func (m *Map) CatalogAt() ([]CatalogEntry, uint64) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.catalogLocked(), m.rev
+}
+
+func (m *Map) catalogLocked() []CatalogEntry {
 	if m.data == nil {
 		return []CatalogEntry{}
 	}

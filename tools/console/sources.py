@@ -364,7 +364,8 @@ def logs():
 def config():
     def fn():
         env_names = ("MODELBUS_GATEWAY", "WB_GATEWAY_KEY", "WB_GATEWAY_BASE",
-                     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "ZCODE_BUILTIN")
+                     "ZCODE_PERSONAL_PROVIDER_CONFIG_FILE", "ZCODE_BUILTIN",
+                     ADMIN_TOKEN_ENV)
         env = [{"name": n, "configured": bool(os.environ.get(n))} for n in env_names]
         targets = [("provider_config.json", ZV2 / "provider_config.json"),
                    ("credentials.json", ZV2 / "credentials.json"),
@@ -379,6 +380,10 @@ def config():
         return {
             "gateway": GATEWAY, "bind": "127.0.0.1", "env": env, "files": files,
             "write_actions": ["reload"],
+            "admin": {"header": "X-Zgate-Admin: 1",
+                      "token_env": ADMIN_TOKEN_ENV,
+                      "token_configured": admin_token_configured(),
+                      "endpoints": ["/admin/routes", "/admin/stats", "/metrics"]},
             "note": "配置只报存在性 / 体积，键与值一律不出进程",
         }
     return cached("config", 60000, fn)
@@ -421,6 +426,230 @@ def ops():
             "policy": "后台只读展示，不自动删除任何文件",
         }
     return cached("ops", 30000, fn)
+
+
+# ---- 网关管理面（三个只读端点）--------------------------------------------
+# 7871 上这三个端点由 gateways/zgate/internal/router/admin.go 提供：
+#   /admin/routes → 整张路由表（每跳渠道 / 协议 / 价格 / 当前状态）
+#   /admin/stats  → 请求量 / 错误 / inflight / 字节 / p50 p90 p99 / 状态码分布 / 慢请求
+#   /metrics      → Prometheus 0.0.4 文本
+# /admin/* 走 adminGuard：回环来源 + X-Zgate-Admin 头 +（配了口令时的）X-Zgate-Token。
+# 控制台自己也在回环上跑，头统一在 _admin_headers() 里补；口令只从环境变量读，
+# 不进源码、不进响应、不进日志。
+#
+# 降级口径：这三个源可能比控制台新或旧 —— 旧版 zgate.exe 对 /admin/* 直接 404。
+# 控制台不因此 500：统一返回 {available: false, error: {...}}，页面显示
+# 「网关未提供该端点」，其余页照常可用。
+ADMIN_TOKEN_ENV = "ZGATE_ADMIN_TOKEN"
+METRICS_MAX_BYTES = 64 << 10  # /metrics 原样返回但限长，几十 KB 全塞页面没有意义
+
+
+def admin_token_configured() -> bool:
+    """只报「配没配」，值永不出进程。"""
+    return bool(os.environ.get(ADMIN_TOKEN_ENV, "").strip())
+
+
+def _admin_headers(accept: str = "application/json") -> dict:
+    headers = {"Accept": accept, "X-Zgate-Admin": "1"}
+    token = os.environ.get(ADMIN_TOKEN_ENV, "").strip()
+    if token:
+        headers["X-Zgate-Token"] = token
+    return headers
+
+
+def _admin_raw(path: str, accept: str = "application/json", timeout: float = 2.5,
+               limit: int = 4 << 20):
+    req = Request(GATEWAY + path, headers=_admin_headers(accept))
+    try:
+        with urlopen(req, timeout=timeout) as resp:
+            return resp.status, resp.headers.get("Content-Type", ""), resp.read(limit)
+    except HTTPError as exc:
+        # 404 / 405 = 这版网关还没有该端点（旧二进制），和「网关挂了」要分开报。
+        code = "NOT_SUPPORTED" if exc.code in (404, 405) else "UPSTREAM_DOWN"
+        raise SourceError(code, f"gateway {path}: HTTP {exc.code}") from exc
+    except (URLError, TimeoutError, OSError) as exc:
+        raise SourceError("UPSTREAM_DOWN",
+                          f"gateway {path}: {type(exc).__name__}: {exc}") from exc
+
+
+def _admin_json(path: str, timeout: float = 2.5):
+    _, _, raw = _admin_raw(path, timeout=timeout)
+    try:
+        return json.loads(raw.decode("utf-8", "replace"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise SourceError("PARSE_ERROR",
+                          f"gateway {path}: {type(exc).__name__}: {exc}") from exc
+
+
+def _degraded(run):
+    """管理面失败降级：available=False + 结构化原因，页面照常渲染。"""
+    try:
+        payload = run()
+        if not isinstance(payload, dict):
+            raise SourceError("PARSE_ERROR", "unexpected payload shape")
+        return {"available": True, **payload}
+    except SourceError as exc:
+        return {"available": False, "error": {"code": exc.code, "message": exc.message}}
+    except Exception as exc:  # 兜底：任何形状意外都不许把页面打成裸 500
+        return {"available": False,
+                "error": {"code": "PARSE_ERROR", "message": f"{type(exc).__name__}: {exc}"}}
+
+
+def _num_or_none(value):
+    return value if isinstance(value, (int, float)) and not isinstance(value, bool) else None
+
+
+def _routes_view(raw):
+    """把 /admin/routes 摊成「模型行 + 渠道分组」两张视图。
+
+    渠道分组按跳拆：一条链跨渠道时，每个渠道都要能看到「哪些模型从我这走、
+    协议是什么、价格多少、这跳现在 ready 还是冷却」—— 这正是排查
+    「为什么这次没走首选」时要看的那张表。
+    """
+    models = raw.get("models") if isinstance(raw, dict) else None
+    models = models if isinstance(models, list) else []
+    rows, channel_map = [], {}
+    hop_total = hop_ready = 0
+    for item in models:
+        if not isinstance(item, dict):
+            continue
+        name = _clip(item.get("model"), 120)
+        proto = _clip(item.get("protocol") or "chat", 24)
+        hops = [h for h in (item.get("hops") or []) if isinstance(h, dict)]
+        hop_rows = []
+        for idx, hop in enumerate(hops):
+            state = _clip(hop.get("state") or "unknown", 48)
+            row = {
+                "channel": _clip(hop.get("channel") or "-", 40),
+                "upstream": _clip(hop.get("upstream"), 120),
+                "base": _clip(hop.get("base"), 160),
+                "protocol": _clip(hop.get("protocol") or proto, 24),
+                "price": _num_or_none(hop.get("price")),
+                "proxy": _clip(hop.get("proxy"), 60),
+                "state": state,
+                "primary": idx == 0,
+            }
+            hop_rows.append(row)
+            hop_total += 1
+            if state == "ready":
+                hop_ready += 1
+            group = channel_map.setdefault(
+                row["channel"], {"channel": row["channel"], "rows": [], "models": []})
+            group["rows"].append({"model": name, "hop": idx + 1, **row})
+            if name not in group["models"]:
+                group["models"].append(name)
+        states = [h["state"] for h in hop_rows]
+        rows.append({
+            "model": name,
+            "group": _clip(item.get("group"), 40),
+            "protocol": proto,
+            "price": _num_or_none(item.get("price")),
+            "state": states[0] if states else "unknown",
+            "hop_count": len(hop_rows),
+            "ready_hops": sum(1 for s in states if s == "ready"),
+            "channels": [h["channel"] for h in hop_rows],
+            "fallbacks": [_clip(x, 80) for x in (item.get("fallbacks") or [])
+                          if isinstance(x, str)],
+            "legacy_ids": [_clip(x, 80) for x in (item.get("legacy_ids") or [])
+                           if isinstance(x, str)],
+            "hops": hop_rows,
+        })
+    channels = []
+    for key in sorted(channel_map):
+        group = channel_map[key]
+        states = [r["state"] for r in group["rows"]]
+        channels.append({
+            "channel": group["channel"],
+            "hops": len(states),
+            "ready": sum(1 for s in states if s == "ready"),
+            "degraded": sum(1 for s in states if s != "ready"),
+            "model_count": len(group["models"]),
+            "models": group["models"],
+            "rows": group["rows"],
+        })
+    return {
+        "revision": raw.get("revision") if isinstance(raw, dict) else None,
+        "total": len(rows),
+        "hop_total": hop_total,
+        "hop_ready": hop_ready,
+        "channels": channels,
+        "models": rows,
+    }
+
+
+def _stats_view(raw):
+    """把 /admin/stats 收敛成页面要的那几个数（缺字段一律归零，不编造）。"""
+    stats = raw.get("stats") if isinstance(raw, dict) else {}
+    stats = stats if isinstance(stats, dict) else {}
+    lat = stats.get("latency_ms") if isinstance(stats.get("latency_ms"), dict) else {}
+    cls = stats.get("status_class") if isinstance(stats.get("status_class"), dict) else {}
+    slow_raw = [s for s in (stats.get("slow") or []) if isinstance(s, dict)]
+    requests = _num_or_none(stats.get("requests")) or 0
+    errors = _num_or_none(stats.get("errors")) or 0
+    slow = [{
+        "at": _clip(s.get("at"), 24),
+        "id": _clip(s.get("id"), 40),
+        "path": _clip(s.get("path"), 80),
+        "model": _clip(s.get("model"), 80),
+        "status": _num_or_none(s.get("status")) or 0,
+        "ms": _num_or_none(s.get("ms")) or 0,
+    } for s in slow_raw[-10:]]
+    slow.reverse()  # 网关按发生顺序追加，页面要最新的在最上面
+    return {
+        "version": _clip(raw.get("version"), 60),
+        "draining": bool(raw.get("draining")),
+        "uptime_s": _num_or_none(stats.get("uptime_s")) or 0,
+        "requests": requests,
+        "errors": errors,
+        "inflight": _num_or_none(stats.get("inflight")) or 0,
+        "bytes_in": _num_or_none(stats.get("bytes_in")) or 0,
+        "bytes_out": _num_or_none(stats.get("bytes_out")) or 0,
+        "rps": round(float(_num_or_none(stats.get("rps")) or 0), 3),
+        "error_rate": round(errors / requests, 4) if requests else 0.0,
+        "latency_ms": {k: (_num_or_none(lat.get(k)) or 0) for k in ("p50", "p90", "p99")},
+        "status_class": {k: (_num_or_none(cls.get(k)) or 0)
+                         for k in ("1xx", "2xx", "3xx", "4xx", "5xx")},
+        "slow": slow,
+        "slow_total": len(slow_raw),
+        "alias": scrub(raw.get("alias") or {}),
+        "cooling": _num_or_none(raw.get("cooling")) or 0,
+        "children": scrub(raw.get("children") or {}),
+    }
+
+
+def admin_routes():
+    def fn():
+        return _degraded(lambda: _routes_view(_admin_json("/admin/routes")))
+    return cached("admin_routes", 5000, fn)
+
+
+def admin_stats():
+    def fn():
+        return _degraded(lambda: _stats_view(_admin_json("/admin/stats")))
+    return cached("admin_stats", 5000, fn)
+
+
+def admin_metrics():
+    def fn():
+        def run():
+            status, ctype, raw = _admin_raw("/metrics", accept="text/plain")
+            text = raw.decode("utf-8", "replace")
+            truncated = len(raw) >= METRICS_MAX_BYTES
+            if truncated:
+                text = text[:METRICS_MAX_BYTES]
+            return {
+                "status": status,
+                "content_type": _clip(ctype, 80),
+                "bytes": len(raw),
+                "returned_bytes": len(text.encode("utf-8")),
+                "limit_bytes": METRICS_MAX_BYTES,
+                "truncated": truncated,
+                "lines": text.count("\n") + 1 if text else 0,
+                "families": sum(1 for ln in text.splitlines() if ln.startswith("# TYPE ")),
+                "text": text,
+            }
+        return _degraded(run)
+    return cached("admin_metrics", 10000, fn)
 
 
 SEGMENTS = ("workbuddy", "qoder", "qwen", "qiniu", "gemini", "hajimi", "opencode")

@@ -138,14 +138,10 @@ func Forward(client *http.Client, opts Options) Result {
 	} else {
 		chat = responsesToChat(data, opts.DisplayModel)
 	}
-	streaming := false
-	var probe struct {
-		Stream bool `json:"stream"`
-	}
-	if err := json.Unmarshal(opts.Body, &probe); err == nil {
-		streaming = probe.Stream
-	}
-	if streaming {
+	// 这里过去把 opts.Body 整份再 Unmarshal 一遍只为读 stream；调用方
+	// （routeAlias / routeFallback）传进来的 opts.Stream 就是同一个字段
+	// 的解析结果，直接复用，省掉一次全量 JSON 解析。
+	if opts.Stream {
 		return Result{Status: 200, ContentType: "text/event-stream; charset=utf-8", Body: sseOf(chat)}
 	}
 	return jsonResult(200, chat)
@@ -681,26 +677,30 @@ func safeJSON(v any) any {
 	}
 }
 
-func messagesOf(body []byte) []any {
-	var probe struct {
-		Messages []any `json:"messages"`
-	}
-	_ = json.Unmarshal(body, &probe)
-	return probe.Messages
+// chatParts 是桥接请求侧真正需要的三块：messages、tools 和顶层其它字段。
+// 过去 messagesOf / toolsOf / rawMap 各自把同一个 body 完整 Unmarshal 一遍，
+// 一条长对话（几万 token 上下文）在 chatToAnthropic 里要被解析三次；
+// 现在一次解完，两个方向的桥接函数共用。
+type chatParts struct {
+	Messages []any
+	Tools    []any
+	Raw      map[string]any
 }
 
-func toolsOf(body []byte) []any {
-	var probe struct {
-		Tools []any `json:"tools"`
+func parseChatParts(body []byte) chatParts {
+	var raw map[string]any
+	_ = json.Unmarshal(body, &raw)
+	if raw == nil {
+		return chatParts{}
 	}
-	_ = json.Unmarshal(body, &probe)
-	return probe.Tools
-}
-
-func rawMap(body []byte) map[string]any {
-	var out map[string]any
-	_ = json.Unmarshal(body, &out)
-	return out
+	parts := chatParts{Raw: raw}
+	if v, ok := raw["messages"].([]any); ok {
+		parts.Messages = v
+	}
+	if v, ok := raw["tools"].([]any); ok {
+		parts.Tools = v
+	}
+	return parts
 }
 
 func toInt(v any) int {
@@ -723,9 +723,10 @@ func toolFunction(tool any) map[string]any {
 }
 
 func chatToAnthropic(body []byte, model string, stream bool) map[string]any {
+	parts := parseChatParts(body)
 	systemParts := []string{}
 	messages := []any{}
-	for _, raw := range messagesOf(body) {
+	for _, raw := range parts.Messages {
 		msg, _ := raw.(map[string]any)
 		if msg == nil {
 			continue
@@ -791,7 +792,7 @@ func chatToAnthropic(body []byte, model string, stream bool) map[string]any {
 	}
 
 	tools := []any{}
-	for _, t := range toolsOf(body) {
+	for _, t := range parts.Tools {
 		fn := toolFunction(t)
 		name, _ := fn["name"].(string)
 		if name == "" {
@@ -809,7 +810,7 @@ func chatToAnthropic(body []byte, model string, stream bool) map[string]any {
 		})
 	}
 
-	src := rawMap(body)
+	src := parts.Raw
 	maxTokens := toInt(src["max_completion_tokens"])
 	if maxTokens == 0 {
 		maxTokens = toInt(src["max_tokens"])
@@ -864,9 +865,10 @@ func chatToAnthropic(body []byte, model string, stream bool) map[string]any {
 }
 
 func chatToResponses(body []byte, model string, stream bool) map[string]any {
+	parts := parseChatParts(body)
 	systemParts := []string{}
 	input := []any{}
-	for _, raw := range messagesOf(body) {
+	for _, raw := range parts.Messages {
 		msg, _ := raw.(map[string]any)
 		if msg == nil {
 			continue
@@ -919,7 +921,7 @@ func chatToResponses(body []byte, model string, stream bool) map[string]any {
 	}
 
 	tools := []any{}
-	for _, t := range toolsOf(body) {
+	for _, t := range parts.Tools {
 		fn := toolFunction(t)
 		name, _ := fn["name"].(string)
 		if name == "" {
@@ -938,7 +940,7 @@ func chatToResponses(body []byte, model string, stream bool) map[string]any {
 		})
 	}
 
-	src := rawMap(body)
+	src := parts.Raw
 	payload := map[string]any{"model": model, "input": input, "stream": stream}
 	if filtered := nonEmpty(systemParts); len(filtered) > 0 {
 		payload["instructions"] = strings.Join(filtered, "\n\n")

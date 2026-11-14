@@ -39,6 +39,11 @@ ROUTES = {
     "/api/logs": (sources.logs, 5000),
     "/api/config": (sources.config, 60000),
     "/api/ops": (sources.ops, 30000),
+    # 网关新增的只读管理面：/admin/routes、/admin/stats、/metrics。
+    # 三个源内部已做失败降级（available=False），不会把页面打成 500。
+    "/api/routes": (sources.admin_routes, 5000),
+    "/api/stats": (sources.admin_stats, 5000),
+    "/api/metrics": (sources.admin_metrics, 10000),
 }
 STATIC_FILES = {
     "/": ("index.html", "text/html; charset=utf-8"),
@@ -49,7 +54,10 @@ STATIC_FILES = {
     "/vendor/tabler.min.css": ("vendor/tabler.min.css", "text/css; charset=utf-8"),
 }
 STATUS = {"SOURCE_MISSING": 404, "PARSE_ERROR": 500, "UPSTREAM_DOWN": 502,
-          "BAD_REQUEST": 400, "JOB_BUSY": 409}
+          "BAD_REQUEST": 400, "JOB_BUSY": 409,
+          # 旧版网关没有 /admin/* 与 /metrics：报 501 而不是 502，别把「没这个端点」
+          # 说成「网关挂了」。（页面走的是 sources 里的降级口径，一般不落到这里。）
+          "NOT_SUPPORTED": 501}
 PORT = 7872
 
 
@@ -212,7 +220,11 @@ def run_check():
         failures += 1
     for path, (fn, _) in ROUTES.items():
         try:
-            fn()
+            res = fn()
+            if isinstance(res, dict) and res.get("available") is False:
+                err = res.get("error") or {}
+                print(f"[check] WARN {path}: {err.get('code')}: {err.get('message')}")
+                continue
             print(f"[check] OK   {path}")
         except sources.SourceError as exc:
             if exc.code == "UPSTREAM_DOWN":
@@ -228,6 +240,8 @@ def run_check():
         print("[check] OK   gateway /health")
     except sources.SourceError as exc:
         print(f"[check] WARN gateway /health: {exc.message}")
+    print(f"[check] admin header X-Zgate-Admin: 1 · {sources.ADMIN_TOKEN_ENV} = "
+          f"{'configured' if sources.admin_token_configured() else 'not set'}")
     print(f"[check] result = {'PASS' if failures == 0 else 'FAIL'} ({failures} failure(s))")
     return 0 if failures == 0 else 1
 
