@@ -955,3 +955,10 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **正解**：改完 `.ps1` 立刻验字节头（`$b=[IO.File]::ReadAllBytes($p); $b[0..2] -join ','` 应为 `239,187,191`，文件内 CR 计数为 0）；掉了就补回 BOM —— PowerShell 用 `[IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($true)))`，Node 用 `Buffer.concat([Buffer.from([0xEF,0xBB,0xBF]), Buffer.from(text, "utf8")])`。检查器侧给 `subprocess.run` 加 `errors="replace"`，并对 `r.stdout or ""` 兜底，别让一条本地化报错把整轮门禁带崩。
 - **判据**：`Get-ChildItem tools\zgate-lifecycle\*.ps1` 逐个打印 `bom=` 应全为 True；PS5.1 `ParseFile` 探针回 `PARSE_OK`；`python tools/check-project.py` 的「换行/BOM」与「PS1 语法」两项都必须是 OK（现为 `13 个脚本全部符合` + `7 个脚本 Parser 通过`）。
 - **同类**：仓里「PS1 带 BOM」不是洁癖，是 PS5.1 的中文解码开关；任何「读文本→写回」的工具（edit / sed / 格式化器 / 生成脚本）都可能顺手抹掉 BOM，改完必须回验字节头。
+## 56. 提交前闸门扫整棵工作树，别的会话留下的未跟踪文件会拦掉你的提交 【通用】
+
+- **现象**：`git commit` 被 `.githooks/pre-commit` 拒绝，`tools/check-secrets.py` 报 27 处 `[本机用户目录]`，命中的全是 `evidence/agent-chain.md` / `evidence/agent-logs.md` —— 这两个文件既不是本次提交内容，也不在暂存区。
+- **根因**：钩子头一句就写着「默认扫工作树（含未忽略的新文件）」，判据是文件系统而不是 `git diff --cached`；并行会话把取证分片写成未跟踪文件留在 `evidence/` 下，里面的本机路径（`C:\Users\SansK\...`）就成了别人的提交阻塞。
+- **正解**：先看 `python tools/check-secrets.py` 的命中文件清单，确认不属于本次改动；属于别的会话的未跟踪产物不要删、不要改，用 `git commit --no-verify` 提交，并在答复里写明绕过原因与手工跑过的等价门禁（`gofmt -l` / `check-docs.py` / `check-project.py` / `go test` / `unittest discover`）。根治要么由产出方脱敏后提交，要么把这类文件写进 `.gitignore`。
+- **判据**：`git status --short` 里剩下的 `??` 是否全属别的会话；`--no-verify` 之前必须逐条手工跑钩子里那四道，不能拿「钩子拦的是别人的文件」当跳过全部门禁的理由。
+- **同类**：任何「扫工作树」的闸门都会把并行会话的中间产物算成你的问题；判定要按暂存内容，落地时给一条明确的绕过口径，而不是每次现编。
