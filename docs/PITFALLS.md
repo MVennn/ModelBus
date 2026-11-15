@@ -962,3 +962,10 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **正解**：先看 `python tools/check-secrets.py` 的命中文件清单，确认不属于本次改动；属于别的会话的未跟踪产物不要删、不要改，用 `git commit --no-verify` 提交，并在答复里写明绕过原因与手工跑过的等价门禁（`gofmt -l` / `check-docs.py` / `check-project.py` / `go test` / `unittest discover`）。根治要么由产出方脱敏后提交，要么把这类文件写进 `.gitignore`。
 - **判据**：`git status --short` 里剩下的 `??` 是否全属别的会话；`--no-verify` 之前必须逐条手工跑钩子里那四道，不能拿「钩子拦的是别人的文件」当跳过全部门禁的理由。
 - **同类**：任何「扫工作树」的闸门都会把并行会话的中间产物算成你的问题；判定要按暂存内容，落地时给一条明确的绕过口径，而不是每次现编。
+## 57. 上游把工具调用写成正文（全角竖线 DSML 标记），客户端静默中断 【实例 A】
+
+- **现象**：DSH 会话在 12:04 突然停住，最后一行正文是 `</｜DSML｜ invoke></｜DSML｜ calls>` 两个闭合标签；会话存档里这一轮 assistant 消息只有 reasoning 5506 字 + text 33 字，没有任何 tool-call 块，后面也没有 tool/result 事件。用户看到的是「模型分析了一大段，然后对话中断」。
+- **根因**：上游 `OC:deepseek-v4.1-flash` 偶发不返回结构化 `tool_calls`，而是把调用序列化成自家 special token 文本塞进 `content`（全角竖线 U+FF5C 包住 DSML 字样，后跟 invoke / parameter / calls 三段）。全链路三层都没解析它：DSH 宿主 grep `DSML` 只命中一个 PDF 库的 base64 串，zgate 的 `DSML` 只出现在 3 处注释里，`dsh-llm-deepseek/lib/index.js:1734` 只认结构化 `tool_use` 块。客户端拿到「正文里有标记、但没有工具调用」，这一轮就按正常结束处理 —— 不是崩溃，是空转收尾。
+- **正解**：`gateways/zgate/internal/router/dsml.go` 在 SSE 转发链上扣留命中标记后的正文（`router.go:1537-1545` 构造、`1566-1570` defer 收口、两个转发循环各过一道），流尾补 `finish_reason:"error"` + `error.type=upstream_tool_call_as_text` + `[DONE]`，计数进 `/health.upstream.dsml_text_calls`。扣留上限 256 KiB，超了按误判原样放行。**不做 tool_calls 还原**：实测 00:34 那次只剩 `<｜DSML｜parameter name="code" string="true">` 段、12:04 那次只剩闭合标签，开标签从来没到过客户端，按猜的格式造调用会拿错参数去执行工具。
+- **判据**：`/health` 里 `dsml_text_calls > 0` 就是命中过；日志对应行 `[router] 上游把工具调用写成了正文（DSML 标记），后续正文扣留不转发（model=...）`。单测 `go test ./internal/router/ -run DSML` 6 个用例全过，端到端那条断言客户端流里既没有标记、又有 `upstream_tool_call_as_text` 说明帧。
+- **同类**：任何「模型在正文里输出自家协议标记」的降级（Anthropic 的 invoke 闭合标签、Qwen 的 tool_call 标签）都是同一种症状：这一轮没有结构化调用、客户端静默结束。判据先看会话存档这一轮有没有 tool-call 块，再看上游 `status` —— 200 + 无 tool-call = 上游降级，不是网关 502。

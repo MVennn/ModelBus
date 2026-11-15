@@ -1536,9 +1536,12 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 		}
 		sse := isEventStreamGuard(resp)
 		// tracker 只对事件流有意义：普通 JSON 没有 finish_reason 概念，给它补帧会毁掉响应体。
+		// dsml 同理：它认的是 SSE 事件边界（空行分帧）。
 		var tracker *streamTracker
+		var dsml *dsmlFilter
 		if sse {
 			tracker = &streamTracker{}
+			dsml = newDSMLFilter(model, s.log, s.sem)
 		}
 		if sse {
 			// 事件流一律交给 net/http 按 chunked 重新分帧。上游 SSE 可能自带
@@ -1560,6 +1563,11 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			}
 		}
 		flusher, _ := w.(http.Flusher)
+		if dsml != nil {
+			// 收口放在 defer：本块所有 return 都会经过它。命中 DSML 时它负责
+			// 丢掉扣留的正文、补一帧 error，别让客户端把标记当正文存进上下文。
+			defer dsml.finish(w, flusher)
+		}
 		if len(head) > 0 && flusher != nil {
 			flusher.Flush()
 		}
@@ -1579,17 +1587,26 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 				n, readErr := streamSrc.Read(buf)
 				if n > 0 {
 					tracker.feed(buf[:n])
-					if _, writeErr := w.Write(buf[:n]); writeErr != nil {
-						return
+					chunk := buf[:n]
+					if dsml != nil {
+						chunk = dsml.feed(chunk)
 					}
-					if flusher != nil {
-						flusher.Flush()
+					if len(chunk) > 0 {
+						if _, writeErr := w.Write(chunk); writeErr != nil {
+							return
+						}
+						if flusher != nil {
+							flusher.Flush()
+						}
 					}
 				}
 				if readErr != nil {
 					// 上游断流时先看这条流有没有 finish_reason/[DONE]：没有就补帧收口，
 					// 否则客户端拿到的是「200 + 半截正文 + 安静关闭」。
-					s.closeTruncated(w, flusher, model, true, tracker)
+					// 命中过 DSML 就交给 dsml.finish：它要先丢掉扣留的正文再说话。
+					if dsml == nil || !dsml.hit {
+						s.closeTruncated(w, flusher, model, true, tracker)
+					}
 					return
 				}
 			}
@@ -1635,20 +1652,27 @@ func (s *Server) doForwardWith(w http.ResponseWriter, r *http.Request, body []by
 			case rr := <-ch:
 				if len(rr.data) > 0 {
 					tracker.feed(rr.data)
-					_, writeErr := w.Write(rr.data)
-					// 写完立刻把缓冲还给池：这一块之后不再被引用。
-					putStreamBuf(rr.buf)
-					if writeErr != nil {
-						return
+					chunk := rr.data
+					if dsml != nil {
+						chunk = dsml.feed(chunk)
 					}
-					if flusher != nil {
-						flusher.Flush()
+					// feed 已经把要保留的字节复制走了，缓冲立刻还池。
+					putStreamBuf(rr.buf)
+					if len(chunk) > 0 {
+						if _, writeErr := w.Write(chunk); writeErr != nil {
+							return
+						}
+						if flusher != nil {
+							flusher.Flush()
+						}
 					}
 				} else {
 					putStreamBuf(rr.buf)
 				}
 				if rr.err != nil {
-					s.closeTruncated(w, flusher, model, true, tracker)
+					if dsml == nil || !dsml.hit {
+						s.closeTruncated(w, flusher, model, true, tracker)
+					}
 					return
 				}
 				resetTimer(timer, heartbeat)

@@ -99,6 +99,7 @@
 | 503 / 529 且正文含 high demand / 需求量较大 / spikes in demand / 请稍后再试 | `busyExhausted` | 只跳这一跳、短冷却 `busyCooldownSeconds`（GM=10s），**不整渠道禁用**，换下一跳而不是直接 502 | `busy` / `busy_skipped` |
 | 400 且正文含 thinking_level / thinking_config | `invalidThinkingParam` | 剥掉 `reasoning_effort` / `thinking` / `thinking_budget` / `thinking_level` 与 `extra_body.google.thinking_config`，**同跳重发一次** | `thinking_strip` |
 | SSE 流结束，却没见到非 null 的 `finish_reason` 或 `[DONE]` | `streamTracker.finished` | 补一帧 `finish_reason:"error"` + `error.type=upstream_truncated` + `data: [DONE]`，让客户端知道是断了而不是说完了 | `truncated_streams` |
+| SSE 正文里出现全角竖线 U+FF5C 的 DSML 标记（`<｜DSML｜invoke>` / `<｜DSML｜calls>`） | `dsmlFilter` | 命中后的正文扣留不转发（别让它进上下文），流尾补 `finish_reason:"error"` + `error.type=upstream_tool_call_as_text` + `data: [DONE]`；**不还原 tool_calls** —— 实测上游只漏出 parameter 段和闭合标签，开标签被吞，按猜的格式造调用会拿错参数执行工具 | `dsml_text_calls` |
 
 为什么 503 不能沿用整渠道冷却：catiecli 上 3.8 常态化过载，几十秒内能连撞三次，按渠道停 90 秒会把同渠道能用的 3.6 一起躺下（2026-11-10 23:40 就是这么封的）。
 为什么 400 要重发而不是直接换跳：`thinking_level` 是 Gemini 原生枚举，中转的 chat 协议不校验它（实测 `reasoning_effort=bogus` 照样 200），
@@ -151,7 +152,7 @@
 | guard | enabled / mode / channels / skipping | 思考守卫当前档位、哪些渠道算「会思考」、哪些模型正在被跳过 |
 | race | hops / disabled | 每跳的首块观测（`rankedChain` 发车顺序的依据） |
 | hops | 每个 `渠道 · 上游 · 代理` 一条：try / ok / busy / e5xx / silent / no_first_block | 「3.8 最近到底行不行」的唯一直接答案：`ok/try` 是成功率，`silent` 高=上游不回头（本地超时），`e5xx` 高=上游在报错。自进程启动累计，不因冷却清零 |
-| upstream | busy / busy_skipped / thinking_strip / truncated_streams | 上面 §4.1 三种上游语义实际各命中多少次；**全 0 = 这条链没遇到麻烦，不是没生效**（计数自进程启动累计） |
+| upstream | busy / busy_skipped / thinking_strip / truncated_streams / dsml_text_calls | 上面 §4.1 三种上游语义实际各命中多少次；**全 0 = 这条链没遇到麻烦，不是没生效**（计数自进程启动累计） |
 
 没有这些字段之前，「提前交卷有没有用」「守卫对谁生效」只能靠推理；现在一条 `curl` 就能回答。
 

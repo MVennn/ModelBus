@@ -142,6 +142,7 @@ type upstreamStats struct {
 	busySkip  atomic.Int64 // 因为忙而跳过该跳（含冷却）的次数
 	invalid   atomic.Int64 // 思考参数不合法被剥掉重发的次数
 	truncated atomic.Int64 // 补了截断收口帧的流数
+	dsml      atomic.Int64 // 上游把工具调用降级成正文 DSML 的流数
 }
 
 func newUpstreamStats() *upstreamStats { return &upstreamStats{} }
@@ -155,6 +156,7 @@ func (st *upstreamStats) view() map[string]any {
 		"busy_skipped":      st.busySkip.Load(),
 		"thinking_strip":    st.invalid.Load(),
 		"truncated_streams": st.truncated.Load(),
+		"dsml_text_calls":   st.dsml.Load(),
 	}
 }
 
