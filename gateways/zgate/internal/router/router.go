@@ -17,6 +17,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"sort"
 	"strconv"
 	"strings"
@@ -764,6 +765,41 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 
 	isChat := path == "/chat/completions"
+
+	// prefix 稳定化（默认关闭，ZGATE_PROMPT_STABILIZE=1 开启）。
+	//
+	// ZCode 客户端把「每轮都会变」的 synthetic 注入（Environment update / 未读提醒 /
+	// TodoWrite 提醒 / 当天日期）插在历史靠前处，上游 prefix cache 从第一个不同的
+	// token 起逐块匹配，于是从那条消息往后的整段历史每轮都要重新 prefill。实测同一段
+	// 350 KB 内容：完全不变首字 6.68s 中位、变化内容放最前 19.43s、放最后 10.18s
+	// （.work/ab-prefix-position.mjs）。这里只把这些消息搬到 messages 末尾，内容一字不改。
+	if isChat && len(body) > 0 && os.Getenv("ZGATE_PROMPT_STABILIZE") == "1" {
+		if nb, moved, err := StabilizePromptPrefix(body); err == nil && moved > 0 {
+			s.log.Infof("[prefix] volatile=%d in=%d->%d", moved, len(body), len(nb))
+			body = nb
+		}
+	}
+
+	// 旧工具输出折叠（默认关闭，ZGATE_PROMPT_FOLD=1 开启）。
+	//
+	// 代码审查类会话实测：331 KB 窗口里工具输出占 44–84%，而一次工具输出只在被读的那
+	// 一轮有用，之后每轮都重发。保留最近 ZGATE_PROMPT_FOLD_TURNS 轮（默认 3），更早的
+	// 压到 ZGATE_PROMPT_FOLD_BYTES 字节（默认 400），8 个最大会话窗口平均降 28.1%。
+	if isChat && len(body) > 0 && os.Getenv("ZGATE_PROMPT_FOLD") == "1" {
+		turns := 3
+		if v, err := strconv.Atoi(os.Getenv("ZGATE_PROMPT_FOLD_TURNS")); err == nil && v >= 0 {
+			turns = v
+		}
+		keepBytes := 400
+		if v, err := strconv.Atoi(os.Getenv("ZGATE_PROMPT_FOLD_BYTES")); err == nil && v >= 0 {
+			keepBytes = v
+		}
+		if nb, folded, err := FoldOldToolOutputs(body, turns, keepBytes); err == nil && folded > 0 {
+			s.log.Infof("[fold] tool_msgs=%d in=%d->%d", folded, len(body), len(nb))
+			body = nb
+		}
+	}
+
 	if !isChat && (isQoder(model) || isWorkBuddy(model) || isQwen(model) || isQiniu(model)) {
 		writeJSON(w, 400, errorBody("WorkBuddy/Qoder/Qwen models only support chat/completions", "invalid_request_error"))
 		return
