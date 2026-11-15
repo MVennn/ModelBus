@@ -3934,3 +3934,18 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 观察点：模型是否因看不到 3 轮前的工具输出而反复重读同一文件；出现就把 `ZGATE_PROMPT_FOLD_TURNS` 调到 5。
 - 未 add / commit / push。
 
+---
+
+## 批次：2026-11-15 大扫除第九轮（微扫 + 8 路盘点 + 漂移收口）
+
+- 定档：三项前置闸门命中「长任务在跑」与「多仓未提交」，降为微扫；标准 / 深扫删除项只列预案，不执行。
+- 分片：8 路子代理同批激活，产物落在 evidence/agent-sweep-20261115-*.md；lead 中心化验收 8 份共 107293 B / 830 行，行数全部在 20 至 120 内。
+- 微扫：%TEMP% 候选 10 个 uuid 型 .tmp 合计 9833433 B 全被独占跳过，node-compile-cache 与 dsh-spill-iGoJqB 未满 30 分钟保留；DELETED=0、SKIP=28、稳定净释放 0 B，删除清单 28 行 / 5319 B。
+- 顺手修：.git/info/exclude 增加本轮审计分片本地排除规则；docs/reports/README.md 与 docs/reports/MODEL-SYNC-20261115-1208.md 成对入库；evidence/go-model-sync-20261115-120007.md 清掉 8 行 trailing whitespace。
+- 提交：ModelBus 8db445f 与 1c05b43 已推；EmeraldEden dc429ff 以 47 文件白名单提交并推送；xring 因 6.5 分钟活跃写入判 NO，未触碰。
+- 门禁：check-docs / check-secrets 全量 / check-secrets --tracked-only / git diff --check --cached 全 exit 0；记忆门禁 PASS 27 / WARN 2 / FAIL 0，procedures-probe 与 sync-doc-index --dry-run exit 0。
+- 漂移：ModelBus 工作树清空；EmeraldEden 仅保留 .dsh-file-claim.audit.jsonl 运行态占位；xring 4 行活跃写入保留；隔离区 2 批未到期，未删除。
+- 留痕：~/.dsh/evidence/sweep-ledger.md 追加第九轮；.work/search-fact-20261115.md 写免搜行；search-gate-audit.mjs 24h 全局 FAIL_LOW_EXECUTION exit 1 属全局旧账，本轮免搜留痕合格。
+- 状态: 已完成
+
+[[TASK_ALL_DONE]]
