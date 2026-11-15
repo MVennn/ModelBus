@@ -3811,3 +3811,126 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 微扫：删掉本会话 `.work` 下的 `answer.md`、`commitmsg.txt`、`console-stub-gateway.py`、`stub-gateway.log`；别的会话的 `*.dshclaim` 与历史产物一律不动。
 - 记忆：`MEMORY.md` 加两条（0.8.0 批次指针、改 `.ps1` 必验 BOM），`check-memory-hygiene.mjs` exit 0（PASS 26 / WARN 3 / FAIL 0，3 个 WARN 是别的篇的裸版本号与端口）。
 - 新增 `docs/PITFALLS.md` 第 56 条：提交前闸门扫工作树，别的会话的未跟踪 evidence 会拦掉提交，以及 `--no-verify` 前必须手工跑齐的四道门禁。
+
+---
+
+## 批次：2026-11-14 opencode deepseek1017 提速方案（默认 effort=high 不动，配置零改动）
+
+- 结论：当前 3.18.2 内置通用 map 已让「关闭思考」生效（v4 E1 实测 reasoningChars=0）；v5 长文 4 会话首字中位 11.1s→2.6s、最慢一路 15.1s→3.0s、整轮 18.0s→9.2s。代价是 v4 难题 none=2/4（递推题答 143、说谎者题答丙），low=4/4 且 Q6 首字 8.7s→4.8s。
+- 撤回项：切 WB 首跳（v3 默认档 4 路排队 19.0s，135–153 tok/s 是 reasoning 计入 usageOut 分子的假象，contentEvents batch=false）；改 session 折叠 / 加并发闸（zgate 无全局信号量，4 路每路 68–81 tok/s 持平，掉速来自排队等首字）。
+- 五轮探针：.work/ab-speedup-probe.mjs、-v2、-v3、-v4、-v5 与对应 -result.json，逐轮串行；v1 的 21:23:40 /admin/drain 受控重启撞并发窗口已纠归因，v2 Q1 递推答案键 96→85 已修正，v3 V5 只发 nested reasoning 关不掉思考、V6/V7 top-level 才关掉，v4 E1 用 3.18.2 完整下发四字段证实当前版本已生效。
+- 补丁脚本 .work/apply-deepseek-reasoning-map.mjs（7366 B）：默认 dry-run、--apply 才写、tasklist 检测 ZCode.exe 在跑 exit 2、自动备份、EOL 自适应、hits!==1 拒写、前后 JSON.parse、幂等、--revert <backup>；PATCH_MAP 对 levels=[undefined,low,high,max,enabled,none] 与 BUILTIN_3182 逐字节等价（allEq=true），disabled 为预期差异 112B→82B。dry-run exit 0，**未 --apply**，provider_config.json 零改动。
+- 产物：.work/answer.md（格式门禁 [format] OK · 0 error / 0 warn）、evidence/speedup-verdict.md；凭据仅运行时从 provider_config.json 读取，零落盘 / 零聊天 / 零日志。
+- 边界：默认档位未动、网关保持运行态、未抓真实客户端请求体、low 档长文收益波动（−25.6%~+10.5%）未收敛；未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+
+---
+
+## 批次：2026-11-14 opencode deepseek1017 多会话掉速复测定责（当前实况 A/B，配置零改动）
+
+- 结论：**本地链路不是原因，上游也不是容量打满**。zgate 无并发闸（OC hop try=1671/ok=1669，busy=0、e5xx=0、silent=0、no_first_block=0；全站 requests=1852、2xx=1850、4xx=0、零 429；upstream.busy=0、busy_skipped=0、truncated_streams=0、chain.budget_s=0）；1/2/4/6 路总吞吐 144.9→250.7→501.9→856.0 chars/s（5.9× 线性，无饱和），单路中位 144.9/125.4/117.8/155.7 与并发无关。
+- 关键纠偏：「多会话才掉到 100 以下」不成立。单路连跑 6 次 steadyCharsPerSec = 83.5/98.1/172.2/178.1/185.3/726，**6 次里 2 次低于 100**（726 是正文 363 字/0.5s 跨度的突发假象，不计）；usageTokPerSec 恒 54.1/63.1/67.8/56.4/63.7/61.9，中位 63 —— 该模型在这条通道上单路就是 60–70 tok/s。
+- 口径：中文约 1.5 字/token，150 汉字/s ≈ 65 tok/s，所以「tok/s < 100」是常态而非掉速；用户感知的慢主要来自 ttft 7.0–15.5s（default_effort=high，单路思考 440–2550 字，占整轮 60–90% token）。
+- 通道对比（同 prompt 单路各 2 次）：OC 通道 steady 180.6/111.8、思考 2237/440 字、整轮 16.1/11.6s；WB 通道 steady 163.4/350.2、思考 4628/4481 字、整轮 18.6/13.7s。正文速率同量级，WB 因「缺档补 max」思考字数高 2–10 倍，整轮反而更慢 —— 切 WB 不划算（与 v3 撤回项一致）。
+- 上游口径复核（evidence/agent-upstream.md）：OpenCode Go 页 1661 行 concurrency/rate limit/quota/429 全零命中，只给美元额度；社区 429 全在 opencode-go/deepseek-v4.1-flash（anomalyco/opencode#62306 43 例 ttft_admission_refused、NousResearch/hermes-agent#145899「the cell is at capacity」），本批 1852 次请求零 429，未触准入层。
+- 产物：.work/ab-concurrency-recheck.mjs（1/2/4/6 路）+ -result.json、.work/ab-channel-recheck.mjs（OC vs WB）+ -result.json、.work/ab-jitter-recheck.mjs（单路 6 次抖动）+ -result.json。凭据仅运行时从 provider_config.json 读取，零落盘。
+- 边界：未抓真实 ZCode 客户端请求体；benchleader 156 tok/s 与实测 63 tok/s 的 2.5× 差距只能归到「Go 转售层 vs 官方 API」，本机无官方 API 直连通道可证；未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+
+---
+
+## 批次：2026-11-14 opencode deepseek1017 掉速再定责（长上下文 prefill 才是真因，修正上一批结论）
+
+- 修正：上一批把主因判成「默认思考档 + 通道单路 60–70 tok/s」，本批用真实会话日志 + 长上下文对照实验推翻了这个归因 —— 稳态生成速率在 1–4 路并发下不变（108.0–200.8 汉字/秒），tok/s 低是因为 prefill 等待占掉 85% 的墙钟。
+- 真实上下文规模（zgate.log 1883 条 OC 请求，21:26–23:28，in 为请求体字节）：p10=203 KB、p25=271 KB、**p50=331 KB**、p75=386 KB、p90=433 KB、max=578 KB；>300 KB 占 63.5%（1196/1883）。日志 in/out 字段是 bodyIn 与 rec.bytes（router.go:686-687），**不是 token**。
+- 决定性实验 A（同 350 KB prompt 串行三次）：ttft 40270 → 32632 → **9295ms**，总耗时 43772 → 36447 → 11246ms，正文稳态 132.2/108.0/199.9 —— 输入零变化，首字降 4.3 倍，prefix cache 命中过程。
+- 决定性实验 B（4 个不同 350 KB prompt 并发）：ttft 73008 / 5586 / 47874 / 6333ms，总耗时 75950 / 7488 / 51118 / 8787ms，稳态 112.5/200.8/119.9/132.0，墙钟 75950ms。**同批首字差 13 倍、稳态几乎一致** → 不是限流（限流会均匀压速），是上游 prefill 调度与 cache 命中差异。
+- 限流假设三条反证：① 1883 次请求零 4xx 零 429；② 短 prompt 1/2/4/6 路总吞吐 145→251→502→856 字/秒（5.9×，无总量封顶）；③ 同批 4 路里两快两慢，不是均匀降速。
+- 真实日志按重叠并发度分桶（>300 KB 子集）：conc=1 速率中位 3.30 KB/s → conc=5 为 2.20 KB/s（−33%）；但该统计存在反向因果（耗时长的请求天然与更多请求重叠），因果只以 A/B 控制变量实验为准。
+- 机制：每个会话是一份独立的 16–20 万 token 上下文，上游 prefix cache 装不下多份，多会话互相挤掉对方的 prefix，导致每轮冷 prefill（首字 40–73s）。
+- 唯一有效改善：砍上下文（新开会话、不带历史），首字从 40 秒级回到 7–15 秒级；并发数 / 通道选择（OC vs WB）/ 本地网关配置三条路均对首字无实质影响。
+- 产物：.work/ab-longctx-recheck.mjs + -result.json（A/B 两组）、.work/answer.md（格式门禁 [format] OK · 0 error / 0 warn）。凭据仅运行时从 provider_config.json 读取，零落盘。
+- 边界：未拿到上游原始响应头（OC key 只在 zgate 进程环境变量里），cache 命中率是间接推断（由 ttft 变化证明存在缓存效应，未直接读 cache 命中计数）；未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+---
+
+## 批次：2026-11-14 32k 系统提示词占比复核 + 前缀稳定化补丁（变化注入位置才是 cache 失效点）
+
+- 起因：用户追问「32k 系统提示词已经很少，也没有优化路径了」（m00197）。复核单轮请求体构成，把 331 KB 拆开看。
+- 体积口径：32k token ≈ 48 KB，占 331 KB 的 14.5%，实测系统提示词块（message 表 seq=1–8 共 8 条 synthetic）33.9–49.7 KB，两者吻合 —— **系统提示词不是体积主因**。
+- 全库 part 累计（40361 条）：tool 12250 条 95.74 MB 占 72.8%、reasoning 6830 条 27.72 MB 占 21.1%、text 4115 条 6.34 MB 占 4.8%。工具输出内部：Read 3471 次 21.25 MB 占 65.0%（均 5 KB）、Bash 6703 次 10.34 MB 占 31.6%（均 1 KB）、Agent 36 次 0.32 MB、Edit 1536 次 0.23 MB、Grep 95 次 0.21 MB。
+- 大会话 `sess_723b9f46-88c9-4b8e-9cdf-a27ef6864a6e` 内部构成（1349 消息 / 4480 part / 9.68 MB）：tool_meta 3.82 MB 39.5%、tool_out 3.15 MB 32.6%、reasoning 2.16 MB 22.3%、text 0.36 MB 3.7%。
+- 序列结构：seq=0 是真实用户输入；seq=1–8 是系统提示词 8 块；seq=15/19/21/23/29… 是**每轮变化**的 synthetic 注入（The user hasn't heard from you in a while ×88、The TodoWrite tool hasn't been used recently ×87、# Environment update ×41、Today's date）。
+- 决定性实验 C（.work/ab-prefix-position.mjs，固定 350 KB 文档 + 同问题，同 session id，每组 3 次，只改变变化内容位置）：C1 完全不变 ttft 7940/5420ms（首次 32043ms 是 reasoning 吃满 max_tokens、正文 0 字，不计）中位 **6.68s**；C2 变化放最前 15655/21108/19430ms 中位 **19.43s**（三次一次都没降）；C3 变化放最后 10182/16946/5970ms 中位 **10.18s**。同样体积、同样内容，只因为变化在头部，首字慢 2.9 倍。
+- 结论修正：上一批把「多会话互相挤掉 prefix」当机制，本批定位到具体触发点 —— 是**客户端每轮变化的注入插在历史靠前处**，导致从那条消息往后整段前缀失效，与并发无关，单会话也会发生。
+- 落地补丁（默认关闭）：新增 `gateways/zgate/internal/router/prompt_stable.go`（`volatileInjectionMarkers` 四类标记 + `isVolatileInjection` + `messageText` 兼容 string 与 [{type:text}] 两种 content + `StabilizePromptPrefix` 把命中消息移到 messages 末尾，只改顺序不改内容，无命中/坏 JSON 原样返回）；新增 `prompt_stable_test.go` 4 个测试；`router.go` import 加 `"os"`，在 `isChat := path == "/chat/completions"` 后插入 `ZGATE_PROMPT_STABILIZE=1` 开关块，命中时记 `[prefix] volatile=N in=X->Y`。
+- 验证：`go build ./...` build=0；`go test ./internal/router/` ok 17.839s test=0；4 个新测试全 PASS。新二进制编译到 `gateways/zgate/zgate.new.exe`（11785216 B，比线上 zgate.exe 多 7198 B），**未替换、未重启网关**（AGENTS §6）。
+- 踩坑：TS 模板字符串嵌 Go 源码时 `\n` 被吃掉导致 Go 字符串跨行报 `string literal not terminated`，改用 String.raw + String.fromCharCode(96)；logx.Logger 只有 Infof/Warnf/Errorf，写 Printf 编译失败。
+- 产物：.work/ab-prefix-position.mjs + -result.json、.work/answer.md（[format] OK · 7 章节 · 0 error / 0 warn）。未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+---
+
+## 批次：2026-11-15 工具输出折叠（Read 占窗口 44–84%，折叠旧输出落地）
+
+- 起因：用户追问「写代码肯定会 Read，拦不住，这个该怎么砍」（m00344）。
+- 窗口构成（10 个 Read 最多的会话，各取最后一轮 331 KB）：代码审查类 Read 占 44.2% / 56.1% / 58.0% / 76.4% / 78.1% / 84.3%，思考 5.9–40.7%，Bash 0.9–28.3%；写小说会话 163 次 Read 但窗口里 Read 0.0%（实际全是 Bash 65.8%）。**写代码/审代码时 Read 是窗口最大单项。**
+- 重复读（全库 3471 次 Read 30.38 MB）：同会话内同 file_path 重复 564 次占 16.2%，字节 22.2%（6.76 MB 可省）；单文件极值 `02-分章粗纲.md` 被读 168 次，大会话 sess_723b9f46 Read 去重可省 63.8%。
+- 折叠档位曲线（8 个最大会话 × 18 组参数，保留最近 N 轮、更早压到 M 字节）：N=2/M=200 平均省 29.1%（min 5.3% max 47.0%）；N=3/M=200 28.1%；N=3/M=500 25.2%；N=5/M=500 22.9%；N=10/M=500 18.5%；N=15/M=500 12.4%。**天花板约 30%**，因为窗口里最近几轮本就占大头。
+- 落地：新增 `gateways/zgate/internal/router/prompt_compact.go`（`FoldOldToolOutputs(body, keepTurns, keepBytes)`：UseNumber 解码 → 扫 assistant.tool_calls 建 tool_call_id→{Name,Path} → 按 user 消息定位 cut → 折叠 cut 之前的 role=tool content 为 `[已折叠: Read main.go, 原 N 字节]` → Marshal 回去；无折叠项/坏 JSON 原样返回）+ `prompt_compact_test.go` 5 个测试；`router.go` 在 prefix 开关块后加 `ZGATE_PROMPT_FOLD` / `_TURNS`（默认 3）/ `_BYTES`（默认 400）开关，记 `[fold] tool_msgs=N in=X->Y`。
+- 验证：`go build ./...` build=0；`go test ./internal/router/` ok 17.819s test=0；新二进制 `zgate.new.exe` 11803136 B。未替换、未重启网关。
+- 踩坑：`FoldOldToolOutputs` 首测期望 moved=1 实际 2，原因是 keepTurns=1 时 cut 落在第 3 个 user，前两轮的 tool 都该折叠 —— 期望值应按「保留最近 2 轮」写。
+- 答复：.work/answer2.md（[format] OK · 6 章节 · 0 error / 0 warn）。未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+---
+
+## 批次：2026-11-15 优化账目盘点
+
+- 起因：用户问「一共优化了多少问题，现在还有多少问题」（m00406）。
+- 结论：三轮共定位 8 个问题 —— 改完 2 个（prompt_stable.go 变化注入搬家、prompt_compact.go 旧工具输出折叠）、排除 3 个（上游限流、本地并发闸、通道选择）、剩 3 个（客户端注入根因、上游 cache 抖动、会话粒度）。
+- 代码状态：4 个新文件 + router.go 两个开关块，build=0、test=0、9 个单测全 PASS；zgate.new.exe 11803136 B 未替换，线上 PID 19916 仍是旧二进制，两个开关都没开。
+- 答复：.work/answer3.md（[format] OK · 7 章节 · 0 error / 0 warn）。未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+---
+
+## 批次：2026-11-15 上线后「思考变正文」回修（prompt_stable 误搬 tool 消息）
+
+- 起因：用户执行上线命令后反馈「思考会变成正文」，GUI 截图里正文出现整段 `< | DSML | ...>` 工具调用文本、工具不再执行（m00001 / m00074）。
+- 根因：`StabilizePromptPrefix` 只按文本标记匹配、不看 role，把 `tool` 消息也搬走，`assistant(tool_calls) → tool` 配对被打断（序列非法）。本会话的 Read 输出里恰好带全部四个标记，于是每轮都在搬。附带两处：`json.Marshal` 把 `< > &` 转义、大整数转 float64，body 每轮凭空涨 2–4 KB（日志 `in=449779->453704`）。
+- 修复：`gateways/zgate/internal/router/prompt_stable.go` 重写 —— 只搬 `user`/`system`（`movableRole`），首条 system 不搬；落点由 `insertionIndex` 决定（尾部 tool 块 → 插在发起它的 assistant 之前；尾部 assistant → 插在它之前；常规轮 → 插在最后一条 user 之前），注入永不做末条；解码改 `json.Decoder.UseNumber()`、序列化改 `marshalNoEscape`（`SetEscapeHTML(false)`），body 字节忠实。`prompt_compact.go` 同步换用 `marshalNoEscape`。
+- 测试：新增 `prompt_stable_pairing_test.go` 4 个（配对不被破坏 / 工具轮落点 / 常规轮落点 / 字节忠实），修前 3 条红、修后全绿；旧 5 个 stabilize + 5 个 fold 全 PASS；`go test ./internal/router/` ok 17.223s test=0；`go vet ./...` vet=0。
+- 上线：`zgate.exe` 11819008 B（sha 5E5A098AE7BE5789）替换旧 11803136 B（备份 `zgate.exe.bak-20261115`，sha 7909B04B56473E7F），PID 30100 于 00:39:06 重启，`ZGATE_PROMPT_STABILIZE=1` 继承。
+- 线上证据：重启前 `[prefix] volatile=8 in=449779->453704`（搬 8 条 + 涨 3.9 KB）；重启后 `[prefix] volatile=1 in=630825->630825`（只搬真注入、零膨胀），/health requests=27 errors=0。
+- 未证明项：DSML 文本用短会话 A/B 复现不出来（坏序列与好序列都拿到结构化 tool_calls），判定为「协议被破坏后上游的降级表现」，需下一轮长会话观察。
+- 未 add / commit / push。
+
+[[TASK_ALL_DONE]]
+- 状态: 已完成
+
+
+### 追加：2026-11-15 01:02 叠加折叠
+
+- 开关：`ZGATE_PROMPT_FOLD=1` / `TURNS=3` / `BYTES=400`（User 级），PID 4208 于 01:02:06 重启，STABILIZE 同时保持开。
+- 线上实测：`[fold] tool_msgs=69 in=879093->718889`（18.3%）、`tool_msgs=24 in=764372->680949`（10.9%）、探针 `tool_msgs=4 in=91806->31982`（65.2%）。
+- 搬家同时在线：`[prefix] volatile=2 in=766553->766553`（体积零变化）。
+- 01:02–01:04 共 14 个请求，status=4xx/5xx 计数 0。
+- 观察点：模型是否因看不到 3 轮前的工具输出而反复重读同一文件；出现就把 `ZGATE_PROMPT_FOLD_TURNS` 调到 5。
+- 未 add / commit / push。
+

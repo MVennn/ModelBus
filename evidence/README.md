@@ -121,3 +121,14 @@
 | agent-dsh-sync-hardening.md | 快照 | `.codegraph/` 存在但 `codegraph_status` 报 `unable to open database file`，当轮退回 grep | topic-routing-runtime.md §3 |
 | DSH-REVIEW-SUMMARY-2026-11-11.md | 汇总 | 7 路审查汇总（过程汇总，结论已进各主题卡） | 各主题卡 |
 | go-model-sync-20261106-120006.md<br>go-model-sync-20261106-232822.md<br>go-model-sync-20261109-120007.md<br>go-model-sync-20261110-120007.md<br>go-model-sync-20261111-120008.md<br>go-model-sync-20261111-133607.md<br>go-model-sync-20261112-120012.md | 快照 | 同一脚本的 7 份历史收录决策报告（实时 /models 30、Go 文档 31、定价 32、全量 93、已过弃用 21、控制台 32、已配置 18、待评估 24） | 只留最新 `go-model-sync-20261113-120007.md`（docs/MAINTENANCE.md §3 保留策略：一次性报告只留最近一版） |
+
+### 提速排查（2026-11-14/15，一次性分片，正文已删）
+
+| 原件 | 主题 | 结论一句话 | 去向 |
+|---|---|---|---|
+| agent-chain.md | 并发 | 本地无全局排队闸；WB 子网关有单账号在途上限 3 / global 2、6004 模型锁、30m 粘性会话 | PROGRESS.md 2026-11-15 批次 |
+| agent-logs.md | 并发 | 2026-11-14 20:24 后并发窗口本地零排队 / 零 429 / 零冷却 | PROGRESS.md 同上 |
+| agent-upstream.md | 上游 | 上游未公开并发口径，无拒绝证据，不支持把掉速定到上游容量 | PROGRESS.md 同上 |
+| agent-tests.md | 测试 | 新测试文件 gofmt 干净、vet 0、连续三轮全绿 | 仓库测试 |
+| speedup-verdict.md | 提速 | 默认 effort=high 不动；提速只走不碰档位的路径 | PROGRESS.md 同上 |
+
