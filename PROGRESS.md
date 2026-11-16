@@ -3972,3 +3972,17 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 未 add / commit / push。
 
 [[TASK_ALL_DONE]]
+
+---
+
+## 批次：2026-11-16 16:07 记忆热条目 kb 压缩 + 日常防爆 + 收尾 push
+
+- 起因：用户反馈用户画像与工作记忆快满，问能否 kb 压缩且保证现状。
+- 第一轮无损精简：USER.md 3677→3603 B、MEMORY.md 8964→8851 B，逐条 token 集合（数字/路径/指针/英文）比对 60 条全保留，门禁 0 FAIL。
+- 第二轮去重下沉：删 M42/M43（教训 Lmwix50go/gw 已收全文）、M17 降为指针（Lmwc9izcb）、M18/M19 去时点数字、xring 四条同根因合一条（独有事实先在正本 a89dc615 + docs/05-soft-restart.md 核实）。MEMORY.md 8851→7853 B、44→39 条，工作记忆余量 1389→2387 B。
+- 日常防爆：USER.md 新增一条（279 B）——易变值写派生指针、流程下沉、同类 replace 不 add、常识删；正本 memory-hygiene.md 8.3/8.4。
+- 收尾六步：门禁 check-docs 54 篇/check-project 8 项/check-secrets 双模式/unittest/model_alias --check 全 exit 0；提交 a8d761c（fix(providers) 退役加固）+ e44a72b（docs 0.9.0/0.9.1）已 push 到 origin/main；微扫 DELETED=0（临时备份保留作回滚，%TEMP% .tmp 候选非本轮产物不删）；本轮踩坑（run_code stdio 吞输出/tmpdir undefined）教训库已有 Lmwdn95le/Lmwef9a8b 不重复留痕。
+- 门禁：记忆门禁 PASS 26 / WARN 3 / FAIL 0（3 个 WARN 为既有 Document 层，与本轮无关）。
+- 状态: 已完成
+
+[[TASK_ALL_DONE]]
