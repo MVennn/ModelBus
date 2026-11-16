@@ -84,7 +84,9 @@ DEFAULT_MAX_RATE = 0.30
 
 # Value tier: benchmark score per price below the deepseek anchor.
 # See docs/BENCHMARKS.md §5.4; new models must be added by hand.
-BACKUP_MODEL_IDS = {"cn:deepseek-v4-flash", "cn:minimax-m3"}
+# cn:minimax-m3 已于 2026-11-16 退役（现价表只有 cn:minimax-m2.7 / cn:minimax-m3.1-flash）；
+# 留着它会在 unified 备份组里挂一个已下线型号。换成在架的 m3.1-flash。
+BACKUP_MODEL_IDS = {"cn:deepseek-v4-flash", "cn:minimax-m3.1-flash"}
 
 # User-facing order inside each tier provider:
 #   1. pinned models first (the daily driver)

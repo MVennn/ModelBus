@@ -95,6 +95,11 @@ GATEWAY_KEY = os.environ.get("WB_GATEWAY_KEY", "")
 DEFAULT_OUTPUT = Path(
     os.environ.get("WB_PRICING_FILE", CACHE_DIR / "wb_pricing.json")
 )
+# 显式退役名单（型号点名，见同目录 retired.json）。骤降保护会把「面板不再列出」的旧行
+# 并回价格表，已下线型号因此长期留在表里；名单里的型号在写表前统一剔除。
+# 不剔的连带后果：workbuddy_sync.py 用 pricing_ids 判断 live 列表是否完整，
+# 旧行在表里 → live_complete 永远为假 → 旧型号被当成「列表残缺」保留在配置里。
+RETIRED_FILE = Path(os.environ.get("WB_RETIRED_FILE", HERE / "retired.json"))
 
 # 从 "x0.29" / "0.29 credits" 这类串里抽第一个数字
 _NUM = re.compile(r"(\d+(?:\.\d+)?)")
@@ -150,6 +155,28 @@ ALIAS_IDS = {
     "global:balanced-model",
     "global:enhance-1.0",
 }
+
+
+def load_retired(path: Path = RETIRED_FILE) -> dict[str, str]:
+    """读显式退役名单：`{"retired": {id: 原因}}`（也接受 id 数组）。
+
+    只做减法：文件缺失、损坏、结构不对一律返回空表 —— 不能因为一个坏 JSON
+    把整张价格表清空。
+    """
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except Exception as exc:
+        print(f"WARN: 退役名单 {path} 读取失败（{exc}），本轮不剔除任何型号",
+              file=sys.stderr)
+        return {}
+    rows = payload.get("retired") if isinstance(payload, dict) else None
+    if isinstance(rows, dict):
+        return {str(k): str(v) for k, v in rows.items()}
+    if isinstance(rows, list):
+        return {str(k): "" for k in rows}
+    return {}
 
 
 def normalize(model: dict) -> dict | None:
@@ -385,6 +412,14 @@ def main() -> int:
                 f"（旧价全保留，连续多轮残缺再人工确认）"
             )
             removed = []
+
+    # 显式退役：面板已剔除、网关仍能响应（换代 / 限免结束）的型号。
+    # 必须放在骤降并回之后 —— 并回会把旧行原样塞回来，先剔就被覆盖了。
+    retired = load_retired()
+    hit = [r["id"] for r in rows if r["id"] in retired]
+    if hit:
+        print(f"   按退役名单剔除 {len(hit)} 个：{', '.join(hit)}")
+        rows = [r for r in rows if r["id"] not in retired]
 
     if args.dry_run:
         print("（--dry-run，未写文件）")

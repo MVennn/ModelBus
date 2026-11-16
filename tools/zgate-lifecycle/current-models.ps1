@@ -57,6 +57,27 @@ $jss = New-Object System.Web.Script.Serialization.JavaScriptSerializer
 $alias = $jss.DeserializeObject((Get-Content -Raw -Encoding UTF8 $AliasMap))
 $zgate = $jss.DeserializeObject((Get-Content -Raw -Encoding UTF8 $ZgateJson))
 
+# 退役名单：面板已剔除、但网关仍能响应的型号（providers/workbuddy/retired.json）。
+# billing_suspect 第二段扫的是**全部**探测记录，不滤的话已下线型号的历史扣费记录
+# 会一直挂在「当前清单」上，读者会以为现网还在用它（2026-11-16 cn:hy4free 即此）。
+$retiredIds = @{}
+$retiredFile = Join-Path $root "providers\workbuddy\retired.json"
+if (Test-Path $retiredFile) {
+    try {
+        $rj = $jss.DeserializeObject((Get-Content -Raw -Encoding UTF8 $retiredFile))
+        if ($rj -is [System.Collections.IDictionary] -and $rj.ContainsKey("retired")) {
+            foreach ($rk in $rj["retired"].Keys) {
+                $rawKey = [string]$rk
+                $retiredIds[$rawKey] = $true
+                # 裸名归一化：同一型号在探测缓存里可能是 global:hy3 / 裸 hy3，
+                # 名单只写 cn:hy3 会漏（2026-11-16 审计实测 4 条漏网）。
+                $bare = $rawKey -replace '^(?i)(cn|global|wb|oc|qd):', ''
+                $retiredIds[$bare] = $true
+            }
+        }
+    } catch { }
+}
+
 $upObj = $null
 if ($zgate.ContainsKey("upstreams")) { $upObj = $zgate["upstreams"] }
 if (-not $upObj -and $zgate.ContainsKey("Upstreams")) { $upObj = $zgate["Upstreams"] }
@@ -178,6 +199,7 @@ if ($probeDict) {
     foreach ($pk in ($probeDict.Keys | Sort-Object)) {
         $pv = $probeDict[$pk]
         if ($pv -isnot [System.Collections.IDictionary]) { continue }
+        if ($retiredIds.ContainsKey([string]$pk)) { continue }
         $disp = [string](Get-Field $pv "display" "")
         $freeLabel = ($disp -match "(?i)free|免费") -or ([string]$pk -match "(?i)free")
         if (-not $freeLabel) { continue }
@@ -206,6 +228,7 @@ if ($probeDict) {
     foreach ($pk in ($probeDict.Keys | Sort-Object)) {
         $pv = $probeDict[$pk]
         if ($pv -isnot [System.Collections.IDictionary]) { continue }
+        if ($retiredIds.ContainsKey([string]$pk)) { continue }
         $ms = Get-Field $pv "ms" $null
         if ($ms -is [System.ValueType] -and (([double]$ms) -gt 10000)) {
             $slowModels += [ordered]@{

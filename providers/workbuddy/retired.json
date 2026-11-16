@@ -1,0 +1,25 @@
+{
+  "_doc": [
+    "显式退役名单：面板目录已剔除、但网关仍然能响应的型号。",
+    "为什么需要它：workbuddy_fetch_pricing.py 的骤降保护会把「面板不再列出」的旧行并回价格表，",
+    "价格表因此长期带着已下线型号；workbuddy_sync.py 又用 pricing_ids 判断 live 列表是否完整，",
+    "旧行在表里 → live_complete 永远为假 → 旧型号被当成「列表残缺」保留在 provider_config 里。",
+    "结果就是 2026-11-16 的情况：Hy3 端内下线、Hy4 限免结束，免费组里还挂着 HY3 / HY4-Free。",
+    "这里按型号点名退役，同步时无论探活结果如何都剔除；恢复某条就删掉对应键。"
+  ],
+  "retired": {
+    "cn:hy3": "Hy3 端内下线（WorkBuddy 2026-11-16 公告），面板目录已移除",
+    "cn:hy3-b": "Hy3 端内下线（2026-11-16），随 cn:hy3 一起退役",
+    "cn:hy3-c": "Hy3 端内下线（2026-11-16），随 cn:hy3 一起退役",
+    "cn:hy3-x": "Hy3 端内下线（2026-11-16），随 cn:hy3 一起退役",
+    "cn:hy4free": "Hy4 限免已结束（2026-11-16），由 cn:hy4flash-free 接替限时免费",
+    "cn:hy4-preview": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-f": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-ctrl": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-exp": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-exp1": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-exp2": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-exp3": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替",
+    "cn:hy4-preview-x": "Hy4 预览档随 Hy4 正式版退役（2026-11-16），由 cn:hy4flash 接替"
+  }
+}

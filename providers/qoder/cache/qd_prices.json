@@ -39,8 +39,8 @@
       "link": "https://docs.qoder.cn/product-overview/qwen-3-7-series-model-staggering-discount"
     }
   },
-  "Qwen4-Max-Preview": {
-    "price": 0.1,
+  "Qwen4-Max": {
+    "price": 0.08,
     "peak": 0.5,
     "valley": 0.1,
     "off_peak": {

@@ -33,6 +33,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -45,8 +46,39 @@ REPO = HERE.parent
 EFFECTIVE = REPO / "providers" / "workbuddy" / "effective_body.js"
 DEFAULT_OUT = Path.home() / ".zcode" / "v2" / "model_probe.json"
 ALIAS = Path.home() / ".zcode" / "v2" / "model-alias-map.json"
+RETIRED_FILE = REPO / "providers" / "workbuddy" / "retired.json"
 PROVIDERS = ("opencode-go-chat", "opencode-go-chat-free",
              "opencode-go-chat-fast", "opencode-go-chat-slow")
+
+_NS_PREFIX = re.compile(r"^(?:cn|global|wb|oc|qd):", re.IGNORECASE)
+
+
+def retired_keys(path: Path = RETIRED_FILE) -> set[str]:
+    """退役型号的归一化 key 集合（裸名 + 原名，都转小写）。
+
+    退役名单里写的是`cn:hy3`这类带前缀的 id，但同一型号在探测缓存里可能以
+    `global:hy3` 或裸 `hy3` 出现（2026-11-16 审计实测 4 条漏网）。按裸名匹配
+    让一条名单覆盖所有命名空间；名单缺失/损坏一律返回空集（只做减法，不能因为
+    一个坏文件把整份探测缓存清空）。
+    """
+    try:
+        rows = json.loads(path.read_text(encoding="utf-8"))["retired"]
+        keys = rows if isinstance(rows, (list, dict)) else []
+    except Exception:
+        return set()
+    out: set[str] = set()
+    for raw in keys:
+        key = str(raw).lower()
+        out.add(key)
+        out.add(_NS_PREFIX.sub("", key))
+    return out
+
+
+def is_retired(key: str, retired: set[str]) -> bool:
+    if not retired:
+        return False
+    low = str(key).lower()
+    return low in retired or _NS_PREFIX.sub("", low) in retired
 
 
 def config_path(explicit: str | None) -> Path:
@@ -235,6 +267,18 @@ def main() -> int:
             results = json.loads(out_path.read_text(encoding="utf-8"))
         except Exception:
             results = {}
+
+    # 退役型号不再在配置里，不会被主动探测，但旧记录会一直留在 results 里
+    # （status=ok/http=200），误导排查。写盘前按退役名单剔除——网关对已下架
+    # 型号仍回 200，靠探活永远判不出它「该不该在架」（2026-11-16 审计）。
+    retired = retired_keys()
+    if retired:
+        dropped = [k for k in results if is_retired(k, retired)]
+        for key in dropped:
+            del results[key]
+        if dropped:
+            print(f"[retired] 清理探测缓存里 {len(dropped)} 个退役型号: "
+                  f"{', '.join(sorted(dropped))}", flush=True)
 
     for index, (model, provider_id, original) in enumerate(models):
         print(f"[{index + 1}/{len(models)}] {model} ({provider_id}) ...", flush=True)

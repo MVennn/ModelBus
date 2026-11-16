@@ -180,7 +180,7 @@ MAIN_UPSTREAM_HINTS = ("deepseek",)
 # 各行尾注释说明「为什么这家留这个型号」：
 LOW_ORDER = [
     # 旗舰先行（用户 2026-11-09 从主力下沉，价格 >LOW_MAX 故必须留在名单里）；
-    # 同厂商仍受 VENDOR_QUOTA=2 约束：HY 为 hy4std + hy3-x，QW 为 Max + 一条 Flash。
+    # 同厂商仍受 VENDOR_QUOTA=2 约束：HY 为 hy4std + hy4flash，QW 为 Max + 一条 Flash。
     "chat:cn:hy4std",                # 腾讯：旗舰（0.29，原主力第一位）
     "chat:qoder:Qwen3.8-Max",        # Qwen：旗舰（0.43，原主力贵备份）
     "messages:qwen3.8-flash",        # Qwen：中文 / 长输出（AA 基准附近）
@@ -191,7 +191,7 @@ LOW_ORDER = [
     "chat:cn:minimax-m3.1-flash",    # MiniMax：1M 上下文
     "chat:mimo-v2.6-flash",          # 小米：每积分最耐用（AA 1087）
     "chat:mimo-v2.6-pro",            # 小米：旗舰（0.19，厂商代表型号）
-    "chat:cn:hy3-x",                 # 腾讯：最便宜（0.05）
+    "chat:cn:hy4flash",              # 腾讯：最便宜（0.03；2026-11-16 接替下线的 hy3-x）
     "messages:claude-haiku-5-5",     # Anthropic：子代理 / 小改动（AA 1026）
     "responses:gpt-6-luna",          # OpenAI：responses 协议（AA 992）
     "chat:cn:space-bunny",           # Space：AA 1074，性价比最高之一
@@ -439,6 +439,9 @@ ABBR = {
     # hy4std 的上游回包 model 就是 hy4，-Std 只是 WorkBuddy 的档位名，不是型号名；
     # 同族只剩它一个付费档，去掉尾缀。只有 HY4-Free 必须带 Free 区分配额池。
     "hy4std": "HY4",
+    # hy4flash 是 2026-11-16 上线的 Hy4 Flash 档（0.03），hy4flash-free 是它的限时免费入口；
+    # -free 后缀由 abbreviate 统一剥掉，同型号有付费档时自动补回 -Free。
+    "hy4flash": "HY4-Flash",
     "hy3-b": "HY3",
     "hy3-c": "HY3",
     "fast-model": "HY-Fast",
@@ -1249,6 +1252,20 @@ def wb_prices() -> dict[str, dict]:
         _warn_price_once("WB", f"{WB_PRICING}: {exc}")
         return {}
     _warn_stale_cache(WB_PRICING, "WB 价格表", "providers/workbuddy/workbuddy_fetch_pricing.py")
+    # 退役型号二次过滤：价格表若被旧回补写回已下架型号，或白名单还点名着它，
+    # 都在这里挡掉——whitelist_items 补建候选时会调本函数，漏一手就会复活退役型号
+    # （2026-11-16 审计发现 model_alias 此前对 retired.json 零引用）。
+    try:
+        _retired = json.loads((WB_PRICING.parent.parent / "retired.json").read_text(encoding="utf-8")).get("retired", {})
+        _retired_norm = set()
+        for _k in _retired:
+            _low = str(_k).lower()
+            _retired_norm.add(_low)
+            _retired_norm.add(re.sub(r"^(?:cn|global|wb|oc|qd):", "", _low))
+        rows = [r for r in rows if str(r.get("id", "")).lower() not in _retired_norm
+                and re.sub(r"^(?:cn|global|wb|oc|qd):", "", str(r.get("id", "")).lower()) not in _retired_norm]
+    except Exception:
+        pass  # 名单缺失/损坏不构成清空价格表的理由
     # 上游偶发漏填 credits —— 2026-11-06 实测 cn:hy4-preview-f：credits 是空串、
     # list_rate 与 eff_rate 同时为 0。旧逻辑据此把它判成「免费」放进免费组，
     # 而它在 usage.json 里累计 2420 次请求扣了 6601 积分（均值 2.73/次）。
@@ -1481,6 +1498,11 @@ def abbreviate(model: str) -> str:
     text = re.sub(r"^\[[^\]]*\]", "", model)
     text = re.sub(r"^[a-z0-9_-]+/", "", text, flags=re.IGNORECASE)
     text = re.sub(r"(?i)[-_]free$", "", text)
+    # 剥掉 -free 之后再查一次 ABBR：同型号的免费档与付费档必须共用一个显示名，
+    # 否则 "hy4flash-free" 会走下面的兜底拼成 "hy4Flash"，与付费档 "HY4-Flash"
+    # 不成族 —— 免费档就拿不到 -Free 尾缀，两条条目还可能撞名。
+    if text.lower() in ABBR:
+        return ABBR[text.lower()]
     text = re.sub(r"^[Vv](?=\d)", "", text)
     # 不缩写：-Fs / -Pre 这类尾缀读者分不清是档位还是版本，一律写全。
     text = re.sub(r"(?i)flash\b", "Flash", text)
@@ -1908,7 +1930,10 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
         free = [h for h in hops if h["price"] <= 0]
         paid = [h for h in hops if h["price"] > 0]
         base_model = hops[0]["base_model"]
-        family_key = re.sub(r"(-sg|-f)$", "", base_model.lower())
+        # 归并键要连 -free 一起剥：上游把限时免费档挂成 `<型号>-free`，
+        # 不剥的话免费档与付费档被当成两个型号，各自独立成条目、免费那条还拿不到
+        # -Free 尾缀（2026-11-16 cn:hy4flash-free 就是这样显示成 hy4Flash 的）。
+        family_key = re.sub(r"(-free|-sg|-f)$", "", base_model.lower())
 
         if family_key in MERGE_FREE_GB or not (free and paid):
             groups = [hops]
