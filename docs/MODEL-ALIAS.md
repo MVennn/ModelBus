@@ -97,6 +97,8 @@ L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名�
 
 ### 实测矩阵：HY 家族（2026-11-06，经 7863 直连，单问「17 乘以 23」）
 
+> 2026-11-16 更新：下面是 11-06 的实测快照，不是当前在架清单。Hy3 全系与 Hy4 旧档（`hy4free` / `hy4-preview*`）已退役，面板只剩 `hy4std` / `hy4flash` / `hy4flash-free`；退役出口见 `providers/workbuddy/retired.json`，机制见 [PITFALLS](PITFALLS.md) 第 58 节。
+
 | upstream | 回包 `model` | `quota.model` | 本次 `credit` | 现有显示名 | 现有组 |
 |---|---|---|---|---|---|
 | `cn:hy4free` | **hy4-free** | hy4 | 0 | `HY4-Free` | 免费 |

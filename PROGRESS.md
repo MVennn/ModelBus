@@ -3948,4 +3948,27 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 留痕：~/.dsh/evidence/sweep-ledger.md 追加第九轮；.work/search-fact-20261115.md 写免搜行；search-gate-audit.mjs 24h 全局 FAIL_LOW_EXECUTION exit 1 属全局旧账，本轮免搜留痕合格。
 - 状态: 已完成
 
+---
+
+## 批次：2026-11-16 15:03 WorkBuddy 型号退役（HY3/HY4 免费组清理）
+
+- 现象：公告说 Hy3 端内下线、Hy4 限免结束、Hy4 Flash 11/16–11/30 限免，但 12:00 同步后 ZCode 面板免费组仍挂 HY3 / HY4-Free。
+- 根因链：面板只剩 20 条 → workbuddy_fetch_pricing.py 骤降保护并回旧价 → pricing_ids(39) ⊉ live_ids(20) → live_complete=False → 旧型号按「列表残缺，保留」留在配置；探活对已下架型号仍回 200，--probe 无效。
+- 修法：新增 providers/workbuddy/retired.json 点名退役（12 个 id），fetch_pricing.py 在骤降并回之后剔除；current-models.ps1 billing_suspect 同名单过滤；model_alias.py 修 -free 剥后缀回查 ABBR + family_key，hy4flash-free 显示 HY4-Flash-Free；LOW_ORDER 的 hy3-x 换 hy4flash。
+- 验收：价格表 39→29；provider_config 里 cn:hy3/cn:hy4free/cn:hy4-preview 全 0；免费组 HY4-Flash-Free/Beam/Conatus/Iceman；current-models billing_suspect=0、hy3/hy4free 0；check-docs 53 篇、check-project 8 项、model_alias --check、unittest 171 全绿。
+- 版本：0.9.0（CHANGELOG/VERSIONING/release-notes 0.9.0 + reports 12:06 报告入索引）；踩坑沉淀 PITFALLS 58/59、教训库 Lmwix2wdy。
+- 未 add / commit / push。
+
+---
+
+## 批次：2026-11-16 15:14 全渠道同构审计 + 退役名单加固（0.9.1）
+
+- 触发：用户问「其他渠道是否也有此类问题，如何避免」。判定命中委派闸门（4 渠道独立审计），派 4 路子代理 + 主线查总控。
+- 审计结论：Go / Qoder / Qwen 无 WorkBuddy 式残留（机制各自安全：Go 探活不参与判活、Qoder 只信实时目录、Qwen 池停用）；WB 配置主链 0 残留，但探测缓存 model_probe.json 有 9 条退役型号 ok/200，其中 4 条（global:hy3 / global:hy4-preview / global:hy4-preview-f / 裸 hy3）连 retired.json 都没覆盖（名单只写 cn: 前缀）。
+- 加固：model_probe.py 加 retired_keys()/is_retired() 裸名归一化 + 写盘前剔除；current-models.ps1 的 stale/slow 两段加退役过滤；model_alias.wb_prices() 按 retired.json 二次过滤防白名单复活；workbuddy_sync 的 BACKUP_MODEL_IDS 去 cn:minimax-m3 换 m3.1-flash。
+- 数据清理：真实 model_probe.json 清 9 条（62 保留），备份 .work/model_probe.bak-before-retired-clean。
+- 验证：新增 tests/test_retired_filter.py 3 用例绿；全量 unittest 174 OK；model_alias --check exit 0；check-docs 54 篇、check-project 8 项全绿；current-models hy3/hy4free 0、billing_suspect 0。
+- 文档：PITFALLS 60、CHANGELOG 0.9.1、release-notes/0.9.1、VERSIONING/README 索引。
+- 未 add / commit / push。
+
 [[TASK_ALL_DONE]]

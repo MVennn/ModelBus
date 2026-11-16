@@ -969,3 +969,25 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **正解**：`gateways/zgate/internal/router/dsml.go` 在 SSE 转发链上扣留命中标记后的正文（`router.go:1537-1545` 构造、`1566-1570` defer 收口、两个转发循环各过一道），流尾补 `finish_reason:"error"` + `error.type=upstream_tool_call_as_text` + `[DONE]`，计数进 `/health.upstream.dsml_text_calls`。扣留上限 256 KiB，超了按误判原样放行。**不做 tool_calls 还原**：实测 00:34 那次只剩 `<｜DSML｜parameter name="code" string="true">` 段、12:04 那次只剩闭合标签，开标签从来没到过客户端，按猜的格式造调用会拿错参数去执行工具。
 - **判据**：`/health` 里 `dsml_text_calls > 0` 就是命中过；日志对应行 `[router] 上游把工具调用写成了正文（DSML 标记），后续正文扣留不转发（model=...）`。单测 `go test ./internal/router/ -run DSML` 6 个用例全过，端到端那条断言客户端流里既没有标记、又有 `upstream_tool_call_as_text` 说明帧。
 - **同类**：任何「模型在正文里输出自家协议标记」的降级（Anthropic 的 invoke 闭合标签、Qwen 的 tool_call 标签）都是同一种症状：这一轮没有结构化调用、客户端静默结束。判据先看会话存档这一轮有没有 tool-call 块，再看上游 `status` —— 200 + 无 tool-call = 上游降级，不是网关 502。
+## 58. 上游面板删了型号但接口还能调，骤降保护把它永久锁回配置里 【通用】
+
+- **现象**：2026-11-16 12:00 主同步跑完，ZCode 面板的免费组仍是 `HY3` / `HY4-Free`。当天公告写的是「Hy4 Flash 上线、11/16–11/30 限免；Hy4 限免已结束；Hy3 端内下线」，用户看到的是三个说法互相打架：公告说没了，面板还挂着。
+- **根因**：四段链条，缺一段都看不出问题。① WB 面板 `GET /panel/api/models` 只剩 20 条，`hy3` / `hy3-b` / `hy3-c` / `hy3-x` / `hy4free` / `hy4-preview*` 全部消失，新增 `hy4std`(x0.29) / `hy4flash`(x0.03) / `hy4flash-free`(x0.00)。② `providers/workbuddy/workbuddy_fetch_pricing.py` 的骤降保护（条目减少 >30% 且未加 `--probe`）判定为「网关残缺」，把旧价格表的 21 行整批并回，表里仍有 39 条。③ `workbuddy_sync.py` 用 `pricing_ids` 判断面板列表是否完整：`pricing_ids(39) ⊉ live_ids(20)` → `live_complete=False` → 旧型号走「列表残缺，保留」分支，`cn:hy3` / `cn:hy4free` 原样留在 `provider_config.json`。④ 加 `--probe` 也救不了：网关对已下架型号照样回 200，`dead` 集合为空，19 个旧行全部按 kept 保留。
+- **正解**：给「点名退役」一个显式出口。新增 `providers/workbuddy/retired.json`（`{"retired": {id: 原因}}`），`workbuddy_fetch_pricing.py` 的 `load_retired()` 在**骤降并回之后**剔除名单内型号（先剔会被并回覆盖），打印 `按退役名单剔除 N 个`；`tools/zgate-lifecycle/current-models.ps1` 的 billing_suspect 第二段也按同一名单过滤，否则已下线型号的历史扣费记录会一直挂在「当前清单」上。恢复某条就删掉对应键，名单是唯一开关。
+- **判据**：`python providers/workbuddy/workbuddy_fetch_pricing.py` 回 `按退役名单剔除 12 个` 且价格表 `count=29`；`python providers/workbuddy/workbuddy_sync.py --max-rate 0.3 --apply` 后 `provider_config.json` 里 `cn:hy3` / `cn:hy4free` / `cn:hy4-preview` 计数全为 0；`python tools/model_alias.py --check` exit 0；`current-models.json` 免费组 = `Beam / Conatus / HY4-Flash-Free / Iceman`，`billing_suspect=0`。
+- **同类**：任何「上游目录删条目、接口仍可调用」的下架 —— 限免到期、型号换代、区域下线 —— 都不能用探活判断死活。探活只证明「还能调」，证明不了「还该在架」；判据要落在**上游目录 + 公告**，落地要有一个点名名单，否则骤降保护 + `live_complete` 会把它们永久锁在配置里。
+## 59. 限时免费档 `<型号>-free` 剥后缀后要复用显示名，否则与付费档不成族 【通用】
+
+- **现象**：`cn:hy4flash-free` 在清单里显示成 `hy4Flash`（大小写混排、看不出是 HY4 Flash 的免费档），同族的付费档叫 `HY4-Flash`；两条本该是「同一型号的免费/付费两个入口」，结果被当成两个不相干的型号。
+- **根因**：`abbreviate()` 先精确查 `ABBR`，再 `re.sub(r"(?i)[-_]free$", "", text)` 剥掉 `-free`，但剥完**没有回查 ABBR**，直接落到兜底正则，于是 `hy4flash` 被拼成 `hy4Flash`；同时 `family_key = re.sub(r"(-sg|-f)$", "", base_model.lower())` 不认识 `-free`，免费档与付费档的归并键不同，拿不到 `-Free` 尾缀，两条条目还可能撞名。
+- **正解**：`abbreviate()` 在剥完 `-free` 后补一次 `if text.lower() in ABBR: return ABBR[text.lower()]`；`family_key` 的正则改成 `r"(-free|-sg|-f)$"`。这样 `hy4flash-free` → `HY4-Flash` → 同族含付费档 → 最终显示 `HY4-Flash-Free`。
+- **判据**：`python -c "import sys;sys.path.insert(0,'tools');import model_alias as m;print(m.abbreviate('hy4flash-free'))"` 回 `HY4-Flash`；`python tools/model_alias.py` 的免费组里出现 `HY4-Flash-Free`，省钱组里出现 `HY4-Flash`，两条不撞名。
+- **同类**：任何 `-free` / `-sg` / `-f` 这类「档位后缀」都必须在剥后缀后复用基础型号的显示名，并把归并键一起剥；只改其中一处，命名和分族就会分叉。
+## 60. 退役名单只堵了配置主链，探测缓存旁路 + 命名空间变体还会漏 【通用】
+
+- **现象**：第 58 节修完后重新做全渠道审计，配置主链（价格表 → provider_config → alias map → current-models）确实 0 残留；但 `~/.zcode/v2/model_probe.json` 里还躺着 9 个已退役型号，`status=ok / http=200`，其中 4 个（`global:hy3` / `global:hy4-preview` / `global:hy4-preview-f` / 裸 `hy3`）连 retired.json 都没覆盖 —— 名单只写了 `cn:` 前缀，探测缓存用的是 `global:` / 裸名命名空间。
+- **根因**：退役名单是 2026-11-16 当天新加的，只接进了「价格表剔除 + current-models billing_suspect」两处。`model_probe.py` 的探测缓存是独立累积、独立判活的旁路：退役型号从配置删掉后不再被主动探测，但旧 key 永远留在 results 里，网关对已下架型号还回 200，于是 ok/200 记录永久滞留。它不回流配置，只误导人工排查；而名单按 `cn:` 精确匹配，天然漏掉其它命名空间。
+- **正解**：① `model_probe.py` 加 `retired_keys()` / `is_retired()`，把名单 key 归一化成「原名 + 去前缀裸名」两形，写盘前先剔 results 里的退役 key —— 一条 `cn:hy3` 同时盖住 `global:hy3` / 裸 `hy3`。② `current-models.ps1` 的 stale/slow 两段也按同一归一化名单过滤（此前只有 billing_suspect 段过滤）。③ `model_alias.wb_prices()` 读价格表后按 retired.json 二次过滤，堵住白名单补建 `whitelist_items()` 复活退役型号的口子。④ `workbuddy_sync.py` 的 `BACKUP_MODEL_IDS` 去掉陈旧的 `cn:minimax-m3`（现价表只有 m2.7 / m3.1-flash）。
+- **判据**：`python -c "import sys;sys.path.insert(0,'tools');import model_probe as m;r=m.retired_keys();print([k for k in ['cn:hy3','global:hy3','hy3','cn:hy4flash-free'] if m.is_retired(k,r)])"` 回 `['cn:hy3','global:hy3','hy3']`，在架的 hy4flash-free 不在列；`tests/test_retired_filter.py` 3 个用例绿；清洗后 `model_probe.json` 退役 key = 0、全量 unittest 174 OK；check-docs / check-project 全绿。
+- **同类**：任何「点名退役 / 黑名单」机制都要问两句：① 名单覆盖了所有命名空间变体吗（cn:/global:/裸名/WB:）？② 名单接进了**所有**消费该型号的路径吗（配置主链 + 探测缓存 + 统计视图 + 白名单补建）？只接主链、漏旁路，等于没堵；名单写完当天干净，下次探测/补建又会把旧型号带回来。审计方法：拿退役名单对每一层产物做差集，别只看配置文件。
+

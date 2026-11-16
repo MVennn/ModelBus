@@ -15,6 +15,34 @@
 
 ---
 
+## [0.9.1] — 2026-11-16
+
+### 本版汇总：全渠道审计后的退役名单加固 —— 堵住探测缓存旁路和命名空间漏网
+
+> **一句话**：0.9.0 的退役名单只接进了配置主链，全渠道复查发现 `model_probe.json` 探测缓存里还躺着 9 个已退役型号（4 个连名单都没覆盖，因为是 `global:` / 裸名命名空间）；本版把名单归一化成裸名匹配并接进所有消费路径。
+
+- **修复（探测缓存旁路）**：`tools/model_probe.py` 新增 `retired_keys()` / `is_retired()`，写盘前剔退役 key；名单写 `cn:hy3` 可同时盖住 `global:hy3` / 裸 `hy3`。缺失/损坏名单一律当作无退役项，只做减法。
+- **修复（清单视图）**：`tools/zgate-lifecycle/current-models.ps1` 的 stale/slow 两段也按归一化名单过滤（此前只有 billing_suspect 段）。
+- **修复（白名单复活）**：`tools/model_alias.py` 的 `wb_prices()` 读价格表后按 retired.json 二次过滤，`whitelist_items()` 补建候选不再复活退役型号。
+- **修复（静态陈旧）**：`providers/workbuddy/workbuddy_sync.py` 的 `BACKUP_MODEL_IDS` 去掉 `cn:minimax-m3`（现价表只有 m2.7 / m3.1-flash），换成 `cn:minimax-m3.1-flash`。
+- **数据清理**：真实 `model_probe.json` 清掉 9 个退役 key（62 条保留），备份在 `.work/model_probe.bak-before-retired-clean`。
+- **回归测试**：新增 `tests/test_retired_filter.py` 3 个用例（命名空间归一化 / 坏文件 noop / wb_prices 二次过滤）；全量 unittest 174 OK。
+- **全渠道审计结论**：Go / Qoder / Qwen 无 WorkBuddy 式残留（各自机制安全），WB 主链无残留、问题只在探测缓存旁路；四路审计证据见本轮过程记录。
+
+## [0.9.0] — 2026-11-16
+
+### 本版汇总：型号退役有出口，限时免费档按同族命名（2026-11-16，无需换二进制）
+
+> **一句话**：WorkBuddy 面板删掉 Hy3 全系与 Hy4 旧档之后，价格表的骤降保护把它们又并了回来，`live_complete` 于是永远为假、旧型号被当成「列表残缺」留在配置里 —— 本版给退役型号一个点名出口（`providers/workbuddy/retired.json`），顺带修好限时免费档 `<型号>-free` 的显示名与同族归并。
+
+- **新增（退役名单）**：`providers/workbuddy/retired.json` 按型号点名退役（键 = 上游 id，值 = 原因），`providers/workbuddy/workbuddy_fetch_pricing.py` 的 `load_retired()` 在骤降并回**之后**剔除名单内型号，并打印 `按退役名单剔除 N 个`。文件缺失或 JSON 损坏一律当作无退役项 —— 只做减法，不能因为一个坏文件把整张价格表清空。
+- **修复（同步链路）**：`workbuddy_sync.py` 的 `live_complete` 判据终于能成立：价格表不再被旧行撑大，`pricing_ids ⊇ live_ids` → 面板已删除的 `cn:hy3` / `cn:hy3-x` / `cn:hy4free` / `cn:hy4-preview*` 走 stale 清理，从 `provider_config.json` 的 `personalModelIds` 与模型规则里一并删除。
+- **修复（显示名）**：`tools/model_alias.py` 的 `abbreviate()` 在剥掉 `-free` 后缀后回查一次 `ABBR`，`family_key` 的正则补上 `-free`；`cn:hy4flash-free` 由 `hy4Flash` 改为 `HY4-Flash-Free`，与付费档 `HY4-Flash` 同族、不撞名。
+- **调整（省钱组白名单）**：`LOW_ORDER` 里失效的 `chat:cn:hy3-x` 换成 `chat:cn:hy4flash`（x0.03，接替 Hy3-X 成为腾讯最便宜的一档）；`ABBR` 补 `hy4flash → HY4-Flash`。
+- **修复（清单视图）**：`tools/zgate-lifecycle/current-models.ps1` 的 billing_suspect 第二段按退役名单过滤 —— 它扫的是全部探测记录，不过滤的话已下线型号的历史扣费记录会一直挂在「当前清单」上，读者会以为现网还在用（本次即 `cn:hy4free` credit=0.08）。
+- **验收**：`workbuddy_fetch_pricing.py` 回 `按退役名单剔除 12 个`、价格表 `count=29`；`workbuddy_sync.py --max-rate 0.3 --apply` 后 `provider_config.json` 里 `cn:hy3` / `cn:hy4free` / `cn:hy4-preview` 计数全为 0；`python tools/model_alias.py --check` exit 0；`current-models.json` 免费组 = `Beam / Conatus / HY4-Flash-Free / Iceman`、`billing_suspect=0`、`hy3`/`hy4free` 字符串计数 0；`python -m unittest discover -s tests` 171 tests OK。
+- **回退**：`git revert` 本批次提交即可 —— 退役名单是独立 JSON，删掉文件就回到「骤降保护全并回」的旧行为；`provider_config.json` 的上一份 `*.bak-*` 已由同步脚本自动落盘。
+
 ## [0.8.0] — 2026-11-14
 
 ### 本版汇总：zgate 管理面收紧、指标外露与转发热路径降分配（2026-11-14，需换二进制）
