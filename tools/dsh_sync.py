@@ -290,10 +290,9 @@ def _apply_hidden(
             continue
         kept.append({**provider, "modelIds": ids})
     if dropped:
-        print(
-            f"隐藏：{dropped} 个型号不投影（名单 {HIDDEN_FILE}；恢复用 "
-            "python tools/model_visibility.py show）"
-        )
+        # 路径只在 _main 里报一次：_apply_hidden 被测试直接调用时，不该把本机
+        # 真实名单路径混进 fixture 测试的输出里（看起来像测试被污染）。
+        print(f"隐藏：{dropped} 个型号不投影")
     if not kept:
         raise DshSyncError(
             f"隐藏名单把全部 provider 都藏起来了，DSH 会没有任何 zcode-* 路由：{HIDDEN_FILE}"
@@ -961,9 +960,16 @@ def _main(argv: list[str] | None = None) -> int:
         raise DshSyncError(f"找不到 DSH profile patch：{patch_path}")
 
     providers, effective, rules = _load_source(args.source, args.config, args.inventory)
+    # 源真值先记下来：下面过滤只影响投影，日志里两者要分开报，否则「源里只有 11 个」会误导。
+    source_counts = (len(providers), sum(len(p["modelIds"]) for p in providers))
     # 隐藏名单在两条真源之后统一过滤：源配置 / inventory 都是全集，
     # 「藏起来」只发生在投影这一步（隐藏不是删除）。
     hidden_providers, hidden_models = _hidden_sets()
+    if hidden_providers or hidden_models:
+        print(
+            f"隐藏名单：{HIDDEN_FILE}（provider {len(hidden_providers)} 个 / 型号 "
+            f"{len(hidden_models)} 个；恢复用 python tools/model_visibility.py show）"
+        )
     providers = _apply_hidden(providers, hidden_providers, hidden_models)
     # 显示名只在 compat 源投影（dsh 源按设计不读 ~/.zcode/v2/）；
     # alias map 缺失 / 无 displayName 时降级空，投影行为与改造前一致。
@@ -992,7 +998,9 @@ def _main(argv: list[str] | None = None) -> int:
             args.dsh_home / ".credentials.yaml", patch_key, args.apply
         )
 
-    print(f"Host/Compat: {len(providers)} 个 provider / {sum(len(p['modelIds']) for p in providers)} 个模型")
+    projected = (len(providers), sum(len(p["modelIds"]) for p in providers))
+    hidden_note = "" if projected == source_counts else f"（投影 {projected[0]} 个 / {projected[1]} 个）"
+    print(f"Host/Compat: {source_counts[0]} 个 provider / {source_counts[1]} 个模型{hidden_note}")
     print(f"DSH 路由   : {_route_summary(routes)}")
     print(f"patch      : {patch_path}")
     print(f"模型表     : {'有变化' if changed else '无变化'}；凭据引用：{'有变化' if key_changed else '无变化'}")
