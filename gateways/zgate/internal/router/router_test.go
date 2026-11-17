@@ -295,6 +295,62 @@ func TestAdminReloadAppliesPolicy(t *testing.T) {
 	}
 }
 
+// TestAdminReloadRejectsFatalChannelPolicy 锁住「热加载也要跑启动自检」这条行为。
+// 2026-11-17 的现场：GM 只剩单跳模型、配置里留着 maxParallel，reload 成功、服务照跑，
+// 下一次重启才被 ValidatePolicies 拦在门外 —— 改配置那一刻没有任何提示。
+func TestAdminReloadRejectsFatalChannelPolicy(t *testing.T) {
+	dir := t.TempDir()
+	aliasPath := filepath.Join(dir, "alias.json")
+	// GM 只服务一个单跳模型：这份链形态下多跳字段永远读不到。
+	if err := os.WriteFile(aliasPath, []byte(`{"models":{"OnlySingle":{"channel":"GM"}}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "zgate.json")
+	writeConfig := func(policy string) {
+		body := `{"listen":"127.0.0.1:7871","channelPolicy":` + policy + `}`
+		if err := os.WriteFile(cfgPath, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeConfig(`{}`)
+
+	cfg, err := config.Load(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	log, err := logx.Open(dir, "test.log", 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer log.Close()
+	sup := supervisor.New(cfg.Children, dir, log)
+	srv := New(cfg, keys.Set{}, alias.New(aliasPath), sup, &http.Client{}, log)
+	front := httptest.NewServer(srv.Handler())
+	defer front.Close()
+
+	writeConfig(`{"GM":{"maxParallel":1}}`)
+	resp, raw := adminPost(t, front.URL+"/admin/reload")
+	if resp.StatusCode != 400 {
+		t.Fatalf("Fatal 配置必须被拒绝，实际 %d %s", resp.StatusCode, raw)
+	}
+	if !strings.Contains(string(raw), "maxParallel") {
+		t.Fatalf("拒绝理由要带上字段清单，实际 %s", raw)
+	}
+	if got := srv.Config().ChannelPolicy["GM"].MaxParallel; got != 0 {
+		t.Fatalf("被拒绝的配置不该生效，实际 maxParallel=%d", got)
+	}
+
+	// 同样的渠道改成只配单跳仍生效的字段（busyCooldownSeconds）就该放行。
+	writeConfig(`{"GM":{"busyCooldownSeconds":10}}`)
+	resp2, raw2 := adminPost(t, front.URL+"/admin/reload")
+	if resp2.StatusCode != 200 {
+		t.Fatalf("合法配置应放行，实际 %d %s", resp2.StatusCode, raw2)
+	}
+	if got := srv.Config().ChannelPolicy["GM"].BusyCooldownSeconds; got != 10 {
+		t.Fatalf("合法配置应生效，实际 busyCooldownSeconds=%d", got)
+	}
+}
+
 func TestFallbackChainRetriesOnModelUnavailable(t *testing.T) {
 	cap := &capture{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

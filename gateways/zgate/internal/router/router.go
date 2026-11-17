@@ -2314,6 +2314,23 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, 400, errorBody("配置读取失败: "+err.Error(), "configuration_error"))
 		return
 	}
+	// 热加载也要跑启动自检。2026-11-17 的现场是反过来的：配置写进 zgate.json 后
+	// reload 成功、服务照跑，下一次重启才被 ValidatePolicies 拦在门外 —— 改配置的
+	// 那一刻没有任何提示，症状出现在几小时后的重启上（全站 503，日志只剩三条 WARN）。
+	// 宁可现在 400 拒绝，也不把炸弹留到重启；Fatal 的字段清单原样回给调用方。
+	var fatal []string
+	for _, note := range ValidatePolicies(next, s.aliases) {
+		if note.Fatal {
+			fatal = append(fatal, note.String())
+			continue
+		}
+		s.log.Warnf("[policy] %s", note.String())
+	}
+	if len(fatal) > 0 {
+		writeJSON(w, 400, errorBody("channelPolicy 配置有误，已拒绝热加载（照这份配置重启会起不来）: "+
+			strings.Join(fatal, "；"), "configuration_error"))
+		return
+	}
 	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile, next.HajimiEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)

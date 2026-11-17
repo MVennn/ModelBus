@@ -296,6 +296,23 @@ func status() error {
 	fmt.Printf("alias map : %s\n", cfg.AliasMap)
 	fmt.Printf("日志      : %s\n\n", filepath.Join(cfg.Log.Dir, cfg.Log.File))
 
+	// 启动自检的结论也在这里报一遍：/health 不通时人第一个跑的是 status，
+	// 而 Fatal 的现场（2026-11-17）恰恰是「进程起不来、日志里只剩三条 WARN」。
+	am := alias.New(cfg.AliasMap)
+	fmt.Println("策略自检  :")
+	notes := router.ValidatePolicies(cfg, am)
+	if len(notes) == 0 {
+		fmt.Println("  无问题")
+	}
+	for _, n := range notes {
+		tag := "提示"
+		if n.Fatal {
+			tag = "Fatal"
+		}
+		fmt.Printf("  %-5s %s\n", tag, n.String())
+	}
+	fmt.Println()
+
 	fmt.Println("凭据（只报有无）:")
 	for _, name := range []string{"OC", "WB", "QD", "QW", "QN"} {
 		want := ks.For(name) != ""
