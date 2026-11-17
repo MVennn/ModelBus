@@ -9,7 +9,7 @@
 
 数据快照：**2026-10-20**（§4 WorkBuddy 的倍率与分档于 **2026-10-22** 复核，倍率 / 分档无变化；
 §4.9 Qoder 的模型与价格于 **2026-10-23** 实测；§4.11 的 Gemini 渠道于 **2026-11-17**
-重新接入新版 `gemini-4-hydrogen`（旧 3.8 flash 链已于 11-11 下线）。）
+重新接入新版 `gemini-4-hydrogen`（旧 3.8 flash 链已于 2026-11-17 本批次移除）。）
 
 > **分组沿革（历史，不约束现役）**：七组 provider → 2026-10-23 四组（主力 / 免费 / 低耗 / 高耗）
 > → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并，新增 `QN` 七牛云渠道）
@@ -527,7 +527,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 > **一句话**：`Gemini-4-Hydrogen` 是 DSH「1 组」（`cordis.patch.yml` 的 provider `asd`）
 > 指定的抗截断档 `ais-抗截断-gemini-4-hydrogen`，走 `GM` 渠道（catiecli 中转）单跳并入主力组。
-> 旧 `Gemini-AIS`（3.8/3.7/3.6 flash 链）2026-11-11 已整族下线，本次是**新模型接入**，不是恢复旧链。
+> 旧 `Gemini-AIS`（3.8/3.7/3.6 flash 链）在本批次（2026-11-17，`c8dbbd8`）整族移除，本次是**新模型接入**，不是恢复旧链。
 
 网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
 2026-11-17 实测目录含 `ais-gemini-4-hydrogen` / `ais-gemini-4-hydrogen-search` /
@@ -544,7 +544,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 | 显示名 | `ABBR` 把 `ais-抗截断-gemini-4-hydrogen` 映射成 `Gemini-4-Hydrogen`；legacy 键 `gem:ais-抗截断-gemini-4-hydrogen` 保留老会话解析 |
 | 降级链 | 单跳，无降级 |
 
-**接入落点（4 处 + 2 产物）**：`tools/model_alias.py` 的 `GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
+**接入落点（5 处代码 + 2 测试 + 2 产物）**：`tools/model_alias.py` 的 `GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
 `ABBR`（显示名）、`price_of()` 的 `GM` 分支（按价表取值）；
 `EMPTY_ALLOWED`（GM 渠道注定空档位，新模型加入白名单避免 `--check` 漂移误报）、
 `tests/test_model_alias_naming.py`（主力 gem 断言）与 `tests/test_model_alias_efforts.py`
@@ -558,7 +558,7 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 `model_alias.py --check` exit 0（无漂移，档位白名单生效）。
 
 **推理档位说明**：GM（catiecli）`/v1/models` 只回 id、不回 reasoning 能力位，这条注定空档位，
-已在 `EMPTY_ALLOWED` 登记（接替 11-11 下线的旧 `Gemini-AIS`），否则每日同步 `--check` 会误判
+已在 `EMPTY_ALLOWED` 登记（接替本批次移除的旧 `Gemini-AIS`），否则每日同步 `--check` 会误判
 档位漂移、exit 1。DSH 投影里 `Gemini-4-Hydrogen` 的 `reasoningEfforts` 是 GUI 装饰项，
 真正是否生效由上游 `/v1/models` 与 map 表达式决定（GM 无表达式 → 空档位属预期）。
 

@@ -603,8 +603,8 @@ def _blank_effort_global(cfg: dict) -> bool:
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
 EMPTY_ALLOWED: set = {
     # GM（catiecli）的 /v1/models 只有 id、不回 reasoning 能力位，本脚本也无从继承 ——
-    # 这条注定空档位。2026-11-17 接入的 Gemini-4-Hydrogen 同属 GM 渠道，接替旧
-    # Gemini-AIS（11-11 下线）留在白名单里，避免每日同步漂移复查误判失败。
+    # 这条注定空档位。2026-11-17 接入的 Gemini-4-Hydrogen 同属 GM 渠道，接替本批次
+    # （c8dbbd8）移除的旧 Gemini-AIS 留在白名单里，避免每日同步漂移复查误判失败。
     "Gemini-4-Hydrogen",
 }
 
