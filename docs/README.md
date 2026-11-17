@@ -13,6 +13,7 @@
 |---|---|
 | [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、兼容投影配置落点、7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ）的分组 / 协议 / 工具调用 / 关思考参数 |
 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（WB 固定链首、其余按价格稳定排序）、同类模型的判定（看上游回包 model / quota / credit，不看名字）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
+| [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md) | **模型隐藏名单正本**：`~/.zcode/v2/model-hidden.json` 的格式与 `tools/model_visibility.py` 命令（hide / show / list）、投影侧过滤点与 `--check` 对齐、OC 暂停续费时隐藏 18 个纯 OC 型号的实例与恢复步骤 |
 | [QODER.md](QODER.md) | **Qoder 接入正本**：qoder2api-hub 的 8790 进程、OAuth/签到、`qoder` provider 的模型与同步/探测命令、边界与故障处理 |
 | [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与 Go 协议桥流式双路径的边界 |
 | [QINIU.md](QINIU.md) | **七牛云 AI 网关接入正本**：`QN` 渠道、只认 Anthropic Messages、`qiniu/conatus-free` 限免到 2026-11-30、同网关其它免费模型的实测结论 |

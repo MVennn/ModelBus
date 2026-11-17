@@ -15,6 +15,26 @@
 
 ---
 
+## 未发版（2026-11-17）
+
+### 模型隐藏名单：OC 线先藏起来，配置一条不删
+
+> 未发版，版本号不动（[docs/VERSIONING.md](docs/VERSIONING.md) §5）。
+
+- **新增 `tools/model_visibility.py`** —— 型号 / provider 的隐藏开关。名单落在本机
+  `~/.zcode/v2/model-hidden.json`（不进仓库）；`hide --channel OC` / `hide --model ...` /
+  `hide --provider ...` / `show --all` 管生管灭，改完名单默认自动重投影
+  （`dsh_sync.py --apply`，DSH 热加载 profile patch，不用重启）。
+  按**主渠道**筛而不是「链上出现过」，所以 `HY4-Flash-Free`（WB 主渠道、OC 回落）不会被误伤。
+- **调整 `tools/dsh_sync.py`** —— 新增 `_hidden_sets()` / `_apply_hidden()`，在 compat / dsh
+  两条真源之后统一过滤，整组藏光的分组直接跳过，全藏光时 `DshSyncError` 退出不写空投影；
+  `_efforts_lost()` 跳过隐藏型号，否则「源头有档位、投影没有」会被判成漂移、`--check` 永远报 1；
+  `--export-inventory` 保持全集不过滤；名单缺失 / 损坏一律当空，不阻断投影。
+- **新增 `docs/MODEL-VISIBILITY.md`** —— 名单 schema、命令、投影过滤点、自动任务、恢复步骤与边界，已进 `docs/README.md` 索引。
+- **新增 `tests/test_model_visibility.py`** —— 9 个用例：名单读写降级、provider 分组解析、型号级 / 整组过滤、源对象不被就地修改、全藏光报错、档位漂移跳过隐藏型号。
+- **运维（本机，2026-11-17）**：OC 订阅暂停续费 → 按主渠道 `OC` 隐藏 18 个纯 OC 型号，DSH 投影 3 组 29 个降到 3 组 11 个（主力 2 / 免费 2 / 省钱 7），`DeepSeek-4.1-Flash-OC` 一并消失；同时停用计划任务 `ModelBus 模型同步` 与 `ModelBus-zen-relay-watchdog`（`Disable-ScheduledTask`，`Enable-ScheduledTask` 可原样恢复），`ModelBus-zgate-watchdog` 保留（WB / GM / QD 线依赖）；`bun` 起的 zen-relay（`providers/opencode-zen/zen-relay/server.js`，监听 8789）已 `Stop-Process` 停掉，端口确认关闭、无 `bun.exe` 残留。
+- **验证**：`dsh_sync.py --check` exit 0（幂等）；patch 里 `DeepSeek-4.1-Flash-OC` / `Beam` / `Iceman` / `big-pickle` / `Claude-Haiku` 零命中；`test_model_visibility.py` 9/9、`test_dsh_sync_efforts.py` 27/27、`test_dsh_source.py` 8/8、`test_dsh_sync_retry_policy.py` 8/8 OK；`check-docs.py` 58 篇全过。
+- **回退**：`python tools/model_visibility.py show --channel OC`；`Enable-ScheduledTask -TaskName "ModelBus 模型同步"`；投影由 `dsh_sync.py --apply` 重写，patch 每次写入前自动备份 `cordis.patch.yml.bak-dshsync-<时间戳>`。
 ## [0.9.1] — 2026-11-16
 
 ### 本版汇总：全渠道审计后的退役名单加固 —— 堵住探测缓存旁路和命名空间漏网

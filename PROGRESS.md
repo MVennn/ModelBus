@@ -4067,3 +4067,43 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 复验：`go build` / `go vet` / `go test ./...` 全过；`gofmt -l` 空；`check-project.py` 9 项 exit 0；watchdog 端到端（真 exe + 坏配置）在 `zgate-launch.log` 打出 `stderr: zgate serve: channelPolicy 配置有误，拒绝启动…字段=[maxParallel=1]`。
 - 未换版：`zgate.exe` 仍是 13:53 那份，reload 自检与 status 自检要下次 `deploy-zgate.ps1` 才生效（会话流量经过 7871，不在会话里重启）。
 
+
+# 2026-11-17 第 12 轮：模型隐藏名单落地 + OC 线先藏起来（隐藏不是删除）
+
+## 任务目标
+用户 OC（OpenCode Go）暂停续费，要求「把 OC 的模型都隐藏、自动任务也隐藏、整条线隐藏」，明确「是隐藏不是删除」；
+并要一套以后能反复用的隐藏 / 恢复机制，主线里的 DeepSeek-4.1-Flash-OC 一并去掉。
+
+## 已完成变更
+- [x] tools/model_visibility.py（新增）：隐藏名单本机文件 ~/.zcode/v2/model-hidden.json（MODEL_HIDDEN_FILE 可覆盖），
+  list / hide --model|--provider|--channel / show --all|--channel；改完默认自动 dsh_sync.py --apply。
+  按 alias map 的主渠道（models[<id>].channel）筛，HY4-Flash-Free（WB 主 + OC 回落）不会被误伤。
+- [x] tools/dsh_sync.py：新增 HIDDEN_FILE / _hidden_sets() / _apply_hidden()；在 _load_source 之后统一过滤，
+  整组藏光跳过、全藏光 DshSyncError 拒绝写空投影；_efforts_lost() 加 hidden_models / hidden_providers 两参并跳过，
+  否则 --check 永远报 1；--export-inventory 不过滤（清单是全集真源）；模块 docstring 补一条。
+- [x] docs/MODEL-VISIBILITY.md（新增 138 行）+ docs/README.md 索引一行。
+- [x] tests/test_model_visibility.py（新增 9 用例）。
+- [x] 执行隐藏：hide --channel OC --reason "OC 订阅暂停续费（2026-11-17），先藏起来不删" → 18 个纯 OC 型号入名单
+  （含 DeepSeek-4.1-Flash-OC），dsh_sync.py --apply 已写入 patch（备份 cordis.patch.yml.bak-dshsync-20261117-235129）。
+- [x] 停用计划任务：ModelBus 模型同步、ModelBus-zen-relay-watchdog（Disable-ScheduledTask，未删定义）；
+  ModelBus-zgate-watchdog 保留（WB / GM / QD 线依赖）。zen-relay 那个 bun 进程（PID 18828，server.js 监听 8789）已 Stop-Process 停掉，8789 端口确认关闭、无 bun 残留。
+
+## 验收
+- python tools/dsh_sync.py --check → exit 0；输出「隐藏：18 个型号不投影」「DSH 路由 主力 2；免费 2；省钱 7」「模型表 无变化」（幂等）。
+- cordis.patch.yml 里 DeepSeek-4.1-Flash-OC / Beam / Iceman / big-pickle / Claude-Haiku 零命中；
+  剩余 11 个：DeepSeek-4.1-Flash、Gemini-4-Hydrogen、HY4-Flash-Free、Conatus、HY4、Qwen-3.8-Max、Qwen-3.8-Flash、
+  GLM-5.3-Flash、MiniMax-M3.1-Flash、HY4-Flash、Space-Bunny。
+- 测试：test_model_visibility.py 9/9、test_dsh_sync_efforts.py 27/27、test_dsh_source.py 8/8、test_dsh_sync_retry_policy.py 8/8 OK。
+- python tools/check-docs.py → [OK] 58 篇文档全部通过。
+- Get-ScheduledTask 复核：ModelBus 模型同步 = Disabled、ModelBus-zen-relay-watchdog = Disabled、ModelBus-zgate-watchdog = Ready。
+
+## 待解决 / 注意事项
+- ZCode 兼容投影（provider_config.json）未动：那份配置里 29 个型号原样还在，ZCode 客户端仍会显示 OC 型号；
+  要让 ZCode 也看不到得另做（它的等价物是 config.enabled=false），本次不做以免两处开关漂移。
+- 隐藏只影响投影，不是权限控制：别名仍可被 /v1/chat/completions 直接点名，OC 不续费时这类请求会 401/403 后回落。
+- Qwen-3.8-Flash / GLM-5.3-Flash / MiniMax-M3.1-Flash / HY4-Flash-Free 的回落链里仍有 OC 跳；OC 不可用时
+  zgate 会按链序跳过，但会多一次失败等待。要彻底断掉需改 alias map 的 chain，属于另一件事。
+- 当前会话若正用被隐藏的型号，下一轮请求可能报「provider has no configured model」；切到保留的型号即可。
+  恢复命令：python tools/model_visibility.py show --channel OC
+
+## 状态: 已完成

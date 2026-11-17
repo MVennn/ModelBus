@@ -240,6 +240,10 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 ## 6. 定期动作清单
 
+> **2026-11-17 起**：`ModelBus 模型同步` 与 `ModelBus-zen-relay-watchdog` 处于**停用**状态 —— OC 暂停续费，
+> 18 个纯 OC 型号已进隐藏名单（模型选择器里看不到，源配置未删）。下面的每日流水线要等这两个任务重新 `Enable` 才会跑；
+> 隐藏 / 恢复的口径见 [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md)。
+
 | 周期 | 动作 |
 |---|---|
 | **每天 12:00（计划任务 `\ModelBus 模型同步`，入口 `sync-models.vbs → sync-models.ps1`）** | 五段流水线以 `sync-models.ps1` 为准：① `go_model_sync.py --apply`（去留只看上游清单，不再发探测请求；地区 403 由 zgate 的机场孪生跳处理）；② WorkBuddy（拉价表 → `workbuddy_sync.py --max-rate 0.3 --apply`）；③ Qoder（`qoder_sync.py --apply`，8790 未监听才拉起代理）；④ 统一命名：`arena_leaderboard.py --refresh --force --write` → `model_score.py --write --quiet` → `model_alias.py --slot auto --apply --arena [--scores]` → `model_probe.py --timeout 45 --sleep 0.5`（过半可用才带 `--probe-file`）→ 二轮 apply → `--check --arena` 复查 → `dsh_sync.py --check/--apply` → `model_stream_check.py --changed --soft`（④ 尾，带 `-Soft` 不阻断流水线；只测新增 / 档位变更 / 待复查，见 [MODEL-STREAM.md](MODEL-STREAM.md)）；⑤ `sync_report.py --write` **只写报告、默认不 push**，随后 `current-models.ps1` 刷新 `%LOCALAPPDATA%/ModelBus/current-models.json` 单一真值视图。需要推送时手动跑 `powershell … -File sync-models.ps1 -Push`（或 `sync_report.py --write --push`）；**不要在 ④ 之后单独跑旧 sync 的 `--apply`** |
@@ -251,6 +255,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | **每月 / 千问额度到期前后** | 千问已被降级为「主力链尾跳」：集合体与单型号都已下线（2026-10-29，理由见 [QWEN.md](QWEN.md) §4.5）。只需确认主力链的 `QW` 尾跳还在（`model_alias.py --check` 无漂移即可）；¥300 预付额度到期（2027-10-28）后 `QW_CREDIT_UNTIL` 会让该跳自动消失 | 详见 [QWEN.md](QWEN.md) §3、§4.6.1 |
 | **每次接入新供应商** | 照 §1.1 的通用做法写一份取数脚本 + 在 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的表里补一行；凭据按 [SECRETS.md](SECRETS.md) §2、§3.5 加环境变量 |
 | **每次新增模型（自动，无需人工测试）** | 模型只要进 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 表，每日 12:00 同步链尾的 `model_stream_check.py --changed --soft` 就自动纳入并实测流式 / 思考 / 输出 / TPS；离线守卫 `check-project.py --stream-contract` 守住接线不被拆。规则见 [MODEL-STREAM.md](MODEL-STREAM.md) |
+| **暂停 / 恢复某条线（暂不续费）** | 隐藏而不是删：`python tools/model_visibility.py hide --channel OC --reason "OC 暂停续费"`（也可 `--model` / `--provider`），名单落 `~/.zcode/v2/model-hidden.json`，源配置一条不删；同时停掉 `ModelBus 模型同步`、`ModelBus-zen-relay-watchdog` 两个计划任务（`Disable-ScheduledTask`，`Enable-ScheduledTask` 原样恢复），**zgate watchdog 不能停**（WB / GM / QD 线也走它）。恢复 = `show --channel OC` + 两个 `Enable-ScheduledTask`。细节见 [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md) |
 | **每次改动脚本** | 同步 [TOOLS.md](TOOLS.md) 的工具表 |
 | **每次新增 / 删除文档** | 同步 [docs/README.md](README.md) 索引（孤儿文档零容忍） |
 | **每次踩新坑** | 写进 [PITFALLS.md](PITFALLS.md)；有对应排错条目的同步 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) |

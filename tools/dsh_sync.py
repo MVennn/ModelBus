@@ -7,6 +7,9 @@ the ``llm-pi-ai`` entry in ``~/.dsh/profiles/<profile>/cordis.patch.yml``:
 
 * every provider in the active source becomes a DSH route (``opencode-go-chat`` -> ``zcode-main``,
   ``...-free`` -> ``zcode-free``, ``...-fast`` -> ``zcode-saver``);
+* providers / models named in ``~/.zcode/v2/model-hidden.json`` are left out of the
+  projection only. ``tools/model_visibility.py`` maintains that list; the source
+  config keeps every definition, so showing them again is one command (hide != delete);
 * model order, context window, output cap, image input and reasoning levels are
   copied from the resolved host metadata (``effective_body.js``);
 * Models whose effective ``reasoningLevel.map`` is ``{}`` deliberately
@@ -99,6 +102,13 @@ KNOWN_PROVIDER_IDS = {
     "opencode-go-chat-free": "zcode-free",
     "opencode-go-chat-fast": "zcode-saver",
 }
+# 隐藏名单（本机状态，不进仓库）：tools/model_visibility.py 维护。
+# 只影响 DSH 投影，provider_config.json / alias map 里的定义一条不删 ——
+# 隐藏不是删除，恢复就是把名字从名单里拿掉再投一次影。
+# 2026-11-17 起用于「OC 暂停续费时整条线先藏起来」。
+HIDDEN_FILE = Path(
+    os.environ.get("MODEL_HIDDEN_FILE", str(Path.home() / ".zcode" / "v2" / "model-hidden.json"))
+)
 
 # 429 快速失败：默认 llm-retry 会给 RATE_LIMIT 重试 5 次、退避上限 10s，
 # 上游额度类 6004 在重置墙钟之前一直失败，重试只会把一次失败放大成 5/5。
@@ -239,6 +249,58 @@ def _zcode_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
     return providers
 
 
+def _hidden_sets() -> tuple[set[str], set[str]]:
+    """读隐藏名单 -> (providerIds, 型号 ids)。
+
+    名单缺失 / 损坏 / 不是对象一律退化为空集合：隐藏是可选层，绝不能因为它
+    读不出来就把整条投影打断（那会让 DSH 模型列表在每日同步时整体停更）。
+    """
+    try:
+        doc = json.loads(HIDDEN_FILE.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return set(), set()
+    if not isinstance(doc, dict):
+        return set(), set()
+    providers = doc.get("providers") if isinstance(doc.get("providers"), dict) else {}
+    models = doc.get("models") if isinstance(doc.get("models"), dict) else {}
+    # 值为 false 视作显式取消隐藏（手写名单时的一个自然写法）。
+    return (
+        {str(k) for k, v in providers.items() if v is not False},
+        {str(k) for k, v in models.items() if v is not False},
+    )
+
+
+def _apply_hidden(
+    providers: list[dict[str, Any]], hidden_providers: set[str], hidden_models: set[str]
+) -> list[dict[str, Any]]:
+    """按名单过滤「投影用」的 provider / 型号；源配置原样保留。"""
+    if not hidden_providers and not hidden_models:
+        return providers
+    kept: list[dict[str, Any]] = []
+    dropped = 0
+    for provider in providers:
+        pid = provider["providerId"]
+        if pid in hidden_providers:
+            print(f"隐藏：整组 {pid}（{provider['providerName']}，{len(provider['modelIds'])} 个型号）")
+            continue
+        ids = [mid for mid in provider["modelIds"] if mid not in hidden_models]
+        dropped += len(provider["modelIds"]) - len(ids)
+        if not ids:
+            print(f"隐藏：{pid} 的型号全部在名单里，跳过该组")
+            continue
+        kept.append({**provider, "modelIds": ids})
+    if dropped:
+        print(
+            f"隐藏：{dropped} 个型号不投影（名单 {HIDDEN_FILE}；恢复用 "
+            "python tools/model_visibility.py show）"
+        )
+    if not kept:
+        raise DshSyncError(
+            f"隐藏名单把全部 provider 都藏起来了，DSH 会没有任何 zcode-* 路由：{HIDDEN_FILE}"
+        )
+    return kept
+
+
 def _effective_metadata(model_ids: list[str]) -> dict[str, Any]:
     """Read the resolved model metadata; fall back to provider_config on failure."""
     if not model_ids:
@@ -282,7 +344,12 @@ def _efforts_outside(values: list[Any]) -> list[str]:
     return [v for v in dict.fromkeys(clean) if v not in DSH_LEVELS and v != "disabled"]
 
 
-def _efforts_lost(rules: dict[tuple[str, str], dict[str, Any]], routes: dict[str, Any]) -> list[str]:
+def _efforts_lost(
+    rules: dict[tuple[str, str], dict[str, Any]],
+    routes: dict[str, Any],
+    hidden_models: set[str] | frozenset[str] = frozenset(),
+    hidden_providers: set[str] | frozenset[str] = frozenset(),
+) -> list[str]:
     """源头有档位、投影后却没有的模型 —— 每日同步的回归守门。
 
     当前真源（compat=兼容投影配置 / dsh=catalog 能力真值）是档位的唯一正本；DSH 侧只是投影。投影把一条非空档位写成空，用户
@@ -299,6 +366,10 @@ def _efforts_lost(rules: dict[tuple[str, str], dict[str, Any]], routes: dict[str
                 projected[str(model.get("id"))] = model.get("reasoningEfforts") or []
     lost: list[str] = []
     for (provider_id, model_id), rule in rules.items():
+        # 被隐藏的型号本来就不该出现在投影里，不能算漂移 —— 否则 --check 永远
+        # 报 1、每日同步白跑一轮 --apply，还天天打一行 WARN。
+        if model_id in hidden_models or provider_id in hidden_providers:
+            continue
         source = ((rule.get("optionSpecs") or {}).get("reasoningLevel") or {})
         values = [str(v) for v in (source.get("values") or []) if isinstance(v, str)]
         if not values:
@@ -890,6 +961,10 @@ def _main(argv: list[str] | None = None) -> int:
         raise DshSyncError(f"找不到 DSH profile patch：{patch_path}")
 
     providers, effective, rules = _load_source(args.source, args.config, args.inventory)
+    # 隐藏名单在两条真源之后统一过滤：源配置 / inventory 都是全集，
+    # 「藏起来」只发生在投影这一步（隐藏不是删除）。
+    hidden_providers, hidden_models = _hidden_sets()
+    providers = _apply_hidden(providers, hidden_providers, hidden_models)
     # 显示名只在 compat 源投影（dsh 源按设计不读 ~/.zcode/v2/）；
     # alias map 缺失 / 无 displayName 时降级空，投影行为与改造前一致。
     display_names = _display_names_from_alias_map(ALIAS_MAP) if args.source == "compat" else {}
@@ -926,7 +1001,7 @@ def _main(argv: list[str] | None = None) -> int:
         # 只有真正写进去才更新账本；dry-run/--check 不能把「计划」记成「已投影」。
         _remember_model_ids(providers)
 
-    lost = _efforts_lost(rules, routes)
+    lost = _efforts_lost(rules, routes, hidden_models, hidden_providers)
     if lost:
         print(f"推理档位 : {len(lost)} 个模型投影后为空", file=sys.stderr)
         for line in lost:
