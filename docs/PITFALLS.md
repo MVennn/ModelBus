@@ -755,10 +755,10 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 ## 39. 探活参数把「思考吃满预算」判成死型号，主力组被整条摘掉，DSH 会话硬失败 【实例 A】
 
 - **现象**：2026-11-11 用一次 AIS 之后，整个 DSH 会话卡在
-  `pi-ai provider "zcode-main" has no configured model "Gemini-AIS"`，之后不管发什么
-  都是这句；模型选择器里 Gemini-AIS 与 Gemini-3.8-Flash 都不见了。
+  `pi-ai provider "zcode-main" has no configured model "<某主力模型>"`，之后不管发什么
+  都是这句；模型选择器里那个主力模型与 Gemini-3.8-Flash 都不见了。
 - **根因**：三层叠加。
-  1. `model_probe.py` 默认 `--max-tokens 32`。GM（catiecli）的 Gemini 是「先思考再出字」，
+  1. `model_probe.py` 默认 `--max-tokens 32`。部分上游的 Gemini 系模型是「先思考再出字」，
      32 token 全被思考预算吃掉，上游回 400 / 或超时，记录写成 `status=timeout|error`
      且 `ever_ok` 为空 —— **能用的模型被记成死型号**。
   2. `model_alias.py --probe-file` 摘除时不区分主力组，`timeout` 且无 `ever_ok` 直接 skip。
@@ -825,7 +825,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
 ## 43. 配置加了渠道、进程没重载：整条降级链静默退回串行（旧判据，2026-11-10 深夜起改为逐跳取值） 【通用】
 
-> **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；当时 `Gemini-AIS` 改成 7 跳全 GM，
+> **口径更新（2026-11-10 22:27）**：本条记录的 8 跳链是当晚形态；当时那条主力降级链改成 7 跳全同渠道，
 > 哈基米 3.8 被拆成独立单跳模型（排在 AIS 前面）。
 > **再更新（2026-11-11 13:35）**：HJ「福利」档断供，那一族改成 `[满血A]` 同站三跳（3.8 → 3.7 → 3.6，各 0.05），见 §39。
 > **下线（2026-11-11 15:00）**：该族整族下线 —— `HJ_PRICES` 清空后没有价就进不了模型表，渠道与凭据保留；
@@ -833,7 +833,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 > `(1/8)` 这类日志按历史读，`channelPolicy` 少一个渠道就会退回串行的结论仍然成立。
 > **链长再变（2026-11-11 11:03）**：AIS 只留 3 跳，日志变 `(x/3)`；裁掉的四跳记 `dropped_hops` 并留在 `legacy_ids`，见 §44。
 
-- **现象**：某个模型一次请求一分钟零字节，客户端只能手动停止；网关日志里只有一行派发 `model=Gemini-AIS -> GM:ais-gemini-3.8-flash (1/8)`，之后没有任何 `[race]`、没有冷却、没有 fallback、没有 502；上游反代面板一条记录都没有。同一时刻其他模型正常。
+- **现象**：某个模型一次请求一分钟零字节，客户端只能手动停止；网关日志里只有一行派发 `model=<某主力模型> -> <渠道>:<模型> (1/8)`，之后没有任何 `[race]`、没有冷却、没有 fallback、没有 502；上游反代面板一条记录都没有。同一时刻其他模型正常。
 - **根因**：三层叠一起，缺一层都不会这样静默。
   1. `racePolicyFor`（`internal/router/race.go:305`）要求**链上每个 hop 的渠道都在 `cfg.ChannelPolicy` 里**（`race.go:324`），否则整条链放弃竞速。链由 alias map 热加载（8 跳，含新加的 `HJ`），而 `channelPolicy` 是启动时读进内存的 —— 进程比配置旧，内存里只有 `GM` → 判定失败。
   2. 退回串行后没有任何首块看门狗：`router.go:734` 的 `if at != nil && at.policy.FirstBlockMs > 0` 只在竞速模式成立，串行链就是「发出去、等下去」。
@@ -843,7 +843,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **怎么避**：① 加渠道 / 改链之后**必须换二进制并重启** —— `/admin/reload` 只热加载 `zgate.json` 的策略，改不了编译期登记的渠道与进程内已读的配置快照（流程见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16.2）；② 代码侧已补两道网（2026-11-10 夜）：流式请求的**响应头看门狗**（`doForward`，默认 12s 拿不到响应头就判这一跳沉默并换跳，`errUpstreamSilent`；`zgate.json` 的 `upstreamHeaderTimeoutSec` 可调，负数关掉 —— **但 2026-11-10 21:30 起 GM / HJ 两个渠道都不设这个窗口，理由见本条第五轮**）与**串行退化告警**（`routeChain` → `noteSerialFallback`，打 `[race] 链上有渠道不在 channelPolicy 里…整条链退回串行、取消首块对冲`，按渠道组合 10 分钟去重）；③ 排查时先 `grep "不在 channelPolicy"`，命中就不用再猜。
 - **验证**：`gofmt -l internal/router/` 空、`go build ./...` / `go vet ./...` exit 0、`go test ./...` 全 ok。新增两例：`TestStreamingHeaderWatchdogGivesUp`（handler 不给头、`headerWait=150ms`，断言 5s 内返回 `errUpstreamSilent` 收手）与 `TestStreamingHeaderWatchdogPassesThrough`（正常 SSE 必须原样透出、Close 正常取消）。候选二进制 `python gateways/zgate/build.py --candidate` 内容检索 `hajimi` / `HJM_API_KEY` / `upstream silent` 全部命中。
 
-- **同日第二轮（2026-11-10 19:45）：换版生效了，可一次请求仍要 4 分半 —— 坑在「容忍窗口按最慢的那一档取」**。日志已经恢复 `[race] 发出 1/8`…`8/8`（对冲回来了），但每一跳都要等满 45 秒才判沉默：实测同一跳 `ais-gemini-3.8-flash` **每次都要 60.241 秒才回 503**（`This model is currently experiencing high demand`），而哈基米 `[福利]gemini-3.8-flash` 直连 2.5-3.1 秒就出首块。`maxParallel=2` 轮转 ⇒ 4 轮 × 45 秒 + 首块 4 秒 ≈ 3-4.5 分钟（用户实测 4 分 31 秒）；这期间 DSH 等不到首字节会自动重试，反代后台于是出现两条「请求中」，看起来像「我发了一句它打了两枪」。
+- **同日第二轮（2026-11-10 19:45）：换版生效了，可一次请求仍要 4 分半 —— 坑在「容忍窗口按最慢的那一档取」**。日志已经恢复 `[race] 发出 1/8`…`8/8`（对冲回来了），但每一跳都要等满 45 秒才判沉默：实测其中一跳 **每次都要 60.241 秒才回 503**（`This model is currently experiencing high demand`），而哈基米 `[福利]gemini-3.8-flash` 直连 2.5-3.1 秒就出首块。`maxParallel=2` 轮转 ⇒ 4 轮 × 45 秒 + 首块 4 秒 ≈ 3-4.5 分钟（用户实测 4 分 31 秒）；这期间 DSH 等不到首字节会自动重试，反代后台于是出现两条「请求中」，看起来像「我发了一句它打了两枪」。
   - **改**：`upstreamHeaderTimeout` 45s → **12s**，并升级成配置项 `upstreamHeaderTimeoutSec`（0/缺省 12，负数 = 关掉看门狗），`Server.headerTimeout()` 每次现读配置，`/admin/reload` 就能调，不必重编译。12 秒相对观测到的合法首头（2.5-3.1 秒）仍有 4 倍余量。
   - **口径**：这个值要按「**正常首头的最慢分位 × 3-4**」定，不能按「上游多久才认输」定 —— 前者保住的是体验，后者只是把超时串成糖葫芦。
   - **日志**：沉默告警现在带 `model=`（`[router] https://api.gemai.cc/v1（model=[福利]gemini-3.8-flash）上游 12s 内没给响应头，判这一跳沉默并换跳`）。同一个 base 下不同模型能差一个量级，只打 base 分不清是谁被上游晾着。
@@ -856,7 +856,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **同日第五轮（2026-11-10 21:30）：本地判死本身就是故障源 —— 上游还在吐 token，本地已经断开重试**。当晚统计：GM 被判死 125 次（沉默 79 + 首块 46），上游真说过 `503 high demand` 的仅 7 次（5.3%）；HJ 判死 32 次，一大半与 502 同秒。链路遗迹 `12s 无响应头 → fallback (none) → 同秒 502 → 13s 后客户端重试 → 再砍`。DSH 的 `retryPolicy` 把 `SERVER` 列为可重试（`maxRetries: 1`），所以**网关每判死一次 = 一次 502 + 一次客户端重试 + 一次上游重跑**，用户看到的就是「后台在跑 token、本地断开又跑一遍」。
   - **改（配置，热加载）**：`channelPolicy.HJ` 收敛为 `{"headerTimeoutSec": -1}`；`channelPolicy.GM` 的 `headerTimeoutSec` → `-1`、`firstBlockMs` → `0`、`silenceCooldownSeconds` → `0`、`hedgeAfterMs` → `18000`、`softCooldownSeconds` → `60`；`upstreamHeaderTimeoutSec` → `45`。
   - **口径**：本地只做两件事 —— 「并排多问一家」（对冲，只多开一路、不取消前一路）与「按上游回话冷却」（429 / 5xx / 403）。**上游没说我死了，就不替他下死亡通知**；慢是常态，阈值给多少都是赌，赌错一次要付一次重试 + 一次重跑。
-  - **判据**：`grep -c '没给响应头' zgate.log` 与 `grep -c '503' zgate.log` 放一起看 —— 前者远大于后者就说明判死是本地造的。详见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18.4。
+  - **判据**：`grep -c '没给响应头' zgate.log` 与 `grep -c '503' zgate.log` 放一起看 —— 前者远大于后者就说明判死是本地造的。排查思路见本篇 §43「判死权归上游」段。
 
 ## 44. 上游「忙」被当成渠道故障：一个过载的 3.8 把同渠道能用的 3.6 一起带走 【实例 A】
 
@@ -901,18 +901,18 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 
 ## 49. 给链加长度上限时只截 `chain`：老 id 静默 404 【通用】
 
-- **现象**：给 `tools/model_alias.py` 加 `CHAIN_CAP = {"Gemini-AIS": 3}` 后 `--apply`，别名表 legacy 从 73 条掉到 69 条，模型总数 93 掉到 89；老会话点名 `ais-gemini-3.5-flash` 这类 id 直接 404，选择器里也少了四条。
-- **根因**：`family_entries()` 只用 `chain` 建链，而 `_consistent_legacy_ids()` 反过来拿「全量 hops 的 upstream ∪ 链上跳」校验 legacy 映射 —— 被裁掉的四跳既不在链上、又没有别的登记点，四条 `gem:ais-*` 映射就被当脏数据过滤了。
-- **正解**：截链时把裁掉的跳记进 `entry["dropped_hops"]`，并在 `_consistent_legacy_ids()`、脏映射清理循环、`alias_models` 写盘三处把 `dropped_hops` 计入 upstream 集合。改完 legacy 回到 73、旧 id 仍解析到 `Gemini-AIS`，只是链不再真去打它们。
+- **现象**：给 `tools/model_alias.py` 加 `CHAIN_CAP = {"<某模型>": 3}` 后 `--apply`，别名表 legacy 从 73 条掉到 69 条，模型总数 93 掉到 89；老会话点名被裁掉的旧跳 id 直接 404，选择器里也少了四条。
+- **根因**：`family_entries()` 只用 `chain` 建链，而 `_consistent_legacy_ids()` 反过来拿「全量 hops 的 upstream ∪ 链上跳」校验 legacy 映射 —— 被裁掉的四跳既不在链上、又没有别的登记点，四条旧跳 id 的映射就被当脏数据过滤了。
+- **正解**：截链时把裁掉的跳记进 `entry["dropped_hops"]`，并在 `_consistent_legacy_ids()`、脏映射清理循环、`alias_models` 写盘三处把 `dropped_hops` 计入 upstream 集合。改完 legacy 回到 73、旧 id 仍解析到原模型名，只是链不再真去打它们。
 - **判据**：`--apply` 后立刻核 `models==20`、`legacy==73`、`len(AIS.chain)==3`、`len(AIS.dropped_hops)==4`；单测 `test_ais_chain_is_three_gm_hops_in_version_order` 同时锁链长、dropped 与 legacy 覆盖。
 - **同类**：任何「先按名字聚合成一条链、再按上限裁剪」的生成器（工具清单、provider 目录、路由表）都有这个陷阱 —— 裁的是执行路径，不是身份。
 
 ## 50. AIS 跳带 tools 只回思考不回正文，DSH 报「the turn degenerated again after the continuation nudge」 【实例 A】
 
-- **现象**：DSH 里选 Gemini-AIS 写长文，整轮零输出，界面只留一行 `❌ [ACP] stream error: the turn degenerated again after the continuation nudge`。会话 `sessionStats` 是 `ttftMs=25483 / llmMs=25483 / decodeTokens=0 / toolMs=0` —— 模型想了 25 秒然后什么都没有，正文和工具调用双零。
-- **根因（三层）**：① 上游：GM 的 `ais-gemini-3.8-flash` 跳在请求**带 tools** 时随机退化成三种形态 —— 空参数工具调用（`{"name":"read","arguments":"{}"}`）、只回一句话根本不调工具、或整段空流；② 网关：`hasContentDelta`（`internal/router/race.go:210`）的判定是 `if c.Delta.Content != "" || c.Delta.Reasoning != ""` —— **思考也算首块**，而 GM 的 `firstBlockMs=0` 又把首块看门狗关了，于是「只出思考、零正文」的 200 被当成功原样交给客户端，日志里既没有 fallback 也没有 error 行；③ DSH：`billion-context` 的 `retryEmptyTurn` 把「干净 stop + 有思考 + 零正文 + 零工具调用」判成退化，续问一次仍退化就抛这句报错。
-- **处置**：写作、需要读文件的任务不要挂 AIS，改用 `DeepSeek-4.1-Flash`（WB 跳 ok=3296 / try=3299）；AIS 只留给不调工具的纯对话，且 effort 用 `off` 档。
-- **证据**：直打 `127.0.0.1:7871` `model=Gemini-AIS` 的实测矩阵 —— 带 read/grep 两工具 + `max_tokens=128000` + high：100 s 后 content=0、reasoning=947、toolDeltas=1、finish=stop；同参数**不带工具**：33 s 正常出 1761 字；给 `write_file` 工具并要求写文件：31.5 s、零工具调用、只回 24 字；`reasoning_effort=off` 带工具：14.6 s 回空参数工具调用；写文提示 + 8000 tokens：三跳全挂回 502 `all upstreams failed`。同批 `/health` 里 `HJ|[满血A]gemini-3.8-flash` 也在抖（try 14→21、ok 停在 9）。
+- **现象**：DSH 里选某主力模型写长文，整轮零输出，界面只留一行 `❌ [ACP] stream error: the turn degenerated again after the continuation nudge`。会话 `sessionStats` 是 `ttftMs=25483 / llmMs=25483 / decodeTokens=0 / toolMs=0` —— 模型想了 25 秒然后什么都没有，正文和工具调用双零。
+- **根因（三层）**：① 上游：某渠道的降级跳在请求**带 tools** 时随机退化成三种形态 —— 空参数工具调用（`{"name":"read","arguments":"{}"}`）、只回一句话根本不调工具、或整段空流；② 网关：`hasContentDelta`（`internal/router/race.go:210`）的判定是 `if c.Delta.Content != "" || c.Delta.Reasoning != ""` —— **思考也算首块**，而该渠道的 `firstBlockMs=0` 又把首块看门狗关了，于是「只出思考、零正文」的 200 被当成功原样交给客户端，日志里既没有 fallback 也没有 error 行；③ DSH：`billion-context` 的 `retryEmptyTurn` 把「干净 stop + 有思考 + 零正文 + 零工具调用」判成退化，续问一次仍退化就抛这句报错。
+- **处置**：写作、需要读文件的任务不要挂这类降级链模型，改用 `DeepSeek-4.1-Flash`（WB 跳 ok=3296 / try=3299）；这类模型只留给不调工具的纯对话，且 effort 用 `off` 档。
+- **证据**：直打 `127.0.0.1:7871` `model=<该模型>` 的实测矩阵 —— 带 read/grep 两工具 + `max_tokens=128000` + high：100 s 后 content=0、reasoning=947、toolDeltas=1、finish=stop；同参数**不带工具**：33 s 正常出 1761 字；给 `write_file` 工具并要求写文件：31.5 s、零工具调用、只回 24 字；`reasoning_effort=off` 带工具：14.6 s 回空参数工具调用；写文提示 + 8000 tokens：三跳全挂回 502 `all upstreams failed`。同批 `/health` 里 `HJ|[满血A]gemini-3.8-flash` 也在抖（try 14→21、ok 停在 9）。
 - **判据**：分清「链路坏了」还是「模型这一跳退化」只看三件事 —— 会话 `sessionStats.decodeTokens` 是否为 0、网关日志那次请求后面有没有 fallback/error 行、同一条链**不带 tools** 直打有没有正文。三件全中就是模型退化，不是配置掉了。
 
 - **同类**：任何「把思考流也算作产出」的探活/首块判定都会漏掉这一类空回；`reasoning` 只能证明上游活着，不能证明它给了可用的答案。

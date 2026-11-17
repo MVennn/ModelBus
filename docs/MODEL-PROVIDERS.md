@@ -8,8 +8,8 @@
 > §2 / §4 里按 provider 列的模型清单是采集时点的记录，允许带历史口径。
 
 数据快照：**2026-10-20**（§4 WorkBuddy 的倍率与分档于 **2026-10-22** 复核，倍率 / 分档无变化；
-§4.9 Qoder 的模型与价格于 **2026-10-23** 实测；§4.11 的 Gemini 链于 **2026-11-10**
-接入哈基米兜底跳，渠道总数随之 6 → 7）。
+§4.9 Qoder 的模型与价格于 **2026-10-23** 实测；§4.11 的 Gemini 渠道于 **2026-11-17**
+重新接入新版 `gemini-4-hydrogen`（旧 3.8 flash 链已于 11-11 下线）。）
 
 > **分组沿革（历史，不约束现役）**：七组 provider → 2026-10-23 四组（主力 / 免费 / 低耗 / 高耗）
 > → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并，新增 `QN` 七牛云渠道）
@@ -521,196 +521,46 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 ---
 
-## 4.11 谷歌 Gemini（catiecli 中转，本次实例五）
+<a id="gemini-hydrogen"></a>
 
-> **一句话**：`Gemini-AIS` 显示名背后是 `ais-gemini-3.8-flash` 领头的一条同站降级链
-> （**2026-11-11 11:03 起链上只留 3 跳**：3.8 → 3.7 → 3.6；后四跳质量低一档、按次计费还白付额度，故裁掉 —— 见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8.3），
-> 靠 zgate 的「首块对冲」在几秒内出首字，失败逐级降档，不会卡在某一跳上死循环。
-> 另一家的同代跨站兜底（哈基米 3.8）2026-11-10 曾拆成独立模型，**2026-11-11 整族下线**：价目表清空、
-> 渠道与凭据保留但不再收录型号，主力组里只剩这条 AIS 链。
+## 4.11 谷歌 Gemini 4 Hydrogen（catiecli 中转，2026-11-17 接入）
+
+> **一句话**：`Gemini-4-Hydrogen` 是 DSH「1 组」（`cordis.patch.yml` 的 provider `asd`）
+> 指定的抗截断档 `ais-抗截断-gemini-4-hydrogen`，走 `GM` 渠道（catiecli 中转）单跳并入主力组。
+> 旧 `Gemini-AIS`（3.8/3.7/3.6 flash 链）2026-11-11 已整族下线，本次是**新模型接入**，不是恢复旧链。
 
 网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
-2026-11-10 实测返回 7 个 id：`ais-gemini-3.5-flash-lite` / `ais-gemini-3.1-flash-lite` /
-`ais-gemini-3-flash-preview` / `ais-gemini-3.5-flash` / `ais-gemini-3.6-flash` /
-`ais-gemini-3.7-flash` / `ais-gemini-3.8-flash`，七个都曾收录进同一条链；**2026-11-11 11:03 起链上只留前三个**（3.8 / 3.7 / 3.6），后四个改记在该条目的 `dropped_hops` 里、仍留在 `legacy_ids`，老会话点名照样解析到 Gemini-AIS。
+2026-11-17 实测目录含 `ais-gemini-4-hydrogen` / `ais-gemini-4-hydrogen-search` /
+`ais-抗截断-gemini-4-hydrogen` 等变体；本仓**只登记抗截断这一档**，search / 普通档不收录。
 
-| 项 | 值（2026-11-10） |
+| 项 | 值（2026-11-17） |
 |---|---|
 | 渠道 | `GM`，远程直连，无本地子进程 |
 | 协议 | `chat`（OpenAI 兼容），`stream:true` 走 SSE |
-| 鉴权 | `Authorization: Bearer` —— **必须由 zgate 覆盖注入**（`gateways/zgate/internal/router/router.go:815` 的 `forwardHeaders` 名单里有 `GM`），透传空 Bearer 会被上游回 401 `未提供API Key` |
+| 鉴权 | `Authorization: Bearer` —— 由 zgate 覆盖注入（`router.go` 的 `forwardHeaders` 名单含 `GM`）；客户端传空/假 Bearer 一律被替换 |
 | 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
-| 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`；未登记的 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
-| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-gemini-3.8-flash` 起头，七个 GM 跳同族合并成一条链；同代跨站兜底 2026-11-11 下线，主力组里没有第二个同代模型） |
-| 思考参数 | **未定论**。3.8/3.7 常态 503，拿不到稳定样本；3.6 上 `{"thinking":{"type":"disabled"}}` 单次首字 2.27s（对照 `reasoning_effort:minimal` 12.67s），样本不足，暂不配 `optionSpecs.reasoningLevel` |
-| 降级链 | `3.8-flash → 3.7-flash → 3.6-flash → 3.5-flash → 3.5-flash-lite → 3.1-flash-lite → 3-flash-preview`，**11-11 11:03 起只保留前 3 跳**（全 GM、价格同为 0.11），顺序由 `tools/model_alias.py` 的 `HOP_PRIORITY` 固定 |
+| 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`（仅用于组内排序/展示）；未登记 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
+| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-抗截断-gemini-4-hydrogen`，单跳族，不混其它 Gemini 变体） |
+| 显示名 | `ABBR` 把 `ais-抗截断-gemini-4-hydrogen` 映射成 `Gemini-4-Hydrogen`；legacy 键 `gem:ais-抗截断-gemini-4-hydrogen` 保留老会话解析 |
+| 降级链 | 单跳，无降级 |
 
-**与前面四例的关键差异**：① 价格无公开源，必须在代码里登记，缺价即整条消失；
-② 上游对高需求模型直接 503，探测窗口要挑时段；③ 它是唯一走 `gem:` 显式前缀的渠道
-（`GM` 不在 `cn:` / `qoder:` 这些天然前缀里），命名规则见 [MODEL-ALIAS.md](MODEL-ALIAS.md)；
-④ 它是**仅有的两个开了 `channelPolicy` 的渠道之一**（另一个是 HJ 哈基米）—— 竞速、
-静默冷却、403 暂停只对这两个生效。
+**接入落点（4 处 + 2 产物）**：`tools/model_alias.py` 的 `GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
+`ABBR`（显示名）、`price_of()` 的 `GM` 分支（按价表取值）；
+`EMPTY_ALLOWED`（GM 渠道注定空档位，新模型加入白名单避免 `--check` 漂移误报）、
+`tests/test_model_alias_naming.py`（主力 gem 断言）与 `tests/test_model_alias_efforts.py`
+（新增 `test_gemini_hydrogen_is_in_empty_allowlist` 回归）同步更新。
+产物：`~/.zcode/v2/model-alias-map.json` + `provider_config.json`（`model_alias.py --apply` 生成），
+再经 `dsh_sync.py` 投影到 `cordis.patch.yml` 的 `zcode-main`（DSH 热加载，无需重启）。
 
-### 4.11.1 上游实况（2026-11-10 直连实测）
+**验证（2026-11-17 实测）**：`/health` → `alias.models=19`、`revision=2`、GM 段 `state=up/key=true`；
+`/v1/models` 返回 `Gemini-4-Hydrogen`；真实 `POST /v1/chat/completions` 返回 200、正文「收到」、
+上游模型 `ais-抗截断-gemini-4-hydrogen`（含 reasoning_tokens=54）；
+`model_alias.py --check` exit 0（无漂移，档位白名单生效）。
 
-| 模型 | 实测形态 | 结论 |
-|---|---|---|
-| `ais-gemini-3.8-flash` | 503 `high demand`，5.0s / 5.0s / 13.8s 才回错 | 名义首选，实际常态不可用 |
-| `ais-gemini-3.7-flash` | 同上 503，4.95s / 13.8s | 备用，同样不可用 |
-| `ais-gemini-3.6-flash` | 200 但首字 9.63s / 24.38s，另有 14.24s 全程无 delta | 能用，但慢且会空流 |
-| `ais-gemini-3.5-flash` | 200 首字 10.04s，另有 31s 读超时 | 能用，最慢 |
-| `ais-gemini-3.5-flash-lite` | 200 首字 6.71s / 3.74s，经网关首块 2.9s | **真正的赢家** |
-| `ais-gemini-3.1-flash-lite` | 503，5.2s / 5.4s | 死跳 |
-| `ais-gemini-3-flash-preview` | 200 首字 1.50s / 1.50s | 最快，但排在链尾 |
-
-**这张表决定了整套参数**：链首两跳常态 503、3.6/3.5 常态「200 但十几秒不说正文」，
-唯一稳定出字的是 lite 和 preview。所以不能串行等 —— 串行等到死会把首字压到十几秒。
-
-### 4.11.2 降级链怎么来的
-
-- `tools/model_alias.py` 的 `ABBR` 把 7 个 `ais-gemini-*` 映射成显示名 **`Gemini-AIS`**，
-  `family_entries()` 因此把它们合并成一条链（`GM_PRICES` 全 0.11），长度由 `CHAIN_CAP = {'Gemini-AIS': 3}` 截到 3 跳（2026-11-11 11:03）；
-  哈基米那一路曾单独映射成一条单跳族，2026-11-11 整族下线：`HJ_PRICES` 清空后它没有价，进不了模型表。
-- 链内顺序由 `HOP_PRIORITY` 固定（3.8=0、3.7=1、3.6=2、3.5=3、3.5-lite=4、3.1-lite=5、
-  3-preview=6），不加这张表就会退化成按 upstream 字符串排序（3.5 反而排最前）。
-  别的渠道的同代跳**不进这张表** —— 单跳族没有链序可排，进表反而会被并回 AIS 链。
-- 主力组顺序由 `MAIN_ORDER` 决定：`chat:gem:ais-gemini-3.8-flash` 起头。2026-11-10 曾有另一家的
-  同代 3.8 排在整套 `chat:gem:*` 之前（用户指定），2026-11-11 该族下线、那三行从 `MAIN_ORDER` 删除，AIS 回到首位。
-- 旧名映射表 `NAME_RENAMES` 为空：历史上它把某个已撤的显示名记成 `Gemini-AIS` 的旧名，那个 id
-  后来被新模型占用时两头都不对（同名 legacy 条目被当「与 live 模型同名」丢掉、旧映射又把老会话解析
-  到 AIS），只能撤掉。当前没有存量显示名需要重定向。
-- 拆族会留下脏 legacy：`_consistent_legacy_ids()` 只保留「带渠道前缀、且能被该模型某跳
-  `_bare()` 命中」的条目；写盘后再扫一遍 `legacy`，对不上目标跳表的前缀条目直接 pop。
-  否则 AIS 的 `legacy_ids` 会继续挂着别家渠道的前缀条目，同一个上游 id 两个 canonical。
-
-### 4.11.3 zgate 侧机制（`channelPolicy.GM` / `channelPolicy.HJ`）
-
-现行真值（2026-11-13 逐格核对 `gateways/zgate/zgate.json`；口径正本见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §8）：**判死权归上游** —— 本地不再按时间判死，只在按上游回话冷却：
-
-| 参数 | `GM` | `HJ` | 作用 |
-|---|---|---|---|
-| `headerTimeoutSec` | **-1** | **-1** | 负数 = 这一渠道**不设**响应头看门狗，等多久由上游决定 |
-| `firstBlockMs` | 0 | 0 | 0 = 不判首块；「200 之后多久出正文」不再当失败信号 |
-| `silenceCooldownSeconds` | 0 | 0 | 0 = 沉默不埋冷却（单跳链埋了只会把下一个请求饿死） |
-| `hedgeAfterMs` | 0 | 0 | 0 = 不对冲；`GM` 自 2026-11-11 10:35 起单发串行，不再并排多开一路 |
-| `maxParallel` | 1 | 0（缺省） | 同时在路上的上限；`GM` 收到 1 之后链上永远逐跳推进 |
-| `softCooldownSeconds` | 15 | 0 | 5xx（503 high demand）的冷却，按上游回话关 15 秒 |
-| `busyCooldownSeconds` | 10 | 0 | 上游明确说「忙」时只跳这一跳、不禁整个渠道（2026-11-11 11:03 加） |
-| `timeoutCooldownSeconds` | 20 | 0 | 这一跳超时后的短冷却（同上） |
-| `retry500Once` | true | false | 5xx 先原地重试一次再换跳 |
-| `rateLimitBackoffMs` | -1 | 0 | 关掉 429 就地 700ms 白等，直接换下一跳 |
-| `authFailCooldownHours` | 24 | 0 | key 无效/被封类 403 → 整渠道禁用一天 |
-
-其余渠道：`WB` 是唯一还开着对冲的一家（`hedgeAfterMs: 18000`、`maxParallel: 2`，另有四段启用时间窗）；`OC` 软冷却 60s / 沉默冷却 20s；`QD` 沉默冷却 20s；`QW` / `QN` 不在 `channelPolicy` 里，一律走缺省（不对冲、不冷却）。
-
-两个渠道**不再共用一套参数**：`GM` 是降级链的链首（当时 7 跳，11-11 11:03 起 3 跳）；2026-11-11 10:35 起连对冲也撤了 —— 链上一跳慢就让它慢，本地不再同时多问一家。
-`HJ` 按单跳直连的普通供应商处理（与 `QN` 同级），链上没有备胎 —— 任何本地判死都只会变成
-「一次 502 + 客户端重试 + 上游重跑」，所以它那份收敛到只剩 `headerTimeoutSec: -1`
-（其余零值 = 老行为 = 不冷却 / 不对冲 / 不判首块）。对冲参数**逐跳取值**（2026-11-10 深夜改）：
-`racePlanFor` 按链上每一跳自己的 `channelPolicy` 聚合 —— `hedgeAfterMs` 取各跳**最小正值**、
-`maxParallel` 取**最大值**、只配 `firstBlockMs` 时用它当发车间隔（兜底 1200ms / 2）；
-`headerTimeoutSec`、两个冷却、`rateLimitBackoffMs`、`authFailCooldownHours` 本来就按被尝试的那一跳查。
-所以 GM 那份不再是整条 AIS 链的总闸，`Gemini-AIS` 的节奏由链上各跳（现 3 跳）各自那份共同决定。
-`HJ` 那份仍留在 `zgate.json` 里（渠道没删），只是该渠道 2026-11-11 起没有收录型号，暂时没有请求走到它。
-完整口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md)。
-
-四件事必须一起看：
-
-1. **首块闸门**：`role` 空帧、`[DONE]`、空 delta 都不算首块 —— 只认
-   `choices[].delta.content` / `delta.reasoning_content` 或 Gemini 原生
-   `candidates[].content.parts[].text`。不这么做，「先回 200 再十几秒不说话」的跳会被判成功。
-2. **对冲 + 抢写端**：每一路有自己的 `raceWriter`，谁先拿到真首块谁抢闸门，
-   其余各路的上游请求立刻取消（不留失败日志，省额度）。输家写入全部被吞掉。
-3. **两张冷却表**：`cool` 存真冷却（429 45s / 5xx 90s / 死跳 30min / 超时 5min / 额度 24h），
-   `silence` 只存静默 20s。**只有 silence 能被「全链静默」兜底清掉** ——
-   混成一张表会变成「清冷却 → 再撞 429 → 再清」的死循环。
-4. **403 分两种**：key 失效类（`invalid api key` 等英文标记）整渠道停 24h；
-   中转 key 池空（`没有可用的 Gemini API Key`）只停 90s，并把上游原文回给客户端。
-   链全灭时若上游回过 4xx，就照原状态回，不再一律糊成 502。
-5. **渠道级故障快速失败**：任意一跳确认「整渠道停了（池空/认证失败）」，
-   立即取消还在路上的其余跳并回状态码，不再等它们各自超时
-   （2026-11-10 实测：池空时两个在飞的跳各挂 31s，不取消就要白等一整轮）；
-   处在禁用窗口内的请求连上游都不发，直接 503 `channel_paused`。
-6. **发车顺序按实测证据排**（`rankedChain`，不是降级链的声明顺序）：上一轮真出过
-   首块的跳按毫秒升序先发，没有观测的按声明顺序（**3.8 优先的口径只在无证据时成立**），
-   有失败记录的排最后只吃对冲余量。理由：声明前四跳在这条上游上几乎必然失败，
-   按声明顺序发车等于每次先等它们；按证据发车，第二次请求就能直接从 lite/preview 起步。
-7. **响应头看门狗 + 串行退化告警**（2026-11-10 夜补）：上游「连上了、但迟迟不给响应头」时，
-   `doForward` 对流式请求最多等这一跳的容忍上限（**全局默认 12s**，`zgate.json` 的 `upstreamHeaderTimeoutSec` 当前 45s 且可改，负数 = 关掉；**单个渠道可用 `channelPolicy[<渠道>].headerTimeoutSec` 覆盖** —— 当前 `GM` / `HJ` 都是 `-1`，即不设看门狗，来历见本节末「窗口的第四次收敛」），超时判这一跳沉默
-   （`errUpstreamSilent`）直接换下一跳 —— 不再依赖 `http.Client` 的无限期 `Do`
-   （它只配了 `DialContext` / `TLSHandshakeTimeout`，没有整体超时）。串行仍然可能发生，但只在**真的没人要求对冲**时发生：`routeChain` 会调 `noteSerialChain`
-   打一条 `[race] 走串行回落` 的 Info，说明是哪条链、为什么（按链做 10 分钟去重）。
-   **旧判据已删除**：以前是「链上任何一个渠道没写在 `channelPolicy` 里 → 整条链退回串行、取消对冲」的
-   WARN；2026-11-10 深夜改成逐跳取值后这条判据不再成立（缺配只是那一跳拿不到对冲节奏，不连坐整条链）。
-   现在要查「对冲为什么没开」，看 `/health` 的 `race.disabled` 与 `noteSerialChain` 的 Info，口径见
-   [ROUTING-POLICY.md](ROUTING-POLICY.md) §1；症状是客户端一分钟零字节时，先按 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §18 查。
-
-   **45s → 12s 的来历（2026-11-10 19:45 实测）**：换上新二进制后对冲确实恢复了（日志里 `[race] 发出 1/8`…`8/8`），但一次请求仍要 3-4.5 分钟、用户实测 4 分 31 秒。原因是同一跳 `ais-gemini-3.8-flash` 每次都要**等满 60.241 秒才回 503 high demand**，而哈基米 `[福利]gemini-3.8-flash` 直连只要 2.5-3.1 秒就出首块。45 秒一档等于「每轮白等 45 秒」，8 跳按 `maxParallel=2` 轮转就是 4 分钟；期间 DSH 没有首字节会自动重试，反代后台于是出现两条「请求中」。降到 12 秒后：正常情况对冲到第二跳 ~3 秒出字，全灭时最坏 4 轮 × 12 秒 ≈ 48 秒给结论。12 秒相对观测到的合法首头（2.5-3.1 秒）还有 4 倍余量，需要更松时改配置即可，不必重编译。
-
-   **为什么又要按渠道分开（2026-11-10 20:05 实测）**：当晚哈基米同一个 `[福利]gemini-3.8-flash` 的首头从 2.5-3.1 秒漂到 **7.5-10.2 秒**（同一 key，60KB 与 200KB 系统提示各测一次；同分钟日志里这一跳连着被判「45s 内没给响应头」）。12 秒对它是 1.2-1.6 倍余量，一抖动就会被切掉 —— 而那正是唯一能兜底的跳。反过来 `ais-gemini-3.8-flash` 是 60 秒后才回 503，窗口给多长都只是白等。一个全局值必然牺牲一边，于是加了按渠道覆盖：**GM 12s、HJ 25s**，两路同时在场时 GM 先被判死、链继续往下走，HJ 那一路还在等它的 10 秒，谁先出首块谁赢。
-
-   **21:30 第四次收敛：窗口按下不按上（判死权归上游）**。当晚统计：GM 被判死 125 次
-   （沉默 79 + 首块 46），其中上游真说过 `503 high demand` 的只有 7 次（5.3%）；
-   HJ 判死 32 次，一大半和 502 同秒返回；同一时段上游那边一直是正常吐 token 的。
-   也就是说绝大多数「死」是本地造的，而本地一判死就回 502 → 客户端 `retryPolicy`
-   命中 `SERVER` 必然重打 → 上游再跑一遍 → 用户看到的正是「后台在跑、本地断开」。
-   所以问题不再是「窗口调到多长才不误杀」，而是**本地根本不该判死**：两个渠道都改成
-   `headerTimeoutSec: -1`（不设响应头看门狗）、`firstBlockMs: 0`（不判首块）、
-   `silenceCooldownSeconds: 0`（不埋沉默冷却）；GM 当时只保留 `hedgeAfterMs: 18000` 做对冲（2026-11-11 10:35 起这一项也撤了，改为单发串行，见本节表格）
-   —— 对冲只是**多开一路**、不取消前一路，判死权仍在上游。全局兜底从 12s 放回 45s，
-   只兜「真的挂了」的渠道。要回旧行为：`headerTimeoutSec` 给正数、`firstBlockMs` 给 4000，
-   `/admin/reload` 即生效，不用重编译。
-
-8. **提前交卷 + 空窗心跳**（2026-11-10 22:00，`early_sse.go`）：判死权交回上游之后还剩一个洞 ——
-   上游要 60 秒才给响应头时，这 60 秒里客户端一个字节都收不到，仍然会自己判死重试。
-   现在流式请求在等上游响应头的空窗里先对客户端交卷：超过 `earlyCommitMs`（缺省 8000 毫秒，
-   `zgate.json` 可改，负数 = 关闭）还没人 `WriteHeader`，就先写 `200 + Content-Type: text/event-stream`，
-   之后每 `earlyKeepaliveSec`（缺省 10 秒）写一行 SSE 注释 `: zgate keepalive`。
-   等上游真给出结果：成功就照常往这条已打开的流里写正文（首字时间不受影响）；
-   失败则把错误改写成一条流内 `data: {"error":{... "type":"upstream_error"}}` 事件 + `data: [DONE]`，
-   **不再回一个客户端早就放弃的 502**。窗口内上游就回话的（绝大多数情况）完全走老路径，
-   状态码原样透出；非流式请求一律不受影响。
-
-   | 参数 | 缺省 | 语义 |
-   |---|---|---|
-   | `earlyCommitMs` | 8000 | 等上游响应头超过这么久就先交卷 200 + SSE；负数 = 关闭 |
-   | `earlyKeepaliveSec` | 10 | 交卷后补注释心跳的间隔（秒） |
-
-   窗口为什么给 8 秒：窗口内到达的 429/503 仍能原样透出（客户端该退避就退避），
-   而今天观测到的合法首头是 2.5-10.2 秒，8 秒既盖住慢的一侧、又把「真 429」留在窗口内。
-   代码在 [gateways/zgate/internal/router/early_sse.go](../gateways/zgate/internal/router/early_sse.go)，
-   用例 `TestGatewayCommitsEarlyThenStreams` / `TestGatewayRewritesSlowFailureIntoEvent` 钉住两条路径。
-
-### 4.11.4 调参教训（用实测换来的）
-
-| 现象 | 根因 | 处置 |
-|---|---|---|
-| 12 轮 p50 4.44s、p90 24s、max 37.8s | 能出字的 lite 排在第 5 跳，hedge 1.5s + 8s 首块看门狗太松；离群值是多个「200 空流」跳各等满 8s 串起来 | 降 firstBlock 到 4s、hedge 到 900ms、静默跳进 silence 表跳过 |
-| 并发 6 + hedge 200ms → **20 轮全部 502** | 上游每 key 并发上限很低，6 路扇出直接把自己打成 429，全链一起 429/冷却 | `maxParallel` 降回 2（3 路实测尚可，6 路必炸） |
-| 静默按 90s 冷却 → 连片 502 | 整条链都进冷却，下次请求没有活跳 | 拆出独立 silence 表（20s），并允许全链静默时整体清掉兜底 |
-
-> **一句话**：这条链的首字速度不是靠「多发几路」堆出来的，而是靠
-> 「少撞死跳（冷却） + 首块判真假（闸门） + 只叠一层对冲（maxParallel≤2）」。
-
-### 4.11.5 加新渠道要动的四处（这次一次踩全，别再漏）
-
-要动的是：`zgate.json` 的 `upstreams` 与
-`channelPolicy`、`keys.go` 的 `Channels` 与 `Set` 字段、`keys.go` 的 `Load` 取值链、
-`router.go` 的 `forwardHeaders` 名单（`router.go:815`）与 `healthSegments`。`tools/check-project.py` 现在
-静态比对前三处的渠道集合，漏一处门禁直接红。
-
----
-
-### 4.11.6 计费纪律：按调用次数扣费，失败也扣
-
-| 项 | 口径 |
-| --- | --- |
-| 计费方式 | AIS / 哈基米按**调用次数**计费，不按 token；上游秒回 403 / 429 也照扣一次 |
-| 禁止 | 反复探测同一渠道「看它通不通」；拿真请求当健康检查 |
-| 该怎么做 | 先算预算再发；能用离线证据（配置文件、日志、上一轮实测）回答的，不发真请求 |
-| 对照 | WB（WorkBuddy）按倍率计费，探测量化见 §4.8；两套计价别混用同一套「随便试」的习惯 |
-
-这条纪律此前挂在用户热记忆里，2026-11-11 落到正本；热层只留指针。
+**推理档位说明**：GM（catiecli）`/v1/models` 只回 id、不回 reasoning 能力位，这条注定空档位，
+已在 `EMPTY_ALLOWED` 登记（接替 11-11 下线的旧 `Gemini-AIS`），否则每日同步 `--check` 会误判
+档位漂移、exit 1。DSH 投影里 `Gemini-4-Hydrogen` 的 `reasoningEfforts` 是 GUI 装饰项，
+真正是否生效由上游 `/v1/models` 与 map 表达式决定（GM 无表达式 → 空档位属预期）。
 
 ## 5. 关思考参数矩阵
 

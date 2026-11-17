@@ -899,7 +899,7 @@ func TestSilentHopGetsShortCooldown(t *testing.T) {
 	srv, _ := newServer(t, "{\"models\":{},\"legacy\":{}}", up.URL)
 	srv.headerWait = 120 * time.Millisecond
 	srv.cfg.ChannelPolicy = map[string]config.ChannelPolicy{"GM": {SilenceCooldownSeconds: 20}}
-	hop := alias.Hop{Channel: "GM", Upstream: "ais-gemini-3.8-flash", Base: up.URL}
+	hop := alias.Hop{Channel: "GM", Upstream: "gm-hop-a", Base: up.URL}
 	body := []byte("{\"model\":\"m\",\"stream\":true}")
 	req := httptest.NewRequest("POST", "/v1/chat/completions", bytes.NewReader(body))
 

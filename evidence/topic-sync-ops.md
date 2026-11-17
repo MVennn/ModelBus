@@ -9,7 +9,7 @@
 | 定时 | 计划任务每日 12:00 触发 `sync-models.ps1` → `providers/opencode-go/ops/go_model_sync.py`（旧文里的 `scripts/go_model_sync.py` 已不存在） | agent-sync-scheduler.md |
 | 报告落点 | 收录报告写本仓 `evidence/go-model-sync-YYYYMMDD-HHMMSS.md`（保留最近一版）；alias 快照报告另写 `docs/reports/MODEL-SYNC-*.md` 并在 `docs/reports/README.md` 登记 | CHANGELOG:833 / 1335 |
 | 失败形态 | 2026-11-05 12:00 未到点、零产物 —— 任务没跑，不是链坏了 | agent-sync-scheduler.md、agent-sync-logs.md |
-| 报障形态 | DSH 报 `pi-ai provider "zcode-main" has no configured model "Gemini-AIS"` = 模型名在 `provider_config.json` 有、投影后的 `cordis.patch.yml` 里没有 | agent-sync-audit-20261111.md |
+| 报障形态 | DSH 报 `pi-ai provider "zcode-main" has no configured model "<某模型>"` = 模型名在 `provider_config.json` 有、投影后的 `cordis.patch.yml` 里没有 | agent-sync-audit-20261111.md |
 | 429 硬化 | 429 优化已固化进生成器，不再靠手工改生成结果 | agent-model-alias-hardening.md |
 
 ## 2. 三次探活 / 收录验收

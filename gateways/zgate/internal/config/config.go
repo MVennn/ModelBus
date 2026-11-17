@@ -183,7 +183,7 @@ type Config struct {
 	// UpstreamHeaderTimeoutSec：流式请求「已经连上上游、却连响应头都不给」的忍耐上限（秒）。
 	// 到点判这一跳沉默（errUpstreamSilent）并让位给下一跳。0/缺省 = 12 秒，
 	// 负数 = 关掉这个看门狗（老 behavior：谁不回就一直挂着）。
-	// 为什么要可配：2026-11-10 实测同一跳 catiecli ais-gemini-3.8-flash 要 60.2 秒才回
+	// 为什么要可配：2026-11-10 实测同一跳中转付费档要 60.2 秒才回
 	// 503，而哈基米福利跳 3 秒就能出字；一档 45 秒时 8 跳链轮转要 3-4 分钟，
 	// 降到 12 秒后 4 轮 ≈ 48 秒见分晓，且不用重新编译就能再调。
 	UpstreamHeaderTimeoutSec int `json:"upstreamHeaderTimeoutSec"`
@@ -400,8 +400,7 @@ func (c *Config) applyDefaults() {
 		c.Upstreams["GM"] = u
 	}
 	// 哈基米（gemai.cc）是另一家 Gemini 转售站，OpenAI 兼容直连；
-	// 无本地进程。它只承载 Gemini-AIS 链里「同代福利档」那一跳（见
-	// tools/model_alias.py 的 HOP_PRIORITY），不单独出现在模型目录里。
+	// 无本地进程。它不单独出现在模型目录里（该渠道的型号已下线）。
 	if u, ok := c.Upstreams["HJ"]; !ok {
 		c.Upstreams["HJ"] = Upstream{
 			Base:   "https://api.gemai.cc/v1",

@@ -14,7 +14,7 @@
 | 渠道优先级来自 alias map 的 chain 顺序，不是 `zgate.json` 里的数组顺序 | agent-zgate.md |
 | workbuddy 的 `soft_rate=600s` 对 6004（上游限流）不生效 —— 6004 走冷却表，不走软限流 | agent-zgate.md |
 | 主力组由 `tools/model_alias.py` 的 `MAIN_ORDER` 单源定义，投影到三处配置 | agent-mainline-merge.md（正本 [docs/MODEL-ALIAS.md](../docs/MODEL-ALIAS.md)） |
-| 新 `ais-gemini-3.8-flash` 是独立直连 provider，与旧 `cp:gemini` 无继承关系 | agent-mainline-merge.md |
+| 新 Gemini 直连 provider 与旧 `cp:gemini` 无继承关系 | agent-mainline-merge.md |
 | retryPolicy：三条 llm-pi-ai route 可写 `retryPolicy`；`RATE_LIMIT` 应移出可重试集合、`maxRetries` 由 5 降到 0/1；429 自动切模型**没有配置开关**（写在 `tools/dsh_sync.py` 的生成逻辑里） | agent-dsh-retry.md（正本 [docs/TROUBLESHOOTING.md](../docs/TROUBLESHOOTING.md)） |
 
 ## 2. 端点面与控制台（正本 [docs/CONSOLE.md](../docs/CONSOLE.md)）
@@ -29,7 +29,7 @@
 
 ## 3. 运行态快照（时点数据，读前先核对现网）
 
-- 2026-11-09 22:2x：7871 跑 HEAD `bfd6b9e`，二进制 22:24:36 编译、进程 22:25:37 启动；Gemini-AIS 七跳在跑；alias 目录 93 条；**7872 控制台未起**（agent-runtime.md）。
+- 2026-11-09 22:2x：7871 跑 HEAD `bfd6b9e`，二进制 22:24:36 编译、进程 22:25:37 启动；一条 7 跳降级链在跑；alias 目录 93 条；**7872 控制台未起**（agent-runtime.md）。
 - 2026-11-05 22:29：DSH 模型下拉生效顺序只读盘点（agent-dsh-order.md）。
 - `.codegraph/` 存在但 `codegraph_status` 报 `unable to open database file`，当轮退回 grep（agent-dsh-sync-hardening.md）。
 

@@ -178,7 +178,7 @@ def _zcode_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
         ids = [str(mid) for mid in ids if str(mid).strip()]
         # 2026-11-11：上一版投影出去、这一版配置里已经消失的型号必须显式报出来。
         # 用户侧看到的是模型选择器里少了一条，或者（更糟）DSH 会话直接硬失败
-        # 「provider "zcode-main" has no configured model "Gemini-AIS"」——
+        # 「provider "zcode-main" has no configured model "<某型号>"」——
         # 清单是这份配置投影的，缺型号不会降级。静默少一条是这个故障最难查的地方，
         # 所以投影到 DSH 的这条路径上必须留一行字。
         dropped = [mid for mid in _previous_model_ids(provider_id) if mid not in ids]

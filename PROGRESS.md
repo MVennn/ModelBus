@@ -3986,3 +3986,44 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 状态: 已完成
 
 [[TASK_ALL_DONE]]
+
+
+---
+
+## 批次：2026-11-17 11:53 接入 Gemini 4 Hydrogen 到主力组（ModelBus ↔ DSH「1 组」）
+
+## 任务目标
+- 用户在 DSH 新增「1 组」（`cordis.patch.yml` provider `asd`，模型 `ais-抗截断-gemini-4-hydrogen`），要求设为主力并接入 ModelBus。
+- 起点：11:41 工作树已有并发改动移除旧 `Gemini-AIS` 整族（删 GM_PRICES/ABBR/MAIN_ORDER gem 行/price_of(GM)、删文档 §4.11、测试改 `stays_deepseek_only`）；本批次在该改动之上做增量接入，不回滚。
+
+## 已完成变更
+- [x] `tools/model_alias.py`：补 `GM_PRICES['ais-抗截断-gemini-4-hydrogen']=0.11`；`MAIN_ORDER` 加 `chat:gem:ais-抗截断-gemini-4-hydrogen`；`ABBR` 映射到显示名 `Gemini-4-Hydrogen`；`price_of(GM)` 改为按 GM_PRICES 取值（未登记返 None）。
+- [x] `tests/test_model_alias_naming.py`：`test_main_order_stays_deepseek_only` 改为 `test_main_order_names_the_gem_hop_explicitly`，断言主力含且仅含新 gem 跳。
+- [x] `docs/MODEL-PROVIDERS.md`：新增 §4.11「谷歌 Gemini 4 Hydrogen」（4 处代码落点 + 2 产物 + 验证证据），更新开头快照时点。
+- [x] 生成产物：`model_alias.py --apply` 写 `~/.zcode/v2/model-alias-map.json`（revision 2）+ `provider_config.json`（主力组含 Gemini-4-Hydrogen，备份 `.bak-alias-20261117-115017-761200`）；`dsh_sync` 投影 `cordis.patch.yml` 的 `zcode-main` L84 含 `- id: Gemini-4-Hydrogen`（DSH 热加载，未重启）。
+
+## 验收
+- `python -B tools/model_alias.py`（dry-run）exit 0：主力 3 模型含 `Gemini-4-Hydrogen  gem:ais-抗截断-gemini-4-hydrogen  chat  0.11  chain: GM:...`。
+- `--check`：漂移 2 处（新增 Gemini-4-Hydrogen / 消失 Gemini-AIS）—— 符合预期。`--apply` exit 0。
+- 测试：naming 7 OK、hop_order 5 OK、price 15 OK、efforts 14 OK、dsh_sync_efforts 15 OK；`check-project.py` 8 项 exit 0；`check-docs.py` 54 篇 exit 0。
+- `/health`：alias.models=19、revision=2、`gemini.state=up/key=true`（GM 段 hot reload 生效）。
+- `/v1/models`：返回 `id=Gemini-4-Hydrogen`。
+- 端到端：`POST /v1/chat/completions`（model=Gemini-4-Hydrogen）两次 200，正文「收到」，上游模型 `ais-抗截断-gemini-4-hydrogen`，reasoning_tokens=54 —— 客户端假 Bearer 被 zgate 覆盖为 GM 真 key。
+- 恢复路径：provider_config 备份 `.bak-alias-20261117-115017-761200`；代码改动均 git 工作树可 `git checkout` 还原。
+
+## 待解决 / 注意事项
+- QD 价格源（127.0.0.1:8790）停服，回落到快照（既有问题，与本批次无关）。
+- 11:41 并发移除旧 Gemini-AIS 的改动未提交；本批次与之共用工作树，pull 前注意。
+- 命名测试断言 `gem:` 只列新 id —— 后续再加 Gem 变体进主力需同步改这条测试。
+
+## 状态: 已完成
+
+[[TASK_ALL_DONE]]
+
+
+### 11:57 补：档位漂移修复（同一批次）
+- [x] `tools/model_alias.py`：`EMPTY_ALLOWED` 从空集加回 `"Gemini-4-Hydrogen"`（接替 11:41 并发改动删掉的 `Gemini-AIS`）。根因：GM(catiecli) /v1/models 只回 id 不回推理能力位、注定空档位，缺白名单致 `--check` exit 1 误报「无档位且补不回来」。
+- [x] `tests/test_model_alias_efforts.py`：新增 `test_gemini_hydrogen_is_in_empty_allowlist` 回归。
+- [x] `docs/MODEL-PROVIDERS.md` §4.11：补档位白名单说明与 `--check` exit 0 证据。
+- 复验：`--check` exit 0（漂移清零）；6 测试文件 OK（naming 7 / hop_order 5 / price 15 / efforts 15 / dsh_sync_efforts / cel_map_guard 13）；check-project exit 0、check-docs exit 0。
+- 教训已记入 error_lessons（id Lmwk5w392）。

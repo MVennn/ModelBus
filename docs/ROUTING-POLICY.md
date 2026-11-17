@@ -34,8 +34,7 @@
 | `rateLimitBackoffMs` | 被尝试的那一跳 | -1 = 429 直接换跳；0 / 正数 = 就地等一会儿再重试 |
 | `authFailCooldownHours` | 被尝试的那一跳 | key 失效类 403 → 整渠道停多久 |
 
-**为什么改**：原来 `racePolicyFor` 读 `Chain[0]`，一条链上只有链首渠道说了算 —— Gemini-AIS 当时七跳全 GM（现 3 跳），
-于是「给 OC / QD / WB 补策略」在当时等于白补（配了也读不到）。改成逐跳聚合之后，任意混合链
+**为什么改**：原来 `racePolicyFor` 读 `Chain[0]`，一条链上只有链首渠道说了算，于是「给 OC / QD / WB 补策略」在当时等于白补（配了也读不到）。改成逐跳聚合之后，任意混合链
 （例：GM 慢 + HJ 快）不必再为每个组合手工建模型，链自己就能得到「慢的那跳并排问快的那跳」。
 
 旧五条件（每跳都必须在 `channelPolicy` 里、每跳 proto 都必须是 chat、链首必须有 hedge/firstBlock）也一并取消：
@@ -228,33 +227,13 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 
 ---
 
-### 8.3 链长上限：Gemini-AIS 7 跳 → 3 跳（2026-11-11 11:03）
-
-按次计费下「多一跳」不等于「多一层保险」，而是「多付一次额度、还可能拿到更差的答案」。
-GM 下 7 个 Gemini Flash 档同价 0.11/次，但质量差三档：
-
-| 档 | 跳 | 现在的位置 |
-|---|---|---|
-| 新一代 | `ais-gemini-3.8-flash` | 第 1 跳 |
-| 够用 | `ais-gemini-3.7-flash` / `ais-gemini-3.6-flash` | 第 2、3 跳 |
-| 上一代 / 小模型 | 3.5 / 3.5-flash-lite / 3.1-flash-lite / 3-flash-preview | **已从链上裁掉** |
-
-改动位置**不在** `zgate.json`，也不要手改 `~/.zcode/v2/model-alias-map.json`（下次生成会被覆盖）：
-`tools/model_alias.py` 里的 `CHAIN_CAP = {"Gemini-AIS": 3}` 在 `family_entries` 组链时截断，
-被裁掉的跳写进该条目的 `dropped_hops` 并仍留在 `legacy_ids` 里 —— 老会话点名
-`ais-gemini-3.5-flash` 照样解析到 Gemini-AIS（不会 404），只是链不再真去打它。
-其余模型的 chain 逐条比对确认未变。
-
-改的是**生成器**不是产物：以后重跑 `python -B tools/model_alias.py --apply` 仍然只出 3 跳；
-要恢复 7 跳，删掉这行常量再重跑。
-
 ## 9. 验收与回退
 
 1. 代码层：`go build ./...`、`go vet ./...`、`go test ./...` 全 0；
    策略用例在 `internal/router/policy_test.go`（逐跳聚合、单跳不冷却、预算回 504、自检两档、守卫档位）。
 2. 配置层：改 `zgate.json` 后 `POST /admin/reload` 即可，不必重启进程。
 3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard / upstream / hops 五段
-   （`hops` 里 `GM|ais-gemini-3.8-flash` 的 `ok/try` 就是「3.8 最近到底行不行」）
+   （`hops` 里各跳的 `ok/try` 反映该跳最近到底行不行）
    （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
    `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=19 / catalog_total=91`、`?scope=legacy` 应 `total=72`、`?scope=bad` 应 400（2026-11-11 下线一个模型后的实测值；`catalog_total` 随上游目录走，会自己变）。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。

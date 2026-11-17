@@ -9,7 +9,6 @@
 | `topic-routing-runtime.md` | 结论卡 | 执行链、端点面、控制台、运行态快照、499 / 排序 / 加密思考等未吸收项 |
 | `topic-capability-fields.md` | 结论卡 | `contextWindow` / `maxOutputTokens` / `optionSpecs` / `reasoningEffort` 的来源与缺口 |
 | `topic-debrand-scope.md` | 结论卡 | 去 ZCode 化的契约层边界、可动面、普查数字 |
-| `topic-gemini-channels.md` | 结论卡 | GM 直连与本地 CLIProxyAPI 两条路的实测边界 |
 | `topic-sync-ops.md` | 结论卡 | 自动收录链、三次探活验收、仓库级盘点数字 |
 | `go-model-sync-20261113-120007.md` | 快照 | 最新一份自动收录决策报告（历史各版按 `docs/MAINTENANCE.md` §3 只留最近一版） |
 | `PROGRESS.workbuddy.md` | 台账 | WorkBuddy 接入线历史台账，[docs/DOC-RULES.md](../docs/DOC-RULES.md) §2 定为**只读** |
@@ -36,14 +35,14 @@
 |---|---|---|---|
 | agent-map-race.md | 路由 | 执行链 `routeChain → racePolicyFor → raceChain → attemptChain → doForwardWith → doForward`；冷却按物理跳两张表，对冲与首块参数只取链首渠道 | topic-routing-runtime.md §1 |
 | agent-zgate.md | 路由 | 45s / 700ms 是 Go 常量；渠道优先级来自 alias map chain；workbuddy `soft_rate=600s` 对 6004 不生效 | topic-routing-runtime.md §1 |
-| agent-mainline-merge.md | 路由 | 主力由 `tools/model_alias.py` 的 `MAIN_ORDER` 单源定义、投影三处；新 ais-gemini-3.8-flash 与旧 cp:gemini 无继承关系 | topic-routing-runtime.md §1 |
+| agent-mainline-merge.md | 路由 | 主力由 `tools/model_alias.py` 的 `MAIN_ORDER` 单源定义、投影三处；新 Gemini 直连 provider 与旧 cp:gemini 无继承关系 | topic-routing-runtime.md §1 |
 | agent-dsh-retry.md | 路由 | 三条 llm-pi-ai route 应写 retryPolicy；RATE_LIMIT 移出可重试集合、maxRetries 5→0/1；429 自动切模型无配置开关 | topic-routing-runtime.md §1 |
 | agent-map-api.md | 端点 | `/v1/models` 与 `/health` 手写 dispatch，无 mux / struct / metrics / access log，提前交卷不可观测 | topic-routing-runtime.md §2 |
 | agent-endpoints.md | 端点 | 7871 非代理端点恰三个：`GET /health`、`GET /v1/models`、`POST /admin/reload`；`/health` 恒 JSON | topic-routing-runtime.md §2 |
 | agent-console-impl.md | 控制台 | tools/console 13 文件静态审查：独立 loopback 只读服务 + 唯一 reload 转发；3 个缺陷；自检门禁在网关不可达时假绿 | topic-routing-runtime.md §2 |
 | agent-console-progress.md | 控制台 | PROGRESS 写 v2 完成而磁盘已到 v3（Tabler 外壳）；2026-11-09 19:11 实测 7872 `pid=31472`、`/healthz` 200 | topic-routing-runtime.md §2 |
 | agent-console-verify.md | 控制台 | 3 个 `.py` 编译 rc=0、零 CDN 外链；`check-project.py` exit 0（8 项）；`check-docs.py` 当时 exit 1 | topic-routing-runtime.md §2 |
-| agent-runtime.md | 运行态 | 2026-11-09：7871 HEAD `bfd6b9e`、22:24:36 编译 / 22:25:37 启动、Gemini-AIS 七跳、93 条目录；7872 未起 | topic-routing-runtime.md §3 |
+| agent-runtime.md | 运行态 | 2026-11-09：7871 HEAD `bfd6b9e`、22:24:36 编译 / 22:25:37 启动、一条 7 跳降级链、93 条目录；7872 未起 | topic-routing-runtime.md §3 |
 | agent-gateway-lifecycle.md | 生命周期 | 网关生命周期逐行调研（2026-11-09T07:43，432 KB） | docs/ZGATE-LIFECYCLE.md 已吸收 |
 | agent-code499.md | 排障 | 499 / CLIENT_DISCONNECTED 证据不足：无生成点、无 5.4s 计时来源、无请求 ID 关联 | topic-routing-runtime.md §4 |
 | agent-doc499.md | 排障 | 2026-11-12 20:26:55 AIS 流式 499 的文档侧取证 | topic-routing-runtime.md §4 |
@@ -78,35 +77,13 @@
 | agent-functional-review.md | 架构 | 现役链路 provider_config.json → dsh_sync.py 投影；实现层 123 行 ZCode（37 契约 / 86 待迁移）；Go 侧 X-Agent-Id 分桶零实现 | topic-debrand-scope.md §3 §4 |
 | agent-replacement-plan.md | 架构 | 契约层零改动 + 实现层中性化的迁移方案 | topic-debrand-scope.md §3 |
 
-### Gemini / CLIProxyAPI（→ `topic-gemini-channels.md`）
-
-| 原件 | 主题 | 结论一句话 | 去向 |
-|---|---|---|---|
-| agent-cliproxyapi.md | Gemini | CLIProxyAPI v8.0.61 本地网关落地记录（2026-11-09 11:38–11:50） | topic-gemini-channels.md §2 |
-| agent-gemini-channels-local.md | Gemini | CP 8.0.61 只有 5 类 Gemini 渠道 | topic-gemini-channels.md §2 |
-| agent-gemini-channels-web.md | Gemini | 不存在网页端 cookie 复用；AI Studio 免费层 20 次/天；antigravity OAuth 403 VALIDATION_REQUIRED | topic-gemini-channels.md §2 |
-| agent-gemini-go-cleanup.md | Gemini | Go 侧去 CP 凭据 + `/health` 第六段，build/test/vet/gofmt 全绿 | CHANGELOG:216 + topic-gemini-channels.md §2 |
-| agent-gemini-ais-alias.md | Gemini | GM 7 个 Flash 合成 Gemini-AIS 7 跳链、HOP_PRIORITY 压序、`--check` 退出码 1、单测 59 项全绿 | docs/MODEL-PROVIDERS.md §4.11（后收窄 3 跳） |
-| agent-gemini-thinking-proof.md | Gemini | 3.8 Flash 思考能力待补，拿不到稳定样本 | topic-gemini-channels.md §4 |
-| agent-gemini-merge-plan.md | Gemini | 硬引用 204 行 / 38 文件，真正决定存在性只有 9 处 | topic-gemini-channels.md §3 |
-| agent-gemini-memory-docs.md | Gemini | docs §4.11 与 MODEL-ALIAS 链序段（L326-338 / L348）须改写 | topic-gemini-channels.md §3 |
-| agent-gemini38-memory.md | Gemini | 记忆层 10 处要动 | topic-gemini-channels.md §3 |
-| agent-gemini-memory-cleanup.md | Gemini | 5 篇 CP/Gemini Document 归档 + index.json 44 条 hash/sizeBytes 复核 | CHANGELOG:218 + topic-gemini-channels.md §3 |
-| agent-gemini-logs.md | Gemini | 首字极慢的逐跳日志实证 | docs/TROUBLESHOOTING.md §18 已吸收 |
-| agent-gemini-code.md | Gemini | CP 相关代码改动记录 | topic-gemini-channels.md §3 |
-| agent-gemini-runtime.md | Gemini | 运行时对照（渠道 / 凭据 / alias） | topic-gemini-channels.md §3 |
-| agent-gemini38-config.md | Gemini | gemini 3.8 渠道配置项盘点 | topic-gemini-channels.md §3 |
-| agent-gemini-provider-locate.md | Gemini | gemini provider 落点定位 | topic-gemini-channels.md §3 |
-| agent-gemini-docs-cleanup.md | Gemini | docs 侧 Gemini 表述清理清单 | topic-gemini-channels.md §3 |
-| gemini-merge-result.md | Gemini | 2026-11-10 主代理合并落地记录 | topic-gemini-channels.md §3 |
-
 ### 同步链、探活与运维（→ `topic-sync-ops.md`）
 
 | 原件 | 主题 | 结论一句话 | 去向 |
 |---|---|---|---|
 | agent-sync-scheduler.md | 同步 | 每日 12:00 计划任务；2026-11-05 未到点、零产物（任务没跑≠链坏） | topic-sync-ops.md §1 |
 | agent-sync-logs.md | 同步 | 每日同步执行前后的日志取样 | topic-sync-ops.md §1 |
-| agent-sync-audit-20261111.md | 同步 | 报障 `pi-ai provider "zcode-main" has no configured model "Gemini-AIS"` = 投影后的 cordis.patch.yml 缺模型 | topic-sync-ops.md §1 |
+| agent-sync-audit-20261111.md | 同步 | 报障 `pi-ai provider "zcode-main" has no configured model "<某模型>"` = 投影后的 cordis.patch.yml 缺模型 | topic-sync-ops.md §1 |
 | agent-model-alias-hardening.md | 同步 | 429 优化固化进生成器，不再手工改生成结果 | topic-sync-ops.md §1 |
 | agent-detect-cost.md | 探活 | 省掉零收益的骤降探活验收（m01007） | topic-sync-ops.md §2 |
 | agent-detect-quality.md | 探活 | 零请求时复用上次探测信号的验收 | topic-sync-ops.md §2 |

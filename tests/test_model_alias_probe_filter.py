@@ -5,10 +5,10 @@
 
 1. 2026-11-10 12:00 zgate 部署重启打断在途探测，beam-free / conatus-free 记成
    error、claude-haiku-5-5 的 403 被写成 unavailable，ever_ok=true 的型号被删。
-2. 2026-11-11 每日同步：Gemini-AIS 一次 45s 超时（ever_ok 为空）被摘出
+2. 2026-11-11 每日同步：主力组某型号一次 45s 超时（ever_ok 为空）被摘出
    provider_config，DSH 侧 zcode-main 的清单是这份配置投影出来的，缺型号不降级
-   而是硬失败（pi-ai: provider "zcode-main" has no configured model
-   "Gemini-AIS"），用户整场会话卡在报错上。
+   而是硬失败（pi-ai: provider "zcode-main" has no configured model ...），用户
+   整场会话卡在报错上。
 
 判据：除「上游明确说没有这个型号」(unavailable 且非 403) 之外，任何状态都不得
 删模型；主力组成员连 unavailable 之外的一切非 ok 都只报不删。
@@ -31,11 +31,11 @@ sys.modules.setdefault("model_alias", ma)
 spec.loader.exec_module(ma)
 
 
-def row(name: str, upstream: str = "ais-gemini-3.8-flash", *,
+def row(name: str, upstream: str = "generic-model", *,
         channel: str = "GM", legacy: list[str] | None = None) -> dict:
     return {
         "new_id": name,
-        "raw": f"gem:{upstream}" if channel == "GM" else upstream,
+        "raw": f"gm:{upstream}" if channel == "GM" else upstream,
         "abbr": name,
         "name": name,
         "protocol": "chat",
@@ -61,11 +61,11 @@ class ProbeFilterTest(unittest.TestCase):
 
     def test_timeout_without_ever_ok_keeps_main_model(self):
         """事故 2 的最小复现：主力组 timeout + ever_ok 缺省 → 必须保留。"""
-        g = grouped(main=[row("Gemini-AIS")])
-        probe = {"gem:ais-gemini-3.8-flash": {"status": "timeout", "http": None, "ms": 45007}}
+        g = grouped(main=[row("MainModel")])
+        probe = {"gm:generic-model": {"status": "timeout", "http": None, "ms": 45007}}
         out, kept, suspect, skipped = self._run(g, probe)
-        self.assertEqual([r["new_id"] for r in out["main"]], ["Gemini-AIS"])
-        self.assertIn("Gemini-AIS", " ".join(suspect), "主力组必须留下待核实记录")
+        self.assertEqual([r["new_id"] for r in out["main"]], ["MainModel"])
+        self.assertIn("MainModel", " ".join(suspect), "主力组必须留下待核实记录")
         self.assertEqual(skipped, [])
 
     def test_timeout_without_ever_ok_still_drops_non_main(self):
@@ -109,10 +109,10 @@ class ProbeFilterTest(unittest.TestCase):
 
     def test_upstream_says_gone_keeps_main_and_flags(self):
         """主力组连 404 也只报不删：选择器里正被点名的模型不能由脚本默默抽走。"""
-        g = grouped(main=[row("Gemini-AIS")])
-        probe = {"gem:ais-gemini-3.8-flash": {"status": "unavailable", "http": 404}}
+        g = grouped(main=[row("MainModel")])
+        probe = {"gm:generic-model": {"status": "unavailable", "http": 404}}
         out, _, suspect, _ = self._run(g, probe)
-        self.assertEqual([r["new_id"] for r in out["main"]], ["Gemini-AIS"])
+        self.assertEqual([r["new_id"] for r in out["main"]], ["MainModel"])
         self.assertEqual(len(suspect), 1)
 
     def test_transient_with_ever_ok_always_kept(self):
@@ -124,34 +124,20 @@ class ProbeFilterTest(unittest.TestCase):
 
     def test_missing_probe_entry_keeps_existing_model(self):
         """本轮新补进配置、还没来得及探的型号，按上一版配置保留。"""
-        r = row("Gemini-AIS")
+        r = row("MainModel")
         g = grouped(main=[r])
-        out, kept, _, skipped = self._run(g, {}, existing={"Gemini-AIS": r})
+        out, kept, _, skipped = self._run(g, {}, existing={"MainModel": r})
         self.assertEqual(len(out["main"]), 1)
         self.assertEqual(len(kept), 1)
 
     def test_probe_matches_legacy_id(self):
-        """探测账本用的是 original（gem:ais-…），用 legacy 反查必须也能命中。"""
-        g = grouped(main=[row("Gemini-AIS")])
-        probe = {"gem:ais-gemini-3.7-flash": {"status": "ok"}}
+        """探测账本用的是带渠道前缀的 id，用 legacy 反查必须也能命中。"""
+        g = grouped(main=[row("MainModel")])
+        probe = {"gm:generic-model-2": {"status": "ok"}}
         out, _, suspect, _ = self._run(
-            g, probe, legacy={"gem:ais-gemini-3.7-flash": "Gemini-AIS"})
+            g, probe, legacy={"gm:generic-model-2": "MainModel"})
         self.assertEqual(len(out["main"]), 1)
         self.assertEqual(suspect, [])
-
-
-class ChainCapTest(unittest.TestCase):
-    def test_ais_chain_capped_at_three(self):
-        """用户 2026-11-11 口径「能 3.8 就 3.8」：AIS 链最多 3 跳。"""
-        self.assertEqual(ma.CHAIN_CAP.get("Gemini-AIS"), 3)
-
-    def test_all_ais_hops_have_price(self):
-        """GM 只认显式价，漏收录的跳会被 family_entries 静默丢掉。"""
-        for upstream in ("ais-gemini-3.8-flash", "ais-gemini-3.7-flash",
-                         "ais-gemini-3.6-flash", "ais-gemini-3.5-flash",
-                         "ais-gemini-3.5-flash-lite", "ais-gemini-3.1-flash-lite",
-                         "ais-gemini-3-flash-preview"):
-            self.assertIsNotNone(ma.GM_PRICES.get(upstream), upstream)
 
 
 if __name__ == "__main__":

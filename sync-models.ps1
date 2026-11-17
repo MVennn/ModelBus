@@ -284,8 +284,7 @@ $applyCode = $script:LastCode
 # 否则会被当成 "not probed" 直接跳过。
 # --max-tokens 必须给足：默认 32 在 Gemini/Doubao 这类「先思考再出字」的模型上会被
 # 思考预算吃光，回 400 "max output tokens were exhausted"，探活把它记成 error，
-# 于是「能用的模型」被判死摘掉 —— 2026-11-11 11:02 那次 Gemini-AIS 突然消失就是
-# 同一条路径（timeout 且无 ever_ok → 直接摘）。256 是实测能稳定拿到正文的最小值。
+# 于是「能用的模型」被判死摘掉 —— 某次模型突然消失就是同一条路径（timeout 且无 ever_ok → 直接摘）。256 是实测能稳定拿到正文的最小值。
 Invoke-Py "模型探活" @("tools\model_probe.py", "--timeout", "90", "--sleep", "0.5", "--max-tokens", "256") -Soft
 $probeArgs = @()
 $probeOut = Join-Path $env:USERPROFILE ".zcode\v2\model_probe.json"

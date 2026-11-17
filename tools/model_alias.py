@@ -97,23 +97,17 @@ QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
 # 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
 # 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
 GM_BASE = "https://catiecli.sukaka.top/v1"
+# 2026-11-17：接回新版 Gemini 4 Hydrogen（用户 DSH「1 组」指定的抗截断档）。
+# 中转无公开价目，沿用 0.11 仅用于组内排序/展示；未登记 id 一律返 None（该跳丢弃）。
+GM_PRICES = {
+    "ais-抗截断-gemini-4-hydrogen": 0.11,
+}
 # 哈基米（gemai.cc）中转渠道：key 走 HJM_API_KEY（providers/hajimi/.env.local）。
 # 2026-11-11 用户口径：该渠道的 Gemini 3.8 族整族下线。渠道本身保留（CHANNEL_BASE /
 # CHANNEL_PREFIX / zgate upstreams 里的 HJ 不动），只把价目表清空 —— price_of 对本渠道
 # 一律返 None，任何 id 都进不了模型表，旧配置里的条目在 --apply 时按缺价剔除。
 HJ_BASE = "https://api.gemai.cc/v1"
 HJ_PRICES: dict = {}
-GM_PRICES = {
-    # 上游没有公开价目表，7 个跳一律沿用同一个估算值（0.11 = DeepSeek 标准档）。
-    # 同价是刻意的：跳序不靠价格区分，靠 HOP_PRIORITY 显式压制（见该常量注释）。
-    "ais-gemini-3.8-flash": 0.11,
-    "ais-gemini-3.7-flash": 0.11,
-    "ais-gemini-3.6-flash": 0.11,
-    "ais-gemini-3.5-flash": 0.11,
-    "ais-gemini-3.5-flash-lite": 0.11,
-    "ais-gemini-3.1-flash-lite": 0.11,
-    "ais-gemini-3-flash-preview": 0.11,
-}
 # 千问渠道是**预付额度**：先用掉「每模型 1M tokens」的试用池（2026-12-15 到期），
 # 之后走 ¥300 学生额度（一年有效，到期作废，用不完也不退）。
 # 预付额度的边际单价就是 0，所以整段窗口内按 0 记账；额度真烧光时上游返回配额错误，
@@ -146,20 +140,9 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 谷歌 Gemini Flash 系列（用户 2026-11-10 口径：新建的 catiecli provider 并入主力）。
-    # 7 个上游 id 共用显示名 Gemini-AIS（ABBR），生成时合并成**一条链**（默认 7 跳，CHAIN_CAP 可截短）。
-    # 3.8 这一行是该家族的「名字主人」：chain 的链首与主力组内的位置都由它决定
-    # （_pick_rank 命中链上第一跳就返回，链首恒为 3.8，见 HOP_PRIORITY）。
-    # 另外 6 个必须一并列出：MAIN_ORDER 是「组内顺序 + 点名候选」的唯一权威，
-    # whitelist_items 会给名单里点名、但配置里还没出现的 id 补候选条目；
-    # 只写 3.8 的话，上游新返的 3.7/3.6/3.5/… 就只能等 provider_config 里先出现。
-    "chat:gem:ais-gemini-3.8-flash",
-    "chat:gem:ais-gemini-3.7-flash",
-    "chat:gem:ais-gemini-3.6-flash",
-    "chat:gem:ais-gemini-3.5-flash",
-    "chat:gem:ais-gemini-3.5-flash-lite",
-    "chat:gem:ais-gemini-3.1-flash-lite",
-    "chat:gem:ais-gemini-3-flash-preview",
+    # 谷歌 Gemini 4 Hydrogen（2026-11-17）：用户 DSH「1 组」指定的抗截断档，
+    # 走 GM（catiecli）渠道并入主力。单跳族，不混 search / 普通档。
+    "chat:gem:ais-抗截断-gemini-4-hydrogen",
 ]
 MAIN_IDS = set(MAIN_ORDER)
 
@@ -234,40 +217,9 @@ WB_FIRST_CHANNELS = {"WB"}
 #   · QN=3：限免渠道排最后 —— 免费不等于该优先烧，它的价值是兜底
 # 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
 # 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
-#   · GM=1：谷歌中转（catiecli）直连付费档，与 OC/QD 同档，同型号多跳时按价格排
+#   · GM=1：第三方中转直连付费档，与 OC/QD 同档，按价格排
 CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1, "HJ": 1}
 CHANNEL_RANK_DEFAULT = 4
-
-# 跳级优先级 —— 链内跳排序的**第二维**（紧跟 CHANNEL_RANK，在价格之前）。
-# 为什么需要：GM（catiecli 中转）7 个 Gemini Flash 档**同价**（GM_PRICES 全是 0.11），
-# 光靠 (价格, upstream 字符串) 排会把 "ais-gemini-3.5-flash" 排到
-# "ais-gemini-3.8-flash" 前面 —— 字符串里 "3.5" < "3.8"，用户拿到的新一代
-# 反而成了尾跳。版本新者必须先试，所以把「新一代优先」写成显式数字表。
-# 只对表里的 upstream 生效；其它渠道的跳不在表里 → 取 HOP_PRIORITY_DEFAULT(99)
-# → 同价时的相对顺序与加这张表之前完全一致（行为不变）。
-# 表里只有 GM（catiecli）这一家的 ais-* 跳：它们是同价同渠道，链内顺序除了这张表
-# 没有别的依据。其它渠道的跳一律取默认值（见下一条）。
-HOP_PRIORITY = {
-    "ais-gemini-3.8-flash": 0,
-    "ais-gemini-3.7-flash": 1,
-    "ais-gemini-3.6-flash": 2,
-    "ais-gemini-3.5-flash": 3,
-    "ais-gemini-3.5-flash-lite": 4,
-    "ais-gemini-3.1-flash-lite": 5,
-    "ais-gemini-3-flash-preview": 6,
-}
-HOP_PRIORITY_DEFAULT = 99
-
-# 链长上限 —— 只对「按次计费」的族生效，收窄 chain/fallbacks，不动 legacy_ids。
-# Gemini-AIS 是 catiecli 按次扣额度（0.11/次，不看 token），而 GM 下 7 个 Gemini
-# Flash 档质量差三档：3.8 是新一代、3.7/3.6 够用，3.5 / 3.5-lite / 3.1-lite /
-# 3-flash-preview 是上一代和更老的小模型。按次计费的账是「每多一跳就多付一次
-# 额度」，所以走到那四跳不但白付钱，用户拿到的还是更差的答案 —— 不如直接报错。
-# 用户 2026-11-11 口径：「能 3.8 就 3.8，兜底只是兜底」。
-# 被裁掉的跳仍登记在 legacy_ids 里：老会话点名 ais-gemini-3.5-flash 照样解析到
-# Gemini-AIS，只是链不再真去打它。
-CHAIN_CAP = {"Gemini-AIS": 3}
-
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
 # 试用池到期后边际成本从 0 变真钱，所以它比额度本身更早需要预警 —— 见 write_quota_windows。
@@ -379,21 +331,8 @@ MODEL_META = {}
 ABBR = {
     # 七牛云网关的 id 形如 `qiniu/conatus-free`：去掉 `qiniu/` 前缀，Conatus 自成系列。
     "qiniu/conatus-free": "Conatus",
-    # catiecli 中转的谷歌 id 形如 ais-gemini-3.8-flash：ais- 是中转站自己的前缀，
-    # 不是谷歌型号的一部分，显示名里去掉。
-    # 上游 /v1/models 实返 7 个 Gemini Flash 档（3.8 / 3.7 / 3.6 / 3.5 / 3.5-lite /
-    # 3.1-lite / 3-preview），七个 id 是同一家的同一系列，全部收进同一个显示名
-    # **Gemini-AIS**：组里只留一条「Gemini-AIS」，7 个上游成为这条链的跳，长度受 CHAIN_CAP 限制
-    # （跳序由 HOP_PRIORITY 决定，见 family_entries 的排序键）。
-    # 为什么不按型号各起一个名：用户 2026-11-10 口径是「一个 Gemini 条目，
-    # 版本差异交给逐跳回落」，7 个名字会让选择器里堆 7 行同名系列。
-    "ais-gemini-3.8-flash": "Gemini-AIS",
-    "ais-gemini-3.7-flash": "Gemini-AIS",
-    "ais-gemini-3.6-flash": "Gemini-AIS",
-    "ais-gemini-3.5-flash": "Gemini-AIS",
-    "ais-gemini-3.5-flash-lite": "Gemini-AIS",
-    "ais-gemini-3.1-flash-lite": "Gemini-AIS",
-    "ais-gemini-3-flash-preview": "Gemini-AIS",
+    # Gemini 4 Hydrogen（catiecli）：抗截断档并入主力，显示名去掉中转 ais- 前缀。
+    "ais-抗截断-gemini-4-hydrogen": "Gemini-4-Hydrogen",
     "moonshotai/kimi-k3-free": "Kimi-K3",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
@@ -466,8 +405,7 @@ ABBR = {
 # 自指形式 "Old" -> "Old"），改名后旧 target 不再是任何模型的新 id，resolved_legacy
 # 会把整条记录当成死链丢掉 —— 老会话里选中的模型就解析不到了。main() 在
 # resolved_legacy 过滤前逐条补映射（缺失或自指才改写）。
-# 当前为空：历史上那条 "Gemini-3.8-Flash" -> "Gemini-AIS" 早在 2026-11-10 就撤了，
-# 而该显示名所属的模型也已在 2026-11-11 整族下线（见 HJ_PRICES 注释）。
+# 当前为空：不再保留任何显示名改名映射。
 NAME_RENAMES = {}
 
 # 按渠道拆显示名：同一上游型号在指定渠道上单独成一条模型。
@@ -638,7 +576,7 @@ def provider_rules(cfg: dict) -> list[dict]:
 #   WB / QD 走统一路由（zgate），认 reasoning_effort；
 #   OC 直连 opencode.ai/zen/go，只认 reasoning_effort；
 #   QN 直连七牛；
-#   其余（hjm: 哈基米、gem: AIS）档位是装饰项，不回写。
+#   其余（hjm: 哈基米、gem: 中转）档位是装饰项，不回写。
 EFFORT_CHANNELS = ("WB", "QD", "OC", "QN")
 
 
@@ -664,12 +602,12 @@ def _blank_effort_global(cfg: dict) -> bool:
 # 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
 EMPTY_ALLOWED: set = {
-    # GM（catiecli）的 /v1/models 只有 id，不回 reasoning 能力位，本脚本也无从继承 ——
-    # 这条注定是空档位。2026-11-11 之前它一直被报成「本轮同步补不回来」的漂移，每天让
-    # sync-models.ps1 的漂移复查判失败一次，用户看到的是「复查仍有漂移，需要人工看」，
-    # 实际什么都没坏。
-    "Gemini-AIS",
+    # GM（catiecli）的 /v1/models 只有 id、不回 reasoning 能力位，本脚本也无从继承 ——
+    # 这条注定空档位。2026-11-17 接入的 Gemini-4-Hydrogen 同属 GM 渠道，接替旧
+    # Gemini-AIS（11-11 下线）留在白名单里，避免每日同步漂移复查误判失败。
+    "Gemini-4-Hydrogen",
 }
+
 
 def drifted_efforts(cfg: dict) -> list:
     """上一轮有档位、这一轮算出来却没有的模型 —— 每日同步的回归守门。
@@ -764,7 +702,7 @@ def _inherit_efforts(config: dict, entry: dict, old_rules: dict, entries: list,
     if not own:
         source = _sibling_effort(entry, old_rules, entries)
     if not source and own and not blank_global and not _effort_is_live(entry, current):
-        # 档位落在发不出这个字段的渠道上（哈基米福利档 / AIS）：留着只会让 GUI
+        # 档位落在发不出这个字段的渠道上（哈基米福利档）：留着只会让 GUI
         # 给出无效下拉，但这种「清空」只允许在全局仍有档位时做 —— 否则一次配置
         # 全员为空的事故就会被这段代码焊死成真正的空。
         specs.pop("reasoningLevel", None)
@@ -1100,7 +1038,7 @@ def _effort_is_live(entry: dict, reasoning) -> bool:
       · 渠道在自己的能力表里（WB/QD/OC/QN）→ 网关或上游自己吃档位；
       · 或者 map 里写了字段（Gemini 的 thinking_budget、reasoning_effort 之类）
         → 客户端按表达式拼 body，跟渠道无关，实测同样生效
-        （AIS 的 thinking_budget 0/1024/4096/16384 → reasoning_tokens 0/0/34/164）。
+       ）。
     只有「既不在能力表、又没有 map 表达式」的组合才是空头下拉，该去掉。
     """
     if entry.get("channel") in EFFORT_CHANNELS:
@@ -1425,7 +1363,8 @@ def qw_credit_active() -> bool:
 def price_of(channel: str, upstream: str, wb: dict[str, dict],
              qd: dict[str, dict], slot: str) -> float | None:
     if channel == "GM":
-        # 中转站没有公开价目表：只认 GM_PRICES 的显式价，未收录即 None（该跳被丢）。
+        # 中转无公开价目：只认 GM_PRICES 的显式价，未登记 id 返 None（该跳被丢）。
+        # 2026-11-17 接回 Gemini 4 Hydrogen（抗截断档）。
         return GM_PRICES.get(upstream)
     if channel == "HJ":
         # 哈基米同为转售站，口径同 GM：只认 HJ_PRICES 的显式价，未收录即 None。
@@ -1683,8 +1622,8 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "legacy_ids": [model],
         }
     if model.startswith("gem:"):
-        # 显式 GM 渠道：白名单写 chat:gem:ais-gemini-3.8-flash 走到这里；
-        # 不写前缀会落到末尾 OC 兜底，那条会把 ais- 前缀当成型号名。
+        # 显式 GM 渠道：白名单写 chat:gem:<id> 走到这里；
+        # 不写前缀会落到末尾 OC 兜底，那条会把渠道前缀当成型号名。
         upstream = model[len("gem:"):]
         return {
             "raw": model,
@@ -1945,13 +1884,8 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             # QW 预付额度垫后、QN 限免兜底。原「WB 布尔特判 + TAIL_HOPS 布尔特判」
             # 两段并列逻辑已并入这张表，行为等价性见 CHANNEL_RANK 的注释。
             # 其后按价格、GB/CN 前缀、渠道、名称稳定排序。
-            # 第二键：跳级优先级（HOP_PRIORITY）。同渠道同价时要靠它压住顺序 ——
-            # GM 的 7 个 Gemini Flash 跳同价，纯按 (price, upstream) 排会把 3.5
-            # 排到 3.8 前面（字符串比较）。不在表里的 upstream 取默认 99，
-            # 因为 99 大于所有显式值，所以其它渠道同价时的相对顺序不变。
             group = sorted(group, key=lambda h: (
                 CHANNEL_RANK.get(h["channel"], CHANNEL_RANK_DEFAULT),
-                HOP_PRIORITY.get(h["upstream"], HOP_PRIORITY_DEFAULT),
                 h["price"],
                 0 if h["upstream"].startswith("global:") else 1 if h["upstream"].startswith("cn:") else 2,
                 # 同 rank 内的渠道先后保持历史顺序（QD 先于 OC）：CHANNEL_RANK 只
@@ -1962,13 +1896,8 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             ))
             # 机场兜底排在链尾（见 with_airport_fallback 的注释）。
             group = with_airport_fallback(group)
-            # 链长上限：只收窄真正会去打的 chain/fallbacks，legacy_ids 仍按
-            # 全量 group 收（见 CHAIN_CAP 注释）。
-            cap = CHAIN_CAP.get(abbr)
-            chain_group = group[:cap] if cap and len(group) > cap else group
-            # 被 CHAIN_CAP 裁掉的跳：仍要登记进 legacy_ids，否则老会话点名这些
-            # upstream 会变成 404。dropped_hops 只在真有截断时写进 alias map。
-            dropped = [h["upstream"] for h in group[len(chain_group):]]
+            chain_group = group
+            dropped = []
             is_free_entry = all(h["price"] <= 0 for h in group)
             base_name = abbr
             if protocol != "chat" and "chat" in abbr_protocols.get(abbr, ()):
@@ -2462,7 +2391,7 @@ def apply_probe_filter(grouped: dict[str, list[dict]], probe: dict,
     2026-11-11 再补一条：**主力组成员不许当场删**。主力是用户在模型选择器里
     点名的对象，DSH 侧 zcode-main 的清单由这份配置投影而来，缺了型号不会降级
     而是硬失败（pi-ai: provider "zcode-main" has no configured model
-    "Gemini-AIS"）。那天 AIS 一次 45s 超时 + ever_ok 为空就被摘掉，用户整场
+    某型号）。那天一次 45s 超时 + ever_ok 为空就被摘掉，用户整场
     会话卡死在报错上。主力组改为「保留 + 记一条待核实」，真下架的型号上游会
     回 unavailable/404，那条分支仍然照删。
 
@@ -2823,18 +2752,14 @@ def main() -> int:
     def _consistent_legacy_ids(row: dict) -> list[str]:
         """只留「这条记录真对得上」的 legacy id。
 
-        带渠道前缀的 id（gem:ais-… / hjm:[福利]…）必须能对上该模型某一跳的
-        upstream，对不上就是改名 / 拆族留下的陈旧映射：2026-11-10 把哈基米从
-        Gemini-AIS 链里拆成独立模型时，AIS 的 legacy_ids 里还留着 hjm:[福利]…
-        （上一轮它确实是 AIS 的一跳），不过滤会把这条 id 又指回 AIS，新模型同时
-        继承了 7 个 gem:ais-… 的脏映射。不带前缀的 id（上游原名、旧显示名）不动：
-        历史条目本来就允许跨名字解析。
+        带渠道前缀的 id 必须能对上该模型某一跳的 upstream，对不上就是改名 /
+        拆族留下的陈旧映射；不带前缀的 id（上游原名、旧显示名）不动，历史条目
+        本来就允许跨名字解析。
         """
         chain = row.get("chain") or [{"upstream": row.get("upstream")}]
         upstreams = {_bare(h.get("upstream") or "") for h in chain}
         upstreams |= {_bare(row.get("upstream") or ""), _bare(row.get("original") or "")}
-        # CHAIN_CAP 裁掉的跳也要认：老会话点名 ais-gemini-3.5-flash 时仍解析到
-        # 本模型（只是链不会再打它），不能变成 404。
+        # dropped_hops 里的跳也要认：老会话点名被裁掉的跳仍解析到本模型。
         upstreams |= {_bare(u) for u in row.get("dropped_hops") or []}
         out: list[str] = []
         for lid in row.get("legacy_ids") or [row["original"], row["upstream"]]:
@@ -2912,7 +2837,7 @@ def main() -> int:
                 legacy[legacy_id] = row["new_id"]
 
     # 存量脏映射清理：磁盘上可能留着「带渠道前缀、却对不上目标任何一跳」的 legacy
-    # 条目（拆族前的 hjm:[福利]… -> Gemini-AIS 就是），逐条对照 live 模型的跳表删掉。
+    # 条目（拆族留下的旧映射就是），逐条对照 live 模型的跳表删掉。
     # 只处理带前缀的 key：裸名（上游原名、旧显示名）允许跨名字解析，不动。
     for _key, _target in list(legacy.items()):
         if ":" not in _key:

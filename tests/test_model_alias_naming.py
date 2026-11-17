@@ -65,10 +65,13 @@ class ExplicitOcPrefixTest(unittest.TestCase):
         self.assertTrue(items[0].get("explicit_channel"))
 
     def test_main_order_names_the_gem_hop_explicitly(self) -> None:
-        # 主力组当前是 DeepSeek 三跳 + Gemini 单跳。Gemini 那条走 gem: 显式前缀
-        # （渠道 GM 不在 cn:/qoder: 这些天然前缀里），缺价时只留 WARN 不中断。
+        # 主力组 = DeepSeek 三跳 + Gemini 4 Hydrogen（2026-11-17 接入）。
+        # Gemini 走 gem: 显式前缀（渠道 GM 不在 cn:/qoder: 这些天然前缀里），
+        # 只登记抗截断这一个新版 id，旧 3.8 flash 族不再回主力。
         self.assertIn("chat:cn:deepseek-v4.1-flash", ma.MAIN_ORDER)
-        self.assertIn("chat:gem:ais-gemini-3.8-flash", ma.MAIN_ORDER)
+        self.assertIn("chat:gem:ais-抗截断-gemini-4-hydrogen", ma.MAIN_ORDER)
+        self.assertEqual([m for m in ma.MAIN_ORDER if "gem:" in m],
+                         ["chat:gem:ais-抗截断-gemini-4-hydrogen"])
 
 
 if __name__ == "__main__":

@@ -119,8 +119,8 @@ class PriceIsDerivedTest(unittest.TestCase):
             return dict(built, price=price)
 
         # 主力看名单：名单里的型号即使 0.43 也进主力（豁免价格上限）。
-        # 11-10 主力收敛后名单只剩 DeepSeek 三跳 + gem:ais-gemini-3.8-flash，
-        # 这里用三跳里的 cn:deepseek-v4.1-flash 做样本。
+        # 11-10 主力收敛后名单只剩 DeepSeek 三跳，
+        # 这里用其中的 cn:deepseek-v4.1-flash 做样本。
         self.assertEqual(M.entry_group(entry_for("cn:deepseek-v4.1-flash", 0.43), {}), ("main", "manual"))
         # 名单里的便宜模型 -> 省钱
         self.assertEqual(M.entry_group(entry_for("cn:glm-5.3-flash", 0.08), {}), ("low", ""))

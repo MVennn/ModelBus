@@ -169,9 +169,9 @@ class EvidenceOverlayTest(unittest.TestCase):
 
     def model(self, **over):
         item = {
-            "display": "Gemini-AIS",
+            "display": "BudgetModel",
             "channel": "GM",
-            "base": "ais-gemini-3.8-flash",
+            "base": "gm:generic",
             "context_window": None,
             "max_output_tokens": None,
             "supports_tool_call": None,
@@ -186,7 +186,7 @@ class EvidenceOverlayTest(unittest.TestCase):
 
     def overlay(self, **over):
         item = {
-            "display": "Gemini-AIS",
+            "display": "BudgetModel",
             "channel": "GM",
             "context_window": 1000000,
             "max_output_tokens": 65536,
@@ -206,13 +206,13 @@ class EvidenceOverlayTest(unittest.TestCase):
     def test_fills_only_missing_fields(self):
         model = self.model(context_window=None, max_output_tokens=131072,
                            field_sources={"context_window": None,
-                                          "max_output_tokens": "WB:cn:gemini-ais"})
+                                          "max_output_tokens": "WB:cn:budget-model"})
         merged = cu.merge_evidence([model], {"models": [self.overlay()]})[0]
         self.assertEqual(merged["context_window"], 1000000)
         self.assertEqual(merged["field_sources"]["context_window"], "evidence:GM-selfreport")
         # 接口已经给出的值不被文档覆盖，差异只记 conflicts
         self.assertEqual(merged["max_output_tokens"], 131072)
-        self.assertEqual(merged["field_sources"]["max_output_tokens"], "WB:cn:gemini-ais")
+        self.assertEqual(merged["field_sources"]["max_output_tokens"], "WB:cn:budget-model")
         self.assertEqual(merged["conflicts"][0]["field"], "max_output_tokens")
 
     def test_null_evidence_never_fills(self):

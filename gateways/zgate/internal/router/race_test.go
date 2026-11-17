@@ -13,7 +13,7 @@ import (
 )
 
 // 这些用例钉的是「首块对冲」的三块地基：什么算真内容、谁抢到写端、谁被取消。
-// 它们不碰网络，跑起来是毫秒级；网关行为本身由 .work/gemini-ais-accept.py 实测。
+// 它们不碰网络，跑起来是毫秒级；网关行为本身由线上实测覆盖。
 
 func TestHasContentDelta(t *testing.T) {
 	cases := []struct {
@@ -152,8 +152,8 @@ func TestPeekFirstContentTimesOutOnSilentStream(t *testing.T) {
 // 「清冷却 → 再撞 429 → 再清」的死循环，2026-11-10 实测把整条链打成连片 502。
 func TestSilenceCoolingClearedButRealCoolingKept(t *testing.T) {
 	s := &Server{cool: map[string]time.Time{}, silence: map[string]time.Time{}}
-	silentHop := alias.Hop{Channel: "GM", Upstream: "ais-gemini-3.6-flash"}
-	limitedHop := alias.Hop{Channel: "GM", Upstream: "ais-gemini-3.8-flash"}
+	silentHop := alias.Hop{Channel: "GM", Upstream: "gm-hop-c"}
+	limitedHop := alias.Hop{Channel: "GM", Upstream: "gm-hop-a"}
 
 	s.markSilence(silentHop, time.Minute)
 	s.markCoolingFor(limitedHop, time.Minute)
@@ -179,10 +179,10 @@ func TestSilenceCoolingClearedButRealCoolingKept(t *testing.T) {
 // 第二次请求的首字是 2 秒还是 15 秒，所以用断言钉死。
 func TestRankedChainPrefersProvenFastHop(t *testing.T) {
 	chain := []alias.Hop{
-		{Channel: "GM", Upstream: "ais-gemini-3.8-flash"},
-		{Channel: "GM", Upstream: "ais-gemini-3.6-flash"},
-		{Channel: "GM", Upstream: "ais-gemini-3.5-flash-lite"},
-		{Channel: "GM", Upstream: "ais-gemini-3-flash-preview"},
+		{Channel: "GM", Upstream: "gm-hop-a"},
+		{Channel: "GM", Upstream: "gm-hop-c"},
+		{Channel: "GM", Upstream: "gm-hop-d"},
+		{Channel: "GM", Upstream: "gm-hop-e"},
 	}
 	s := &Server{raceStat: map[string]hopStatSnap{
 		hopKeyForLog(chain[0]): {FirstBlockMs: 0, Verdict: "Service Unavailable 503"},
@@ -206,8 +206,8 @@ func TestRankedChainPrefersProvenFastHop(t *testing.T) {
 // 两个都有实测首块时，快的那个必须排在前面。
 func TestRankedChainOrdersProvenHopsByLatency(t *testing.T) {
 	chain := []alias.Hop{
-		{Channel: "GM", Upstream: "ais-gemini-3.5-flash-lite"},
-		{Channel: "GM", Upstream: "ais-gemini-3-flash-preview"},
+		{Channel: "GM", Upstream: "gm-hop-d"},
+		{Channel: "GM", Upstream: "gm-hop-e"},
 	}
 	s := &Server{raceStat: map[string]hopStatSnap{
 		hopKeyForLog(chain[0]): {FirstBlockMs: 2910, Verdict: "ok"},
@@ -223,9 +223,9 @@ func TestRankedChainOrdersProvenHopsByLatency(t *testing.T) {
 // 成功观测超过 1 小时也要重测，否则一次 503 就能把 3.8 永久压到最后。
 func TestRankedChainRetriesStaleObservations(t *testing.T) {
 	chain := []alias.Hop{
-		{Channel: "GM", Upstream: "ais-gemini-3.8-flash"},
-		{Channel: "GM", Upstream: "ais-gemini-3.7-flash"},
-		{Channel: "GM", Upstream: "ais-gemini-3.6-flash"},
+		{Channel: "GM", Upstream: "gm-hop-a"},
+		{Channel: "GM", Upstream: "gm-hop-b"},
+		{Channel: "GM", Upstream: "gm-hop-c"},
 	}
 	now := time.Now()
 	k38 := hopKeyForLog(chain[0])

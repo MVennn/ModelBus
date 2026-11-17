@@ -3,7 +3,7 @@
 
 回归背景（2026-11-10）：
 1. `main()` 重建 `providerModelRules` 时只按 `old_rules.get(raw/original/upstream)`
-   继承，而上游对 mimo-v2.6-pro / iceman / gemini 系不声明 supported_efforts ——
+   继承，而上游对 mimo-v2.6-pro / iceman 系不声明 supported_efforts ——
    这类模型一旦改名或换链，新规则就继承不到档位，档位静默消失。
 2. 子型号（mimo-v2.6-pro / mimo-v2.6-flash）共用同一套上游枚举，档位可以互借：
    一条被写空时，用同 base_model 兄弟条目已落盘的值补回来。
@@ -88,20 +88,20 @@ class InheritEffortsTest(unittest.TestCase):
         self.assertNotIn("reasoningLevel", picked["Brand-New"].get("optionSpecs") or {})
 
     def test_decorative_channel_drops_unusable_levels(self):
-        # gem 前缀（Gemini-AIS / GM）不在档位渠道表里、map 又是空的：不回写档位，
-        # 免得 GUI 摆一个永远发不出去的下拉
-        cfg = _cfg(_rule("Gemini-AIS", ["disabled", "low"]))
-        entries = [_entry("Gemini-AIS", "ais-gemini-3.8-flash", "ais-gemini-3.8-flash",
+        # 装饰渠道（GM 中转）不在档位渠道表里、map 又是空的：不回写档位，
+        # 免得 GUI 摆一个永远发不出去的下拉（用任意 id，GM 已无收录型号）。
+        cfg = _cfg(_rule("Decorative", ["disabled", "low"]))
+        entries = [_entry("Decorative", "gm:unlisted", "gm:unlisted",
                           channel="GM", protocol="messages")]
         old = {str(r["modelId"]): r["config"] for r in cfg["config"]["modelConfigRules"]["providerModelRules"]}
         picked = A.pick_rule_config(entries, cfg, old)
-        self.assertNotIn("reasoningLevel", picked["Gemini-AIS"].get("optionSpecs") or {})
+        self.assertNotIn("reasoningLevel", picked["Decorative"].get("optionSpecs") or {})
 
     def test_all_blank_global_is_self_healing(self):
         # 整份配置一条档位都没有（历史事故现场）：不能被当成「装饰渠道」清空
-        cfg = _cfg(_rule("Gemini-AIS", []), _rule("Other", []))
+        cfg = _cfg(_rule("Beam", []), _rule("Other", []))
         self.assertTrue(A._blank_effort_global(cfg))
-        cfg2 = _cfg(_rule("Gemini-AIS", []), _rule("Other", ["high"]))
+        cfg2 = _cfg(_rule("Beam", []), _rule("Other", ["high"]))
         self.assertFalse(A._blank_effort_global(cfg2))
 
 
@@ -122,7 +122,7 @@ class NonChatEffortTest(unittest.TestCase):
         self.assertIn("reasoning_effort", cfg["optionSpecs"]["reasoningLevel"]["map"])
 
     def test_messages_protocol_keeps_budget_map_on_decorative_channel(self):
-        # 哈基米/AIS 这类渠道：只要 map 是能求值的表达式，档位就真能生效
+        # 装饰渠道：只要 map 是能求值的表达式，档位就真能生效
         cfg = self._cfg_with(
             ["disabled", "low", "medium", "high"],
             '{"extra_body": {"google": {"thinking_config": {"thinking_budget": 4096}}}}',
@@ -183,6 +183,11 @@ class DriftGateSnapshotTest(unittest.TestCase):
         cfg = _cfg(_rule("Beam", []))
         with unittest.mock.patch.object(A, "EMPTY_ALLOWED", {"Beam"}):
             self.assertEqual(self._gate(cfg), [])
+
+    def test_gemini_hydrogen_is_in_empty_allowlist(self):
+        # GM（catiecli）/v1/models 只回 id、不回 reasoning 能力位，注定空档位；
+        # Gemini-4-Hydrogen 必须在白名单里，否则每日 --check 误判档位漂移、exit 1。
+        self.assertIn("Gemini-4-Hydrogen", A.EMPTY_ALLOWED)
 
     def test_nothing_reported_when_all_have_levels(self):
         cfg = _cfg(_rule("HY3", ["low", "high"]), _rule("Beam", ["low", "high"]))

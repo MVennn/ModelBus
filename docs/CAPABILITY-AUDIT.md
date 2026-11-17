@@ -82,7 +82,7 @@ DSH 看到的每个字段，是 ZCode 引擎按顺序叠加 6 组规则算出来
 | 模型 | 组 | DSH 上下文 | DSH 输出上限 | 图片 | 配置里有 ctx/max/img | 来源 |
 |---|---|---|---|---|---|---|
 | DeepSeek-4.1-Flash | 主力 | 1000000 | 128000 | 是 | 有 | WB 真值 |
-| Gemini-AIS | 主力 | 1000000 | 128000 | 否 | 无 | 兜底 |
+| 某主力模型 | 主力 | 1000000 | 128000 | 否 | 无 | 兜底 |
 | HY3 | 免费 | 192000 | 64000 | 是 | 有 | WB 真值 |
 | HY4-Free | 免费 | 960000 | 64000 | 是 | 有 | WB 真值（孤值） |
 | Beam | 免费 | 1000000 | 128000 | 否 | 无 | 兜底 |
@@ -123,7 +123,7 @@ DSH 看到的每个字段，是 ZCode 引擎按顺序叠加 6 组规则算出来
 | `maxTokens` | 128000 |
 | `input` | 只有 `text` |
 
-19 个模型里符合「三件套全中」的：`Gemini-AIS`、`Beam`、`Conatus`、`Iceman`、`Qwen-3.8-Max`、`Qwen-3.8-Flash`、`MiMo-2.6-Flash`、`Claude-Haiku-5.5`、`Muse-Spark1.3`、`GPT-6-Luna` —— **10 个**，与「`provider_config.json` 里没有 ctx 字段」的 10 条完全重合。
+19 个模型里符合「三件套全中」的：某主力模型、`Beam`、`Conatus`、`Iceman`、`Qwen-3.8-Max`、`Qwen-3.8-Flash`、`MiMo-2.6-Flash`、`Claude-Haiku-5.5`、`Muse-Spark1.3`、`GPT-6-Luna` —— **10 个**，与「`provider_config.json` 里没有 ctx 字段」的 10 条完全重合。
 
 反过来，`HY3`/`HY3-X`（192000/64000）、`HY4`/`HY4-Free`（960000/64000）、`Space-Bunny`（1000000/128000/image）这几个数字不像兜底，才是 WB 真值写进来的。
 
@@ -143,7 +143,7 @@ DSH 看到的每个字段，是 ZCode 引擎按顺序叠加 6 组规则算出来
 | Muse-Spark1.3 | 1048576 | 1000000 | 偏低 4.6% | 同上 |
 | GPT-6-Luna | 1050000 | 1000000 | 偏低 4.8% | 同上 |
 | HY3 / HY3-X | 256000（OC）/ 192000（WB） | 192000 | 取小值 | 保守但可用 |
-| Gemini-AIS | 上游目录没有该字段（GM 只有 id） | 1000000 | 无从判断 | 兜底值，不是真值 |
+| 某主力模型 | 上游目录没有该字段（渠道只给 id） | 1000000 | 无从判断 | 兜底值，不是真值 |
 | Conatus | QN 1000000（QN 目录有 ctx） | 1000000 | 巧合一致 | 值对，但仍是兜底来的 |
 
 ### 3.2 输出上限：12 个模型写死 128000，最大差 4 倍
@@ -198,7 +198,7 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 |---|---|---|---|
 | A 一致 | 11 | HY3、HY3-X、HY4、HY4-Free、Space-Bunny、DeepSeek、GLM、MiniMax、Beam、Muse-Spark1.3、Qwen-3.8-Max | 与上游 `efforts` 逐项相同；DeepSeek 的 `off`→`disabled`、GLM/MiniMax 的 `can_disable` 补 disabled，均符合脚本口径 |
 | B 不一致 | 4 | MiMo-2.6-Pro、Qwen-3.8-Flash、Claude-Haiku-5.5、GPT-6-Luna | 上游 `["high"]` 却填 7 档；后三者多一个 `disabled`（上游没有 off 声明）；GPT-6-Luna 是把上游 `none` 字面改成 `disabled` |
-| C 无来源 | 4 | Gemini-AIS、Conatus、Iceman、MiMo-2.6-Flash | 上游目录里根本没有 effort 字段（GM/QN 不复述能力、OC 只给 `reasoning.supported=true`）→ 档位凭经验填 |
+| C 无来源 | 4 | 某主力模型、Conatus、Iceman、MiMo-2.6-Flash | 上游目录里根本没有 effort 字段（部分渠道不复述能力、OC 只给 `reasoning.supported=true`）→ 档位凭经验填 |
 
 **合计 A=11 / B=4 / C=4**。所以「思考档位」也不是全无来源：八成一致，问题集中在 4 条多塞档位和 4 条凭经验。
 
@@ -341,7 +341,7 @@ dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投
 | Muse-Spark1.3 | 1048576 | 131072 | ✓ | ✓ | OC |
 | GPT-6-Luna | 1050000 | 128000 | ✓ | ✓ | OC |
 | Conatus | 1000000 | 128000 | – | – | QN（上游没给 tool/img，保持空） |
-| Gemini-AIS | 1000000 | 65536 | ✓ | ✓ | GM `/v1beta/models` 自报（厂商文档 1048576，取中继值） |
+| 某主力模型 | 1000000 | 65536 | ✓ | ✓ | 上游 `/v1beta/models` 自报（厂商文档 1048576，取中继值） |
 | Qwen-3.8-Max | – | – | – | – | **无真值**：QD 端点不可达（8790 拒连） |
 | HY3-X | – | – | – | – | **无真值**：WB 面板没有 hy3-x 条目 |
 
@@ -359,8 +359,8 @@ dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投
 
 | 命令 | 结果 |
 |---|---|
-| `python -B tools/caps_upstream.py --check` | **exit 1**（2026-11-11 复跑）：现网缺 `Gemini-AIS` 的 4 个取证字段（ctx / max / tool / img），是 §9.2 与现网脱节的存量差，不是本轮下线的连带 |
-| `python -B tools/model_caps.py --upstream catalog/upstream_caps.json --check` | exit 1，剩 10 条**故意不落**的差异（4 条 `Gemini-AIS` 取证 + 6 条档位/推断，后者见 §9.3） |
+| `python -B tools/caps_upstream.py --check` | **exit 1**（2026-11-11 复跑）：现网缺某主力模型的 4 个取证字段（ctx / max / tool / img），是 §9.2 与现网脱节的存量差，不是本轮下线的连带 |
+| `python -B tools/model_caps.py --upstream catalog/upstream_caps.json --check` | exit 1，剩 10 条**故意不落**的差异（4 条该模型取证 + 6 条档位/推断，后者见 §9.3） |
 | `python -B tools/dsh_sync.py --check` | exit 0，patch 与 provider_config 一致 |
 | `python -B -m unittest discover -s tests -q` | **134** tests OK（2026-11-11 复跑；`tests/test_caps_upstream.py` 是其中一组） |
 
@@ -368,11 +368,11 @@ dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投
 
 ### 9.5 Gemini：接口不给，靠取证补
 
-GM 不会告诉你能力字段（`/v1/models` 只有 id，`/v1beta/models` 自报的 limit 与厂商文档也对不上），所以这条换个取法，证据落 `evidence/topic-gemini-channels.md`（原分片 `agent-gemini-truth.md` 已于 2026-11-13 并入该结论卡）：
+GM 不会告诉你能力字段（`/v1/models` 只有 id，`/v1beta/models` 自报的 limit 与厂商文档也对不上），所以这条换个取法，这类模型的取证口径：上游 `/v1beta/models` 自报 + 厂商文档交叉校验（原结论卡 `evidence/topic-gemini-channels.md` 已于本次清理移除）。
 
 | 模型 | 关键证据 | 采用的结论 |
 |---|---|---|
-| Gemini-AIS（探测时 GM 七跳，现链 3 跳） | GM `/v1beta/models` 七跳全部 `inputTokenLimit=1000000`、`outputTokenLimit=65536`；厂商文档同族 1048576 | ctx 1000000（取中继自报）/ max 65536 / tool ✓ / img ✓ |
+| 某主力模型（探测时多跳降级链，现链 3 跳） | 上游 `/v1beta/models` 各跳均报 `inputTokenLimit=1000000`、`outputTokenLimit=65536`；厂商文档同族 1048576 | ctx 1000000（取中继自报）/ max 65536 / tool ✓ / img ✓ |
 
 原文兜底值也错在一起：`max_output_tokens=128000`（真值 65536，虚高约一倍）、`supports_image=false`（实际收图）。改完 DSH 侧 `maxTokens: 65536`、`input: [text, image]` 都已投影。
 

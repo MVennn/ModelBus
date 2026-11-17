@@ -306,5 +306,5 @@ python gateways/zgate/build.py --check
 
 - 换版九步、单计划任务、`install-lifecycle.ps1` 的动作校正：§2、§4、§5。
 - 参数为什么这么取值、逐跳怎么聚合、上游语义三分类： [ROUTING-POLICY.md](ROUTING-POLICY.md)。
-- 已知故障形态与现场处置： [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16、§18；坑的机制见 [PITFALLS.md](PITFALLS.md) §20、§41–§47。
+- 已知故障形态与现场处置： [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16、§17；坑的机制见 [PITFALLS.md](PITFALLS.md) §20、§41–§47。
 - 加渠道要改哪六处： [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0。

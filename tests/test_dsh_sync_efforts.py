@@ -6,8 +6,8 @@
    Muse-Spark1.3 / GPT-6-Luna 的档位就此消失 —— 模型选择器里这些模型没有推理等级。
 2. `_merge_patch()` 整段重建 `zcode-*` 路由，人工补进 patch 的 reasoningEfforts
    会被每天 12:00 的定时同步冲掉。
-3. `compat.thinkingFormat: deepseek` 原来只要源头有 disabled 就加，Gemini 系
-   （thinking_budget 协议）和「只有开关」的模型套上它，档位看着有、实际不生效。
+3. `compat.thinkingFormat: deepseek` 原来只要源头有 disabled 就加，thinking_budget
+   协议和「只有开关」的模型套上它，档位看着有、实际不生效。
 
 跑法：python -B -m unittest discover -s tests -p "test_dsh_sync_efforts.py" -v
 """
@@ -51,7 +51,7 @@ class ReasoningMappingTest(unittest.TestCase):
         self.assertEqual(out["reasoningEfforts"], {"high": "high"})
 
     def test_thinking_format_needs_real_effort_protocol(self):
-        # Gemini 的 thinking_budget 协议不吃 deepseek 格式
+        # thinking_budget 协议不吃 deepseek 格式
         gem = S._reasoning(
             ["disabled", "low", "high"],
             '{extra_body: {google: {thinking_config: {thinking_budget: 0}}}}',
@@ -134,19 +134,19 @@ class EffortDriftGateTest(unittest.TestCase):
     """源头有档位、投影后为空 —— 每日同步必须能提前发现，而不是等用户发现。"""
 
     def test_source_levels_without_projection_is_drift(self):
-        rules = {("zcode-main", "Gemini-AIS"): {"optionSpecs": {"reasoningLevel": {
+        rules = {("zcode-main", "BudgetModel"): {"optionSpecs": {"reasoningLevel": {
             "values": ["disabled", "low", "high"],
             "map": "{}",
         }}}}
-        routes = {"zcode-main": {"models": [{"id": "Gemini-AIS"}]}}
+        routes = {"zcode-main": {"models": [{"id": "BudgetModel"}]}}
         self.assertEqual(len(K._efforts_lost(rules, routes)), 1)
 
     def test_projected_levels_are_fine(self):
-        rules = {("zcode-main", "Gemini-AIS"): {"optionSpecs": {"reasoningLevel": {
+        rules = {("zcode-main", "BudgetModel"): {"optionSpecs": {"reasoningLevel": {
             "values": ["disabled", "low"],
         }}}}
         routes = {"zcode-main": {"models": [
-            {"id": "Gemini-AIS", "reasoningEfforts": {"off": "disabled", "low": "low"}}
+            {"id": "BudgetModel", "reasoningEfforts": {"off": "disabled", "low": "low"}}
         ]}}
         self.assertEqual(K._efforts_lost(rules, routes), [])
 

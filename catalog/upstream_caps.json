@@ -6,18 +6,15 @@
   "sources": {
     "wb": {
       "url": "http://127.0.0.1:7863/panel/api/models",
-      "count": 20,
-      "error": null
+      "count": 20
     },
     "oc": {
       "url": "https://opencode.ai/zen/go/v1/models",
-      "count": 30,
-      "error": null
+      "count": 30
     },
     "qn": {
       "url": "https://api.qnaigc.com/v1/models",
-      "count": 89,
-      "error": null
+      "count": 89
     }
   },
   "models": [
@@ -47,33 +44,6 @@
       ],
       "cross": [],
       "notes": ""
-    },
-    {
-      "display": "Gemini-AIS",
-      "channel": "GM",
-      "base": "ais-gemini-3.8-flash",
-      "context_window": 1000000,
-      "max_output_tokens": 65536,
-      "supports_tool_call": true,
-      "supports_image": true,
-      "field_sources": {
-        "context_window": "evidence:GM-v1beta-models-selfreport",
-        "max_output_tokens": "evidence:GM-v1beta-models+vendor-doc",
-        "supports_tool_call": "evidence:vendor-doc-gemini-3.8-flash-tools",
-        "supports_image": "evidence:vendor-doc-gemini-3.8-flash-modalities"
-      },
-      "conflicts": [
-        {
-          "field": "context_window",
-          "values": {
-            "GM:v1beta-models": 1000000,
-            "vendor-doc": 1048576
-          },
-          "picked": "evidence:GM-v1beta-models-selfreport"
-        }
-      ],
-      "cross": [],
-      "notes": "GM 端点 /v1/models 只返回 id/object/owned_by，无能力字段；GM /v1beta/models 自报 7 跳全部 inputTokenLimit=1000000、outputTokenLimit=65536，与厂商文档只有 ctx 差 4.8%，取中继自报值；图像能力 GM 侧未实测成功（3.8 全 503），按厂商文档判可用。取证：evidence/agent-gemini-truth.md"
     },
     {
       "display": "HY3",
@@ -135,13 +105,9 @@
       "base": "qiniu/conatus-free",
       "context_window": 1000000,
       "max_output_tokens": 128000,
-      "supports_tool_call": null,
-      "supports_image": null,
       "field_sources": {
         "context_window": "QN:qiniu/conatus-free",
-        "max_output_tokens": "QN:qiniu/conatus-free",
-        "supports_tool_call": null,
-        "supports_image": null
+        "max_output_tokens": "QN:qiniu/conatus-free"
       },
       "conflicts": [],
       "cross": [],
@@ -187,16 +153,7 @@
       "display": "Qwen-3.8-Max",
       "channel": "QD",
       "base": "Qwen3.8-Max",
-      "context_window": null,
-      "max_output_tokens": null,
-      "supports_tool_call": null,
-      "supports_image": null,
-      "field_sources": {
-        "context_window": null,
-        "max_output_tokens": null,
-        "supports_tool_call": null,
-        "supports_image": null
-      },
+      "field_sources": {},
       "conflicts": [],
       "cross": [
         {
@@ -330,16 +287,7 @@
       "display": "HY3-X",
       "channel": "WB",
       "base": "hy3-x",
-      "context_window": null,
-      "max_output_tokens": null,
-      "supports_tool_call": null,
-      "supports_image": null,
-      "field_sources": {
-        "context_window": null,
-        "max_output_tokens": null,
-        "supports_tool_call": null,
-        "supports_image": null
-      },
+      "field_sources": {},
       "conflicts": [],
       "cross": [],
       "notes": "WB 上游未列出 http://127.0.0.1:7863/v1"
