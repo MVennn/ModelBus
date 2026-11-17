@@ -91,6 +91,15 @@ ROUTER_BASE = "http://127.0.0.1:7871/v1"
 WB_BASE = "http://127.0.0.1:7863/v1"
 QD_BASE = "http://127.0.0.1:8790/v1"
 OC_BASE = "https://opencode.ai/zen/go/v1"
+# OpenCode Zen TUI 专属免费档：走本地 Bun 代理（补头 + Bun TLS 指纹过两道门），
+# 不是 zen/go 端点。这些 upstream 仍归 OC 渠道（复用 OC key 过路由非空校验），
+# 但 base 由 UPSTREAM_BASE 逐条覆盖到 8789，不影响其他 OC 模型。
+ZEN_FREE_BASE = "http://127.0.0.1:8789/v1"
+ZEN_FREE_UPSTREAMS = frozenset({
+    "big-pickle", "mimo-v2.6-flash-free", "glm-5.3-flash-free", "iceman-free",
+    "inkling-2-small-free", "flint-40b-free", "nemotron-3.5-super-vl-free",
+    "nemotron-3.5-lightning-free", "deepseek-v4.1-flash-free",
+})
 QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
 # 谷歌 Gemini（123 中转 odyfree，OpenAI 兼容直连）。第三方转售通道没有公开价目表，
 # 价格按 DeepSeek 主力标准档估算，只影响组内排序与展示；渠道级返回 None 会让
@@ -182,6 +191,24 @@ LOW_ORDER = [
 ]
 LOW_PICKS = set(LOW_ORDER)
 
+# OpenCode Zen TUI 专属免费档固定注入（2026-11-17）：这批只在官方 /inference/v1
+# 免费端点可用，不在 zen/go 端点清单里，每日 go_model_sync 不会收录。用白名单补入
+# 让它们每次 alias 都参与计算；归 oc: 前缀走 OC 渠道，base 由 ZEN_FREE_UPSTREAMS
+# 覆盖到 8789 本地 Bun 代理。价格由 OC_PRICES 的 flat=0.00 提供。
+# 只放真正缺失的 9 个：beam-free / iceman-contributor-free / longcat-2.5-free /
+# hy4-flash-free / deepseek-v4.1-flash 已在 go 端点收录，不重复注入。
+INJECT_ORDER = [
+    "chat:oc:big-pickle",
+    "chat:oc:mimo-v2.6-flash-free",
+    "chat:oc:glm-5.3-flash-free",
+    "chat:oc:iceman-free",
+    "chat:oc:inkling-2-small-free",
+    "chat:oc:flint-40b-free",
+    "chat:oc:nemotron-3.5-super-vl-free",
+    "chat:oc:nemotron-3.5-lightning-free",
+    "chat:oc:deepseek-v4.1-flash-free",  # 免费版 V4.1-Flash-1017；靠 SPLIT_CHANNEL_DISPLAY 自成一族，不并主力
+]
+
 # 每厂商在省钱组最多保留几个代表（用户 2026-11-06 口径：每家公司 1–2 个特色型号）。
 # 超出的按「版本号高者优先、同版本贵者优先（旗舰先行）」裁掉，人工名单里被裁掉的
 # 留在原名单但不进组 —— 名单本身不改，只影响分组。
@@ -251,6 +278,11 @@ def with_airport_fallback(hops: list[dict]) -> list[dict]:
     for h in hops:
         if h.get("channel") != "OC" or str(h.get("proxy") or ""):
             continue
+        # Zen TUI 免费档的 base 是本机 Bun 代理 8789（见 ZEN_FREE_BASE），
+        # 给它们加机场孪生跳会让机场去连它自己的 127.0.0.1:8789 → 必 502。
+        # 这些档走本地代理已能直连，地区受限兜底对它们无意义，直接跳过。
+        if _bare(str(h.get("upstream") or "")) in ZEN_FREE_UPSTREAMS:
+            continue
         if (h["channel"], h["upstream"]) in have:
             continue
         twin = dict(h)
@@ -314,6 +346,18 @@ OC_PRICES = {
     # 与 go 段报告的「免费」档一致（flat=0.00），口径同 beam-free / iceman-contributor-free。
     "hy4-flash-free": {"flat": 0.00},
     "longcat-2.5-free": {"flat": 0.00},
+    # 2026-11-17 OpenCode Zen TUI 专属免费档（经本地 Bun 代理 8789 过两道门后实测 200）。
+    # 这批走 inference/v1 免费端点、不在 zen/go 端点清单里，由 INJECT_ORDER 固定注入，
+    # 归 OC 渠道但 base 由 UPSTREAM_BASE 覆盖到 8789。价格与官方 catalog cost=0 一致。
+    "big-pickle": {"flat": 0.00},
+    "mimo-v2.6-flash-free": {"flat": 0.00},
+    "glm-5.3-flash-free": {"flat": 0.00},
+    "iceman-free": {"flat": 0.00},
+    "inkling-2-small-free": {"flat": 0.00},
+    "flint-40b-free": {"flat": 0.00},
+    "nemotron-3.5-super-vl-free": {"flat": 0.00},
+    "nemotron-3.5-lightning-free": {"flat": 0.00},
+    "deepseek-v4.1-flash-free": {"flat": 0.00},
 }
 # Qoder fallback if the hub is not reachable; live /v1/models wins.
 QD_PRICES = {
@@ -424,6 +468,9 @@ NAME_RENAMES = {}
 # 直接用它替换 abbr，于是这一跳不再并进原条目，而是自成一族；原条目（WB / QW 跳）不变。
 SPLIT_CHANNEL_DISPLAY = {
     ("deepseek-v4.1-flash", "OC"): "DeepSeek-4.1-Flash-OC",
+    # 免费版 V4.1-Flash-1017：base_model 带 -free，跟主力不同族键，
+    # 必须显式拆出来，否则 MERGE_FREE_GB 把价格 0 的跳并进主力、把 0.11 改 0。
+    ("deepseek-v4.1-flash-free", "OC"): "DeepSeek-4.1-Flash-Free",
 }
 
 # 拆分条目的元数据母名：providerModelRules 里没有新显示名的历史条目，
@@ -431,6 +478,7 @@ SPLIT_CHANNEL_DISPLAY = {
 # 否则 DSH 侧这条模型只有 enabled:true，一律落宿主默认值。
 SPLIT_PARENT_DISPLAY = {
     "DeepSeek-4.1-Flash-OC": "DeepSeek-4.1-Flash",
+    "DeepSeek-4.1-Flash-Free": "DeepSeek-4.1-Flash",
 }
 
 
@@ -618,6 +666,12 @@ EMPTY_ALLOWED: set = {
     # 「上游目录未声明档位」，与 longcat-2.0 同批），独立成条后注定空档位；
     # 2026-11-17 收录进免费组后每日同步 --check 会误判成档位漂移，显式豁免。
     "longcat-2.5",
+    # Zen TUI 免费档（8789 代理）上游不声明 reasoning.effort，独立成条后空档位，
+    # 加显示名避免每日 --check 误报档位漂移。名称取 alias map 实际 abbr：
+    # ABBR 表命中的走映射（GLM/MiMo），未命中的是剥 -free 后的小写裸名。
+    "big-pickle", "flint-40b", "iceman", "inkling-2-small",
+    "nemotron-3.5-lightning", "nemotron-3.5-super-vl",
+    "GLM-5.3-Flash", "MiMo-2.6-Flash",
 }
 
 
@@ -1783,6 +1837,12 @@ def expand_hops(item: dict) -> list[dict]:
             })
             # 机场孪生跳的出口要跟着跳走，否则下一轮它会被当成普通直连跳。
             sub["proxy"] = str(hop.get("proxy") or "")
+            # Zen TUI 免费档的 base 是本机 8789（见 ZEN_FREE_BASE）：机场服务器
+            # 去连它自己的 127.0.0.1:8789 必 502，兜底毫无意义。存量 alias map
+            # 里若还留着这种 twin（早期版本生成的），在这里滤掉，否则它会随
+            # expand_hops 递归保留、with_airport_fallback 幂等跳过，永远摘不掉。
+            if sub["proxy"] and _bare(str(sub.get("upstream") or "")) in ZEN_FREE_UPSTREAMS:
+                continue
             out.append(sub)
         return out
     out = [dict(item)]
@@ -1827,7 +1887,10 @@ CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE,
                 "QN": QN_BASE, "GM": GM_BASE, "HJ": HJ_BASE}
 
 
-def base_of(channel: str) -> str:
+def base_of(channel: str, upstream: str | None = None) -> str:
+    # Zen TUI 免费档逐条覆盖到 8789（见 ZEN_FREE_UPSTREAMS）；其他 upstream 走渠道默认。
+    if upstream and _bare(str(upstream)) in ZEN_FREE_UPSTREAMS:
+        return ZEN_FREE_BASE
     return CHANNEL_BASE.get(channel, OC_BASE)
 
 
@@ -1919,7 +1982,7 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             for h in chain_group:
                 hop = {
                     "upstream": h["upstream"],
-                    "base": base_of(h["channel"]),
+                    "base": base_of(h["channel"], h["upstream"]),
                     "channel": h["channel"],
                     "protocol": h["protocol"],
                     "price": h["price"],
@@ -2510,7 +2573,7 @@ def main() -> int:
         for item in items
     }
     extra = []
-    for item in whitelist_items(MAIN_ORDER + LOW_ORDER):
+    for item in whitelist_items(MAIN_ORDER + LOW_ORDER + INJECT_ORDER):
         bare = _bare(str(item.get("upstream") or ""))
         base = str(item.get("base_model") or "")
         if item.get("explicit_channel"):
@@ -2823,13 +2886,23 @@ def main() -> int:
                 "config": config,
                 "providerId": provider_id,
             })
-            base = base_of(row["channel"])
+            base = base_of(row["channel"], row["upstream"])
             alias_models[row["new_id"]] = {
                 # 显示名（可撞、去后缀）与代号（row["new_id"]，唯一）分离：
                 # DSH 界面用 displayName 显示，内部调用与 alias map 键仍用 new_id。
-                # abbr 是 family_entries 归一后的族名（-free/-Msg/-Resp 后缀已剥离），
-                # 撞名时 new_id 自动加 -2 而 abbr 不变 —— 正是「重命名可撞、代号唯一」。
-                "displayName": row["abbr"],
+                # 显示名 = 模型主体名 + 可选的 -OC 标记：
+                #   - 基础取 abbreviate(base_model)，只留模型主体名，-Free/-Msg/-Resp/-2
+                #     这种「只为区分条目」的后缀一律不带（免费由「免费」分组表达）。
+                #   - 唯一例外 -OC：用户 2026-11-17 要求临时保留，用来标识走 OC 付费
+                #     额度的拆分条目（额度烧完就撤，届时删掉这个 -OC 分支即可）。
+                # 不用 row["abbr"] 本身是因为它把 -OC/-Free 都带上了；这里从 base_model
+                # 重算干净主体名，仅按 abbr 是否以 -OC 结尾补回 OC 标记。
+                # 撞名无所谓：代号 new_id 仍唯一（拆条目靠 SPLIT_CHANNEL_DISPLAY 分族、
+                # 真撞了加 -2），人看不见 —— 正是「重命名可撞、代号唯一」。
+                "displayName": (
+                    abbreviate(str(row.get("base_model") or ""))
+                    + ("-OC" if str(row.get("abbr", "")).endswith("-OC") else "")
+                ),
                 "channel": row["channel"],
                 "region": "",
                 "upstream": row["upstream"],

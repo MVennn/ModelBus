@@ -1,0 +1,108 @@
+on:
+  repository_dispatch:
+  push:
+    branches:
+      - main
+    paths-ignore:
+      - '**.md'
+      - '.vscode/**'
+  pull_request:
+    paths-ignore:
+      - '**.md'
+      - '.vscode/**'
+  workflow_dispatch:
+    inputs:
+      arg_name:
+        description: '镜像标签, 例如 opencode-free-provider:latest'
+        required: true
+        default: 'opencode-free-provider:latest'
+      arg_registry:
+        description: '镜像仓库地址 (ghcr.io / 其它 registry)'
+        required: true
+        default: 'ghcr.io'
+      arg_user:
+        description: '镜像仓库用户名'
+        required: true
+        default: 'jcleng'
+      arg_platforms:
+        description: '目标平台列表'
+        required: true
+        default: 'linux/amd64,linux/arm64'
+
+name: build multi-arch images && push
+jobs:
+  buildimages:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+    - name: Checkout Repos
+      uses: actions/checkout@v4
+
+    # 跨架构构建不需要虚拟机: BuildKit 会为每个 platform 各跑一遍 Dockerfile,
+    # 非本机架构的 RUN 指令由 QEMU 用户态模拟执行 (binfmt_misc 注册 qemu-*),
+    # 最终由 BuildKit 合并成一个 manifest list (OCI image index) 推送。
+    # 产物里不含 QEMU, 真机按自身架构拉取对应的单架构镜像。
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Login to Registry
+      uses: docker/login-action@v3
+      with:
+        registry: ${{ github.event.inputs.arg_registry || 'ghcr.io' }}
+        username: ${{ github.event.inputs.arg_user || github.actor }}
+        password: ${{ secrets.GITHUB_TOKEN }}
+        logout: false
+
+    # 一次构建多架构并直接推送 (--push 才能保存 manifest list; --load 只支持单平台)。
+    # PR 上只构建不推送, 避免污染 registry。
+    - name: Build and push multi-arch image
+      id: build
+      run: |
+        IMAGE="${{ github.event.inputs.arg_registry || 'ghcr.io' }}/${{ github.event.inputs.arg_user || github.actor }}/${{ github.event.inputs.arg_name || 'opencode-free-provider:latest' }}"
+        PLATFORMS="${{ github.event.inputs.arg_platforms || 'linux/amd64,linux/arm64' }}"
+        echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+        echo "PLATFORMS=$PLATFORMS" >> "$GITHUB_ENV"
+
+        PUSH_FLAG="--push"
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # PR: 只验证能否为所有目标平台构建, 不推送到 registry
+          PUSH_FLAG="--output=type=cacheonly"
+        fi
+
+        docker buildx build . \
+          --platform "$PLATFORMS" \
+          --provenance=false \
+          $PUSH_FLAG \
+          -t "$IMAGE"
+
+    - name: Inspect manifest list
+      if: github.event_name != 'pull_request'
+      run: |
+        docker buildx imagetools inspect "$IMAGE"
+        echo "--- architectures ---"
+        docker buildx imagetools inspect "$IMAGE" \
+          --format '{{range .Manifest.Manifests}}{{.Platform.OS}}/{{.Platform.Architecture}} {{end}}'
+
+    - name: Smoke test each platform
+      run: |
+        set -euo pipefail
+        # 从本地构建缓存/registry 取镜像运行, 验证产物在该架构下真的可执行。
+        SRC="$IMAGE"
+        if [ "${{ github.event_name }}" = "pull_request" ]; then
+          # PR 未推送, 改用单平台本地构建做冒烟测试
+          for PLAT in ${PLATFORMS//,/ }; do
+            docker buildx build . --platform "$PLAT" --load -t "smoke:${PLAT##*/}"
+            docker run --rm --platform "$PLAT" "smoke:${PLAT##*/}" bun -e 'console.log(process.platform, process.arch)'
+          done
+        else
+          for PLAT in ${PLATFORMS//,/ }; do
+            docker run --rm --platform "$PLAT" "$SRC" bun -e 'console.log(process.platform, process.arch)'
+          done
+        fi

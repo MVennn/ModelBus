@@ -4027,3 +4027,20 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - [x] `docs/MODEL-PROVIDERS.md` §4.11：补档位白名单说明与 `--check` exit 0 证据。
 - 复验：`--check` exit 0（漂移清零）；6 测试文件 OK（naming 7 / hop_order 5 / price 15 / efforts 15 / dsh_sync_efforts / cel_map_guard 13）；check-project exit 0、check-docs exit 0。
 - 教训已记入 error_lessons（id Lmwk5w392）。
+
+### 14:33 补：Zen 免费档机场 twin 导致 big-pickle 502（结构性 bug）
+- [x] tools/model_alias.py：with_airport_fallback 与 expand_hops 两处跳过 ZEN_FREE_UPSTREAMS 的机场 twin。根因：这批档 base 被覆盖到本机 8789（Bun relay），机场出口去连它自己的 127.0.0.1:8789 必 502；旧 twin 随 alias map 经 expand_hops 递归保留、with_airport_fallback 幂等不再加，只堵新增摘不掉存量，故两处都要改。
+- [x] tests/test_model_alias_hop_order.py：test_zen_free_hops_get_no_airport_twin 覆盖两道防线（新增不加 + 存量滤除），并断言普通 OC 型号的 twin 仍保留（地区受限兜底不能一起砍）。
+- [x] 生成产物：model_alias.py --apply 重写 alias map（备份 .bak-alias-20261117-143131-009300），big-pickle chain 从两跳变单跳、fallbacks 空；POST /admin/reload（X-Zgate-Admin:1）热加载生效。
+
+## 验收
+- 测试：test_model_alias_hop_order.py 7/7 OK（含新增用例）；dry-run 与磁盘 alias map 均显示 chain 只有 OC:big-pickle 单跳。
+- zgate.log L11117：reload 后请求 -> OC:big-pickle (1/1) 单跳，机场坏跳已消失。
+- 直探 8789 上游：big-pickle / mimo-v2.6-flash-free / glm-5.3-flash-free / iceman-free / flint-40b-free 全部 429 QUOTA_EXHAUSTED。
+
+## 待解决 / 注意事项
+- 剩余 502 非配置问题：OpenCode Zen 免费档对本机出口 IP 的当日额度已耗尽，上游回 Retry-After 62776 秒 / Quota-Reset 2026-11-17T23:59:35.725Z（约 17h26m 后），届时自动恢复，无需改配置。
+- 要立即恢复只能绕开免费档：配 OPENCODE_ZEN_API_KEY 或走付费档——属凭据/选型，未在本次擅自改动。
+- 本批次改动只在上述两个文件；git status 里 docs/MODEL-ALIAS.md、test_model_alias_naming.py、tools/check-docs.py、providers/opencode-zen/ 是既有/别处改动，未触碰。
+
+## 状态: 已完成

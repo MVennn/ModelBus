@@ -14,6 +14,7 @@ HY4-Std、把任何 flash 收成 -Fs、把任何 preview 收成 -Pre，于是同
 from __future__ import annotations
 
 import importlib.util
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -77,11 +78,29 @@ class DisplayNameSeparationTest(unittest.TestCase):
                          "代号（name→new_id）必须唯一，一条带 -Free")
         self.assertTrue(any(e["name"].endswith("-Free") for e in hy4))
 
-    def test_writer_projects_abbr_as_display_name(self) -> None:
-        # 写盘约定：alias map 每条的 displayName 取 abbr（去后缀族名）。
+    def test_writer_projects_clean_base_name_as_display_name(self) -> None:
+        # 写盘约定：displayName = abbreviate(base_model) + 可选 -OC 标记。
+        # 只留模型主体名，-Free/-Msg/-Resp/-2 都不带；-OC 临时保留（用户 2026-11-17）。
         src = (HERE.parent / "tools" / "model_alias.py").read_text(encoding="utf-8")
-        self.assertIn('"displayName": row["abbr"]', src,
-                      "写盘必须把 abbr 投影成 displayName，供 dsh_sync 读成 DSH name")
+        self.assertIn('abbreviate(str(row.get("base_model") or ""))', src,
+                      "写盘必须从 base_model 重算干净显示名，供 dsh_sync 读成 DSH name")
+        self.assertIn('endswith("-OC")', src,
+                      "写盘必须保留 -OC 标记（临时，额度用完撤）")
+
+    def test_distinguishing_suffixes_never_in_display_name(self) -> None:
+        # -Free/-Msg/-Resp/-2 这类区分后缀不进显示名；-OC 是用户点名临时保留的例外。
+        cases = {
+            "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
+            "deepseek-v4.1-flash-free": "DeepSeek-4.1-Flash",
+            "hy4flash-free": "HY4-Flash",
+            "glm-5.3-flash-free": "GLM-5.3-Flash",
+        }
+        for upstream, expect in cases.items():
+            self.assertEqual(ma.abbreviate(upstream), expect, upstream)
+            self.assertFalse(
+                re.search(r"-(?:Free|Msg|Resp)(?:-\d+)?$", ma.abbreviate(upstream)),
+                f"显示名不能带这些区分性后缀：{upstream}",
+            )
 
 
 class ExplicitOcPrefixTest(unittest.TestCase):

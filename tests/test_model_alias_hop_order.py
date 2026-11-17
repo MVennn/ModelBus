@@ -100,6 +100,76 @@ class HopOrderTest(unittest.TestCase):
         )
         self.assertEqual(ma.WB_FIRST_CHANNELS, {"WB"})
 
+    def test_free_1017_splits_without_polluting_main(self):
+        # 免费版 V4.1-Flash-1017（oc:deepseek-v4.1-flash-free）必须与付费主力
+        # DeepSeek-4.1-Flash 分成两条：否则 MERGE_FREE_GB 把 price=0 的跳并进主力，
+        # 主力价格 0.11 会被改成 0、链路被改写到免费端点（--check 漂移）。
+        items = [
+            _hop("WB", "cn:deepseek-v4.1-flash", 0.11),
+            _hop("OC", "deepseek-v4.1-flash", 0.11, base_model="deepseek-v4.1-flash"),
+            _hop("OC", "deepseek-v4.1-flash-free", 0.00, base_model="deepseek-v4.1-flash-free"),
+        ]
+        entries = ma.family_entries(items, {}, {}, "auto")
+        main = [e for e in entries if e["name"] == "DeepSeek-4.1-Flash"]
+        free = [e for e in entries if e["name"] == "DeepSeek-4.1-Flash-Free"]
+        self.assertEqual(len(main), 1, f"主力应恰好一条，实际 {len(main)}")
+        self.assertEqual(len(free), 1, f"免费档应自成一族恰好一条，实际 {len(free)}")
+        self.assertEqual(main[0]["price"], 0.11, "主力价格不能被免费档拉到 0")
+        self.assertEqual(free[0]["price"], 0.0, "免费档价格必须是 0")
+        self.assertNotIn(
+            "deepseek-v4.1-flash-free",
+            [h["upstream"] for h in main[0]["chain"]],
+            "免费 upstream 不能混进主力链",
+        )
+        # 免费档走本地 Bun 代理 8789（ZEN_FREE_UPSTREAMS 覆盖）。
+        self.assertTrue(
+            all(h["base"] == ma.ZEN_FREE_BASE for h in free[0]["chain"]),
+            "免费档链路 base 必须全部指向 8789 代理",
+        )
+
+    def test_zen_free_hops_get_no_airport_twin(self):
+        # Zen TUI 免费档的 base 是本机 8789，机场 twin 会让机场去连它自己的
+        # 127.0.0.1:8789 → 必 502（big-pickle 就是这样整条链断掉的）。
+        # 两道防线都要在：新增时不加（with_airport_fallback），存量 alias map
+        # 里已有的 twin 也要滤掉（expand_hops），否则坏跳递归保留、永远摘不掉。
+        for upstream in ("big-pickle", "mimo-v2.6-flash-free", "glm-5.3-flash-free"):
+            # 防线一：新增
+            hops = [_hop("OC", upstream, 0.00)]
+            out = ma.with_airport_fallback(hops)
+            self.assertEqual(len(out), 1,
+                f"{upstream} 不应被加机场 twin，实际 {len(out)} 跳")
+            # 防线二：存量 twin 被 expand_hops 滤掉
+            stale = {
+                "channel": "OC", "upstream": upstream, "protocol": "chat",
+                "base_model": upstream, "original": f"oc:{upstream}",
+                "chain": [
+                    {"channel": "OC", "upstream": upstream, "protocol": "chat",
+                     "base_model": upstream},
+                    {"channel": "OC", "upstream": upstream, "protocol": "chat",
+                     "base_model": upstream, "proxy": ma.AIRPORT_PROXY},
+                ],
+            }
+            expanded = ma.expand_hops(stale)
+            self.assertEqual(len(expanded), 1,
+                f"{upstream} 存量 twin 应被滤掉，实际 {len(expanded)} 跳")
+            self.assertEqual(str(expanded[0].get("proxy") or ""), "",
+                f"{upstream} 不应残留 proxy")
+        # 普通 OC 型号（非 ZEN_FREE）的机场 twin 是地区受限兜底，不能一起砍掉。
+        normal = ma.with_airport_fallback([_hop("OC", "gpt-6-luna", 0.09)])
+        self.assertEqual(len(normal), 2, "普通 OC 型号仍要有机场 twin")
+        self.assertEqual(str(normal[1].get("proxy") or ""), ma.AIRPORT_PROXY)
+        normal_stale = {
+            "channel": "OC", "upstream": "gpt-6-luna", "protocol": "chat",
+            "base_model": "gpt-6-luna", "original": "oc:gpt-6-luna",
+            "chain": [
+                {"channel": "OC", "upstream": "gpt-6-luna", "protocol": "chat"},
+                {"channel": "OC", "upstream": "gpt-6-luna", "protocol": "chat",
+                 "proxy": ma.AIRPORT_PROXY},
+            ],
+        }
+        self.assertEqual(len(ma.expand_hops(normal_stale)), 2,
+            "普通 OC 型号的存量 twin 必须保留")
+
     @unittest.skipUnless(ALIAS_MAP.exists(), "本机没有 alias map，跳过磁盘守卫")
     def test_on_disk_alias_map_puts_wb_first(self):
         data = json.loads(ALIAS_MAP.read_text(encoding="utf-8"))

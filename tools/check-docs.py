@@ -30,7 +30,7 @@ SKIP_DIRS = {".git", "node_modules", "dist", "__pycache__", "third-party", "memo
             # vault/ 被 .gitignore 排除，不属于版本库里的文档
             "vault"}
 # 整目录被 .gitignore 排除的上游 clone（运行时含凭据与二进制，不套活文档规则）
-SKIP_REL_PREFIXES = ("gateways/upstream/",)
+SKIP_REL_PREFIXES = ("gateways/upstream/", "providers/opencode-zen/zen-relay/")
 # 冻结目录：归档 / 拆分记录是**历史**，不套用活文档的规则（引言块、孤儿判定）
 FROZEN_DIRS = ("docs/archive/", "docs/split/", "archive/")
 SKIP_EXT = {".png", ".jpg", ".jpeg", ".gif", ".ico", ".pdf", ".mrs", ".gz", ".pyc", ".woff", ".woff2"}

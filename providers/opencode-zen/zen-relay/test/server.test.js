@@ -1,0 +1,327 @@
+import { test, before, after } from 'node:test'
+import assert from 'node:assert/strict'
+import http from 'node:http'
+import { PROVIDER } from '../src/config.js'
+import { resetQuotaState } from '../src/upstream.js'
+import server, { start } from '../server.js'
+let upstream
+let lastUpstreamReq
+let failWith
+let upstreamPort
+
+function startUpstream() {
+  return new Promise((resolve) => {
+    upstream = http.createServer((req, res) => {
+      let body = ''
+      req.on('data', (c) => (body += c))
+      req.on('end', () => {
+        lastUpstreamReq = { method: req.method, url: req.url, auth: req.headers['authorization'], ua: req.headers['user-agent'], body }
+        if (req.method === 'GET' && req.url.endsWith('/models')) {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({
+            object: 'list',
+            data: [
+              { id: 'big-pickle', object: 'model', created: 0, owned_by: 'opencode' },
+              { id: 'jev-1.13-free', object: 'model', created: 0, owned_by: 'opencode' },
+              { id: 'nemotron-3-ultra-free', object: 'model', created: 0, owned_by: 'opencode' },
+              { id: 'claude-opus-5', object: 'model', created: 0, owned_by: 'opencode' },
+              { id: 'gpt-5.5', object: 'model', created: 0, owned_by: 'opencode' },
+            ],
+          }))
+          return
+        }
+        if (failWith) {
+          res.writeHead(failWith.status, { 'Content-Type': 'application/json', ...(failWith.headers || {}) })
+          res.end(failWith.raw ?? JSON.stringify({ error: failWith.error }))
+          return
+        }
+        const parsed = JSON.parse(body || '{}')
+        if (parsed.stream) {
+          res.writeHead(200, { 'Content-Type': 'text/event-stream' })
+          res.write('data: ' + JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: parsed.model, choices: [{ index: 0, delta: { content: 'Hi' } }] }) + '\n\n')
+          res.write('data: ' + JSON.stringify({ id: 'c', object: 'chat.completion.chunk', created: 0, model: parsed.model, choices: [{ index: 0, delta: {}, finish_reason: 'stop' }], usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 } }) + '\n\n')
+          res.write('data: [DONE]\n\n')
+        } else {
+          res.writeHead(200, { 'Content-Type': 'application/json' })
+          res.end(JSON.stringify({ id: 'c', object: 'chat.completion', created: 0, model: parsed.model, choices: [{ index: 0, message: { role: 'assistant', content: 'Hi' }, finish_reason: 'stop' }], usage: { prompt_tokens: 4, completion_tokens: 1, total_tokens: 5 } }))
+        }
+        res.end()
+      })
+    })
+    upstream.listen(0, '127.0.0.1', () => {
+      upstreamPort = (upstream.address()).port
+      resolve()
+    })
+  })
+}
+
+let serverRef
+
+before(async () => {
+  await startUpstream()
+  // OPENCODE_BASE is lazy (reads env per-request via getOpencodeBase), so we can
+  // point the proxy at our fake upstream without re-importing.
+  process.env.OPENCODE_BASE_OVERRIDE = `http://127.0.0.1:${upstreamPort}/v1`
+  serverRef = server
+  await new Promise((r) => serverRef.listen(0, '127.0.0.1', r))
+})
+
+after(() => {
+  return new Promise((resolve) => {
+    const closeUp = () => upstream.close(() => resolve())
+    if (serverRef && serverRef.listening) serverRef.close(closeUp)
+    else closeUp()
+  })
+})
+
+function fetchProxy(path, opts = {}) {
+  return fetch(`http://127.0.0.1:${serverRef.address().port}${path}`, opts)
+}
+
+test('/v1/models returns openai-style list', async () => {
+  const res = await fetchProxy('/v1/models')
+  assert.equal(res.status, 200)
+  const json = await res.json()
+  assert.equal(json.object, 'list')
+  assert.ok(json.data.some((m) => m.id === `${PROVIDER}/big-pickle`))
+  // ids discovered from upstream and filtered to `big-pickle` / `*-free` only
+  assert.ok(json.data.some((m) => m.id === `${PROVIDER}/jev-1.13-free`))
+  assert.ok(json.data.some((m) => m.id === `${PROVIDER}/nemotron-3-ultra-free`))
+  assert.ok(!json.data.some((m) => m.id === `${PROVIDER}/claude-opus-5`))
+  assert.ok(!json.data.some((m) => m.id === `${PROVIDER}/gpt-5.5`))
+})
+
+test('/__models reports the discovered registry cache', async () => {
+  const res = await fetchProxy('/__models')
+  assert.equal(res.status, 200)
+  const json = await res.json()
+  assert.equal(json.source, 'upstream')
+  assert.ok(json.ids.includes('big-pickle'))
+  assert.ok(json.ids.includes('jev-1.13-free'))
+  assert.ok(!json.ids.includes('claude-opus-5'))
+})
+
+test('/v1/models/:id for known model', async () => {
+  const res = await fetchProxy(`/v1/models/${PROVIDER}/big-pickle`)
+  assert.equal(res.status, 200)
+  const json = await res.json()
+  assert.equal(json.id, `${PROVIDER}/big-pickle`)
+})
+
+test('/v1/models/:id 404 for unknown', async () => {
+  const res = await fetchProxy('/v1/models/nope')
+  assert.equal(res.status, 404)
+})
+
+test('POST /v1/chat/completions (non-stream) proxies and forwards to upstream', async () => {
+  const res = await fetchProxy('/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(res.status, 200)
+  const json = await res.json()
+  assert.equal(json.object, 'chat.completion')
+  assert.equal(json.choices[0].message.content, 'Hi')
+  assert.equal(lastUpstreamReq.auth, 'Bearer public')
+  assert.equal(lastUpstreamReq.body.includes('big-pickle'), true)
+})
+
+test('POST /v1/chat/completions (stream) returns SSE ending with [DONE]', async () => {
+  const res = await fetchProxy('/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }], stream: true }),
+  })
+  assert.equal(res.status, 200)
+  assert.match(res.headers.get('content-type'), /text\/event-stream/)
+  const text = await res.text()
+  assert.ok(text.includes('"content":"Hi"'))
+  assert.ok(text.trimEnd().endsWith('data: [DONE]'))
+})
+
+test('unknown model returns 404', async () => {
+  const res = await fetchProxy('/v1/chat/completions', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: 'nope', messages: [{ role: 'user', content: 'hi' }] }),
+  })
+  assert.equal(res.status, 404)
+  const json = await res.json()
+  assert.equal(json.error.code, 'model_not_found')
+})
+
+test('upstream 429 surfaces as rate-limit error', async () => {
+  failWith = { status: 429, error: { message: 'rate limited' } }
+  try {
+    const res = await fetchProxy('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    assert.equal(res.status, 429)
+    const json = await res.json()
+    assert.equal(json.error.code, 'RATE_LIMITED')
+  } finally {
+    failWith = null
+  }
+})
+
+test('Health endpoint', async () => {
+  const res = await fetchProxy('/')
+  assert.equal(res.status, 200)
+})
+
+test('streaming proxy returns proper HTTP error when upstream fails before streaming', async () => {
+  failWith = { status: 400, error: { message: 'bad request' } }
+  try {
+    const res = await fetchProxy('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }], stream: true }),
+    })
+    // The proxy must NOT start an SSE stream and then truncate it; it should
+    // return a proper HTTP error so the client never sees a stream without a
+    // finish_reason ("Stream ended without finish_reason").
+    assert.equal(res.status, 400, 'returns proper HTTP status, not a broken stream')
+    assert.ok(!/text\/event-stream/i.test(res.headers.get('content-type') || ''),
+      'must not return text/event-stream when returning an HTTP error')
+    const ct = res.headers.get('content-type') || ''
+    assert.ok(/application\/json/i.test(ct), 'error is returned as JSON')
+    const json = await res.json()
+    assert.equal(json.error.code, 'PROVIDER_ERROR')
+  } finally {
+    failWith = null
+  }
+})
+
+test('exhausted free-tier quota returns 429 + Retry-After with an actionable message', async () => {
+  failWith = {
+    status: 429,
+    headers: { 'Retry-After': '3600' },
+    raw: JSON.stringify({
+      type: 'error',
+      error: {
+        type: 'FreeUsageLimitError',
+        message: 'Free usage limit reached. Free models work in OpenCode; subscribe to OpenCode Go to keep going: https://opencode.ai/go',
+      },
+    }),
+  }
+  try {
+    const res = await fetchProxy('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }] }),
+    })
+    assert.equal(res.status, 429)
+    assert.equal(res.headers.get('retry-after'), '3600', 'upstream Retry-After is propagated')
+    assert.ok(res.headers.get('x-opencode-quota-reset'), 'reset timestamp is exposed')
+    const json = await res.json()
+    assert.equal(json.error.code, 'QUOTA_EXHAUSTED')
+    assert.match(json.error.message, /quota is exhausted/i)
+    assert.match(json.error.message, /OPENCODE_ZEN_API_KEY|opencode\.ai\/go/i)
+  } finally {
+    failWith = null
+    resetQuotaState()
+  }
+})
+
+// ---------------------------------------------------------------------------
+// Optional client authentication (`API_KEY`, the Dockerfile env var)
+// ---------------------------------------------------------------------------
+// API_KEY is the CLIENT→relay credential: agents put the same value in their
+// provider config (`apiKey`), the relay checks `Authorization: Bearer` (or
+// `x-api-key`). Unset API_KEY = auth disabled (backwards compatible).
+
+async function withApiKey(key, fn) {
+  const prev = process.env.API_KEY
+  if (key === undefined) delete process.env.API_KEY
+  else process.env.API_KEY = key
+  try {
+    await fn()
+  } finally {
+    if (prev === undefined) delete process.env.API_KEY
+    else process.env.API_KEY = prev
+  }
+}
+
+function modelListRequest(headers) {
+  return fetchProxy('/v1/models', { headers })
+}
+
+test('API_KEY unset: /v1/models stays open (auth disabled)', async () => {
+  await withApiKey(undefined, async () => {
+    const res = await modelListRequest({})
+    assert.equal(res.status, 200)
+  })
+})
+
+test('API_KEY set: missing/invalid key is 401 with invalid_api_key', async () => {
+  await withApiKey('sk-ofp-test', async () => {
+    const missing = await modelListRequest({})
+    assert.equal(missing.status, 401)
+    assert.equal(missing.headers.get('www-authenticate'), 'Bearer')
+    const json = await missing.json()
+    assert.equal(json.error.code, 'invalid_api_key')
+
+    const wrong = await modelListRequest({ Authorization: 'Bearer nope' })
+    assert.equal(wrong.status, 401)
+
+    const wrongScheme = await modelListRequest({ Authorization: 'Basic sk-ofp-test' })
+    assert.equal(wrongScheme.status, 401)
+  })
+})
+
+test('API_KEY set: Bearer and x-api-key both authenticate', async () => {
+  await withApiKey('sk-ofp-test', async () => {
+    const bearer = await modelListRequest({ Authorization: 'Bearer sk-ofp-test' })
+    assert.equal(bearer.status, 200)
+
+    const headerKey = await modelListRequest({ 'x-api-key': 'sk-ofp-test' })
+    assert.equal(headerKey.status, 200)
+  })
+})
+
+test('API_KEY set: health/landing stays public, debug endpoints do not', async () => {
+  await withApiKey('sk-ofp-test', async () => {
+    assert.equal((await fetchProxy('/health', { headers: {} })).status, 200)
+    assert.equal((await fetchProxy('/', { headers: {} })).status, 200)
+    assert.equal((await fetchProxy('/__session', { headers: {} })).status, 401)
+    assert.equal(
+      (await fetchProxy('/__session', { headers: { Authorization: 'Bearer sk-ofp-test' } })).status,
+      200,
+    )
+  })
+})
+
+test('API_KEY set: chat completions is gated too', async () => {
+  await withApiKey('sk-ofp-test', async () => {
+    const body = JSON.stringify({ model: `${PROVIDER}/big-pickle`, messages: [{ role: 'user', content: 'hi' }] })
+    const denied = await fetchProxy('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    })
+    assert.equal(denied.status, 401)
+
+    const allowed = await fetchProxy('/v1/chat/completions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', Authorization: 'Bearer sk-ofp-test' },
+      body,
+    })
+    assert.equal(allowed.status, 200)
+  })
+})
+
+test('/__session reports whether client auth is required', async () => {
+  await withApiKey('sk-ofp-test', async () => {
+    const res = await fetchProxy('/__session', { headers: { Authorization: 'Bearer sk-ofp-test' } })
+    const json = await res.json()
+    assert.equal(json.auth.required, true)
+  })
+  await withApiKey(undefined, async () => {
+    const res = await fetchProxy('/__session')
+    const json = await res.json()
+    assert.equal(json.auth.required, false)
+  })
+})
