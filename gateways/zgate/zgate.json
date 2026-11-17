@@ -41,12 +41,9 @@
       "headerTimeoutSec": 0
     },
     "GM": {
-      "softCooldownSeconds": 15,
       "silenceCooldownSeconds": 0,
-      "rateLimitBackoffMs": -1,
       "firstBlockMs": 0,
       "hedgeAfterMs": 0,
-      "maxParallel": 1,
       "authFailCooldownHours": 24,
       "busyCooldownSeconds": 10,
       "headerTimeoutSec": -1,
