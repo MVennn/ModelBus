@@ -100,6 +100,10 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
 可执行文件与端口布局是**启动期**读死的。改了 Go 代码必须换二进制并重启实例；`/admin/reload` 只适合
 改 `zgate.json` 的策略 / 空闲 / 窗口，不承担换版。
 
+反过来，reload **会**跑启动自检：`channelPolicy` 有 Fatal（某渠道只服务单跳模型却配了多跳字段）
+时直接 `400` 并回字段清单，不落地。这是 2026-11-17 补的 —— 在那之前 reload 不校验，配置能热加载
+成功、服务照跑，直到下一次重启才被拦在门外（见 [PITFALLS.md](PITFALLS.md) §61）。
+
 ---
 
 ## 4. 换版流程（`deploy-zgate.ps1`）
@@ -173,6 +177,7 @@ func (s *Supervisor) ApplyConfig(cfg map[string]config.Child) (applied, unknownK
 | 裸 `go build .` 后无窗版变控制台版 | 单包模式把 exe 原地覆盖，产物在 `.gitignore` 里救不回 | 编译入口收口到 `build.py`；见 [PITFALLS.md](PITFALLS.md) §20 |
 | 改了 Go 代码但行为没变 | 只调了 `/admin/reload`，旧二进制没换 | 跑 `tools/zgate-lifecycle/restart-zgate.cmd`；见 §3 |
 | 换版后 `/health` 一直不通 | 新二进制启动失败 / 端口占用 | `deploy-zgate.ps1` 自动回滚旧二进制并恢复 watchdog；查日志与 `netstat -ano \| findstr 7871` |
+| `/health` 不通且 `zgate-launch.log` 只有 `up=False` | 启动自检 `ValidatePolicies` 拒绝启动（某渠道只服务单跳模型却配了多跳字段），错误只走 stderr | 先跑 `zgate status` 看「策略自检」段；`zgate-launch.log` 现已记下子进程 stderr（`stderr: …` 行）；删掉该渠道的多跳字段后重启。见 [PITFALLS.md](PITFALLS.md) §61 |
 | watchdog 没恢复，掉线后不自愈 | 换版中断在停 watchdog 之后 | 重新启用任务，或用 `install-lifecycle.ps1` 校正动作 |
 | 计划任务动作被改坏 | 手工改过任务 / 脚本路径迁移 | 跑 `install-lifecycle.ps1` 重新部署并校正 |
 | 编译候选把运行中的 exe 覆盖了 | 没带 `--candidate` | 一律 `python gateways/zgate/build.py --candidate`，产物名 `zgate.candidate.exe` |

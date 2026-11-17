@@ -4044,3 +4044,26 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
 - 本批次改动只在上述两个文件；git status 里 docs/MODEL-ALIAS.md、test_model_alias_naming.py、tools/check-docs.py、providers/opencode-zen/ 是既有/别处改动，未触碰。
 
 ## 状态: 已完成
+
+### 16:10 修：zgate 起不来导致 acp-proxy 503（启动自检判死 GM 无效策略）
+- 现象：15:45 起客户端报 `503 acp-proxy failure: connect-refused 127.0.0.1:7871 (circuit open)`；7871 无监听、`zgate.exe` 零进程，watchdog 每分钟拉起但一律 `up=False (timed out)`。
+- 根因：13:53 构建部署的新 exe 带 `ValidatePolicies` 启动自检；GM 渠道现只剩单跳模型 `Gemini-4-Hydrogen`，而 `zgate.json` 的 GM 段仍配 `softCooldownSeconds:15` / `rateLimitBackoffMs:-1` / `maxParallel:1` → `main.go:163` 直接「channelPolicy 配置有误，拒绝启动」。该错误只走 stderr，不进 zgate.log，所以日志里只剩三条 `[policy]` WARN，watchdog 也看不出原因。
+- 为什么这三个字段确实读不到：串行链 `attemptChain` 第 9 参恒传 `nil`（`router.go:1911/1936/2002/2024/2114`），`inPlace429`（`router.go:1213`）与 `firstBlock`（`router.go:1221`）都判 `at != nil`；`internal/router/policy.go:131 policyRaceFields` 的判定没错，错的是配置还留着它们。
+- [x] `gateways/zgate/zgate.json`：GM 段删 `softCooldownSeconds` / `rateLimitBackoffMs` / `maxParallel`（备份 `zgate.json.bak-gmfields-20261117-1610`，改前 md5 `5F1CABAECD79760CC872358295A439B6`），保留单跳仍生效的 `busyCooldownSeconds:10` / `timeoutCooldownSeconds:20` / `authFailCooldownHours:24` / `retry500Once`。
+- [x] `docs/ROUTING-POLICY.md`：§5 Fatal 字段清单补 `silenceCooldownSeconds`/`softCooldownSeconds`（实现比文档多两项）；§8 GM 行 soft/rate/maxParallel 改 `—` 并记 11-17 原因。
+- 复验：`start-zgate-nw.ps1` → `up=True`，pid=12472，`127.0.0.1:7871 LISTENING`，`/health` 200、`/v1/models` 29 条；watchdog 16:10:01 正常退出、卡住的 ensure 进程已清空。
+- 教训：启动自检把「配了但永远读不到」升级成「服务起不来」。alias 表让某渠道退化成单跳后，必须同步清掉该渠道的多跳策略字段，否则下一次重启就是全站 503。
+
+
+### 16:18 修同类：热加载不跑自检 / 启动失败原因丢失 / 无提交前拦截
+- 排查结论：同类隐患只有一处**当前会拦启动**（GM，已修），但整条链路有三处盲区，任何一处再犯都会重演全站 503。
+- 风险分布（`tools/check-zgate-policy.py` 实测）：GM 单跳 1 个 / 多跳支撑 0 条（已修）；QD 单跳 1 / 多跳 3；WB 单跳 3 / 多跳 4；OC 单跳 9 / 多跳 13；HJ 只配 `headerTimeoutSec`，不参与该判据。QD / WB 离 Fatal 只差「那 3–4 条多跳链被合掉」。
+- [x] `gateways/zgate/internal/router/router.go:2317`：`Server.reload` 在 `setRuntime` 前跑 `ValidatePolicies`，Fatal 直接 400 拒绝热加载并回字段清单。修的是「reload 成功、服务照跑、下次重启才炸」的时间差炸弹。
+- [x] `gateways/zgate/main.go`：`status` 子命令打印策略自检结论（Fatal / 提示逐条），`/health` 不通时第一条命令就能看到原因。
+- [x] `gateways/zgate/internal/router/router_test.go`：新增 `TestAdminReloadRejectsFatalChannelPolicy`（Fatal 必须 400 且不生效 / 合法配置放行并生效）。
+- [x] `tools/zgate-lifecycle/start-zgate-nw.ps1`：失败路径区分「进程已退出」与「活着没监听」；已退出则重跑一次 `RedirectStandardError` 抓 stderr，写 `zgate-launch.log` 与 `zgate-launch.err.log`，并指定 `StandardErrorEncoding=UTF8`（Go 程序 stderr 是 UTF-8，不指定 PS5.1 会按 GBK 解码成问号）。只在失败路径 redirect，不给活着的网关挂会随脚本退出而断的管道。
+- [x] `tools/check-zgate-policy.py`（新增）+ `tools/check-project.py --policy`：离线复刻 `ValidatePolicies`，另查 `channelPolicy` 键是否在 `upstreams`、策略键是否拼错、别名链每跳落点。负向验证：把 `maxParallel` 加回 GM 段 → 门禁 exit 1 并打印 FATAL；复原 → exit 0。
+- [x] 文档：`docs/ROUTING-POLICY.md` §5 改成「四个入口共用一份判据」表；`docs/PITFALLS.md` 新增 §61（启动自检把配置瑕疵升级成服务起不来 + 错误只走 stderr），§55 补「安装副本掉 BOM」的复现（中文注释乱码吞换行 → 变量为 null，报错行号还错位）；`docs/TOOLS.md` 加脚本行。
+- 复验：`go build` / `go vet` / `go test ./...` 全过；`gofmt -l` 空；`check-project.py` 9 项 exit 0；watchdog 端到端（真 exe + 坏配置）在 `zgate-launch.log` 打出 `stderr: zgate serve: channelPolicy 配置有误，拒绝启动…字段=[maxParallel=1]`。
+- 未换版：`zgate.exe` 仍是 13:53 那份，reload 自检与 status 自检要下次 `deploy-zgate.ps1` 才生效（会话流量经过 7871，不在会话里重启）。
+

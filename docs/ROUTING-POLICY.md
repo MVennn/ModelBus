@@ -112,11 +112,21 @@
 
 | 判定 | 条件 | 后果 |
 |---|---|---|
-| **Fatal** | 某渠道**只**服务单跳模型，却配了对冲字段（`hedgeAfterMs` / `maxParallel` / `firstBlockMs` / `rateLimitBackoffMs`） | 拒绝启动，打印渠道 + 受影响的模型（多的压成「等 N 个」） |
+| **Fatal** | 某渠道**只**服务单跳模型，却配了多跳字段（`hedgeAfterMs` / `maxParallel` / `firstBlockMs` / `rateLimitBackoffMs` / `silenceCooldownSeconds` / `softCooldownSeconds`） | 拒绝启动，打印渠道 + 受影响的模型（多的压成「等 N 个」） |
 | 提示 | 该渠道**同时**服务多跳模型 | 只打 Warn：同一份策略在多跳链上确实有效，不能因此拦下合法配置 |
 
-渠道名写错（`channelPolicy` 里的键在 `upstreams` 里不存在）目前仍是静默 —— 靠这条自检加
-`tools/check-project.py` 的渠道集合比对兜住。
+自检有四个入口，判据只有一份（`internal/router/policy.go`）：
+
+| 入口 | 行为 |
+|---|---|
+| `zgate serve` | Fatal → 拒绝启动，错误**只走 stderr**；提示 → 写一行 `[policy]` WARN 到 `zgate.log` |
+| `zgate reload` / `POST /admin/reload` | Fatal → **400 拒绝热加载**并回字段清单；通过则生效并重放 WARN。2026-11-17 之前这里不跑自检：配置写进去 reload 成功、服务照跑，下一次重启才炸 |
+| `zgate status` | 逐条打印自检结论（`Fatal` / `提示`）。`/health` 不通时第一条该跑的命令 |
+| `python tools/check-project.py --policy` | 离线复刻同一判据，提交前拦；顺带查 `channelPolicy` 键是否在 `upstreams` 里、策略键是否拼错（`encoding/json` 不报未知键）、别名链每一跳是否有落点 |
+
+`zgate serve` 的 Fatal 走 stderr 这一点很要命：由计划任务/隐藏窗口拉起时 stderr 继承自
+父进程、等于丢进 NUL。`tools/zgate-lifecycle/start-zgate-nw.ps1` 因此改成「启动即退出就
+重跑一次抓 stderr 并写进 `zgate-launch.log`」（见 [PITFALLS.md](PITFALLS.md) §61）。
 
 ---
 
@@ -176,7 +186,7 @@
 | WB | 0 | 0 | 0 | 0 | 18000 | 2 | 0 | 有 4 个单跳模型 → 软冷却必须 0；18s 只造福多跳链 |
 | OC | 60 | 20 | -1 | 0 | 0 | 2 | 0 | 唯一从不单跳的渠道（11 条多跳），可以放心冷却 |
 | QD | 0 | 20 | -1 | 0 | 0 | 2 | 0 | 有 Qwen-3.8-Max 单跳 → 软冷却必须 0 |
-| GM | 15 | 0 | -1 | 0 | 0 | 1 | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次） |
+| GM | — | 0 | — | 0 | 0 | — | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次）。**11-17**：GM 只剩单跳模型 `Gemini-4-Hydrogen`，`softCooldownSeconds` / `rateLimitBackoffMs` / `maxParallel` 三个多跳字段已从配置删除 —— 串行链 `attemptChain` 传 `at=nil`，这三个字段永远读不到，留着会被 `ValidatePolicies` 判 Fatal 直接拒绝启动 |
 | HJ | — | — | — | — | — | — | -1 | 单跳直连，只关看门狗 |
 | QW / QN | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | QW 只当链尾且协议不同 → 永不走竞速；QN 只有 Conatus 单跳 |
 

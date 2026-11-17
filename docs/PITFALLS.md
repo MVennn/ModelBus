@@ -955,6 +955,7 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **正解**：改完 `.ps1` 立刻验字节头（`$b=[IO.File]::ReadAllBytes($p); $b[0..2] -join ','` 应为 `239,187,191`，文件内 CR 计数为 0）；掉了就补回 BOM —— PowerShell 用 `[IO.File]::WriteAllText($p, $text, (New-Object System.Text.UTF8Encoding($true)))`，Node 用 `Buffer.concat([Buffer.from([0xEF,0xBB,0xBF]), Buffer.from(text, "utf8")])`。检查器侧给 `subprocess.run` 加 `errors="replace"`，并对 `r.stdout or ""` 兜底，别让一条本地化报错把整轮门禁带崩。
 - **判据**：`Get-ChildItem tools\zgate-lifecycle\*.ps1` 逐个打印 `bom=` 应全为 True；PS5.1 `ParseFile` 探针回 `PARSE_OK`；`python tools/check-project.py` 的「换行/BOM」与「PS1 语法」两项都必须是 OK（现为 `13 个脚本全部符合` + `7 个脚本 Parser 通过`）。
 - **同类**：仓里「PS1 带 BOM」不是洁癖，是 PS5.1 的中文解码开关；任何「读文本→写回」的工具（edit / sed / 格式化器 / 生成脚本）都可能顺手抹掉 BOM，改完必须回验字节头。
+- **2026-11-17 复现（安装副本）**：改 `%LOCALAPPDATA%\ZCodeGateway\start-zgate-nw.ps1`（计划任务实际调用的那份）时同样掉了 BOM，症状不是报错而是**更隐蔽的错**：PS5.1 按 GBK 读，中文注释的乱码字节吞掉换行，`$errFile = Join-Path ...` 被并进上一行注释 → 变量为 `$null` → `Remove-Item` 报 `Cannot bind argument to parameter 'Path' because it is null`，位置还指向别的行号。**安装副本没有门禁保护**，所以规矩是：只改仓内模板 `tools/zgate-lifecycle/*.ps1`（`check-project.py` 的换行/BOM 与 PS1 语法两项会拦），改完 `Copy-Item` 覆盖安装副本（字节级复制，BOM 一起过去），再对两份各跑一次 PS5.1 Parser 探针。
 ## 56. 提交前闸门扫整棵工作树，别的会话留下的未跟踪文件会拦掉你的提交 【通用】
 
 - **现象**：`git commit` 被 `.githooks/pre-commit` 拒绝，`tools/check-secrets.py` 报 27 处 `[本机用户目录]`，命中的全是 `evidence/agent-chain.md` / `evidence/agent-logs.md` —— 这两个文件既不是本次提交内容，也不在暂存区。
@@ -990,4 +991,13 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
 - **正解**：① `model_probe.py` 加 `retired_keys()` / `is_retired()`，把名单 key 归一化成「原名 + 去前缀裸名」两形，写盘前先剔 results 里的退役 key —— 一条 `cn:hy3` 同时盖住 `global:hy3` / 裸 `hy3`。② `current-models.ps1` 的 stale/slow 两段也按同一归一化名单过滤（此前只有 billing_suspect 段过滤）。③ `model_alias.wb_prices()` 读价格表后按 retired.json 二次过滤，堵住白名单补建 `whitelist_items()` 复活退役型号的口子。④ `workbuddy_sync.py` 的 `BACKUP_MODEL_IDS` 去掉陈旧的 `cn:minimax-m3`（现价表只有 m2.7 / m3.1-flash）。
 - **判据**：`python -c "import sys;sys.path.insert(0,'tools');import model_probe as m;r=m.retired_keys();print([k for k in ['cn:hy3','global:hy3','hy3','cn:hy4flash-free'] if m.is_retired(k,r)])"` 回 `['cn:hy3','global:hy3','hy3']`，在架的 hy4flash-free 不在列；`tests/test_retired_filter.py` 3 个用例绿；清洗后 `model_probe.json` 退役 key = 0、全量 unittest 174 OK；check-docs / check-project 全绿。
 - **同类**：任何「点名退役 / 黑名单」机制都要问两句：① 名单覆盖了所有命名空间变体吗（cn:/global:/裸名/WB:）？② 名单接进了**所有**消费该型号的路径吗（配置主链 + 探测缓存 + 统计视图 + 白名单补建）？只接主链、漏旁路，等于没堵；名单写完当天干净，下次探测/补建又会把旧型号带回来。审计方法：拿退役名单对每一层产物做差集，别只看配置文件。
+
+
+## 61. 启动自检把「配置瑕疵」升级成「服务起不来」，而错误只走 stderr 【Windows】
+
+- **现象**：2026-11-17 15:42 机器睡醒后，客户端全部报 `503 acp-proxy failure: connect-refused 127.0.0.1:7871 (circuit open)`。`7871` 无监听、`zgate.exe` 零进程；`zgate-launch.log` 每分钟一条 `started pid=… / up=False (timed out)`；`zgate.log` 里只剩三条 `[policy] 策略在单跳模型上不生效` 的 WARN，没有任何错误。
+- **根因**：13:53 换上的新 exe 带 `ValidatePolicies` 启动自检。GM 渠道当时只剩 `Gemini-4-Hydrogen` 一个单跳模型，而 `zgate.json` 的 GM 段还留着 11-11 调优时的 `softCooldownSeconds:15` / `rateLimitBackoffMs:-1` / `maxParallel:1` —— 串行链 `attemptChain` 第 9 参恒传 `nil`（`router.go:1911`），这三个字段永远读不到，自检判 Fatal 直接拒绝启动。真正的原因由 `main.go:163` 写到 **stderr**，而进程由隐藏窗口的计划任务拉起，stderr 继承自父进程、等于丢进 NUL。旧 exe 没有这道自检，所以配置里的无效字段躺了 6 天没症状，换版那一刻才变成全站不可用。
+- **正解**：① 删掉 GM 段那三个字段（单跳仍生效的 `busyCooldownSeconds` / `timeoutCooldownSeconds` / `authFailCooldownHours` / `retry500Once` 保留）。② `start-zgate-nw.ps1` 的失败路径改为「进程已退出就重跑一次并 `RedirectStandardError` 抓 stderr，写进 `zgate-launch.log` 与 `zgate-launch.err.log`」——只在这条失败路径 redirect，避免给活着的网关挂一条随脚本退出而断的管道（断了再写 stdout 会 EPIPE）。③ `Server.reload` 补跑同一份自检，Fatal 直接 400 拒绝热加载（`router.go:2317` 起）。④ `zgate status` 打印自检结论。⑤ 新增 `tools/check-zgate-policy.py` 并接进 `check-project.py --policy`，判据与 `policy.go` 逐条对齐，提交前就拦。
+- **判据**：`zgate status` 的策略自检段只有「提示」没有「Fatal」；`python tools/check-project.py --policy` exit 0；把 `maxParallel` 临时加回 GM 段后同一条命令必须 exit 1 并打印 `FATAL 策略完全无效…`；`go test ./internal/router -run TestAdminReloadRejectsFatalChannelPolicy` 绿。
+- **同类**：任何「启动期硬校验 + 错误只写 stderr」的组合，在隐藏窗口/计划任务下都等于静默拒绝启动。修这类问题不要只修配置：① 把校验结论接到一个**必看的出口**（日志文件、status 子命令、离线门禁）；② 让拉起脚本在「启动即退出」时把子进程 stderr 抓下来；③ 热加载路径必须跑与启动同一份校验，否则会出现「reload 成功、重启即死」的时间差炸弹。
 
