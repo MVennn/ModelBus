@@ -202,13 +202,13 @@ class MergeKeepsEffortsTest(unittest.TestCase):
         self.assertNotIn("reasoningEfforts", model)
 
     def test_handset_efforts_beat_source(self):
-        # 手配白名单模型即使源头算出 off/high，也以 patch 里手配的四档为准
+        # 手配白名单模型即使源头算出 off/high，也以 patch 里手配的五档为准
         S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
         old = OLD_PATCH.replace(
             "          - id: Fresh\n            input: [text]",
             "          - id: Fresh\n            input: [text]\n"
             "          - id: Gemini-4-Hydrogen\n            input: [text]\n"
-            "            reasoningEfforts: {low: low, medium: medium, high: high, xhigh: xhigh}",
+            "            reasoningEfforts: {'off': 'off', low: low, medium: medium, high: high, xhigh: xhigh}",
         )
         try:
             text, changed, _ = S._merge_patch(
@@ -223,7 +223,7 @@ class MergeKeepsEffortsTest(unittest.TestCase):
             self.assertTrue(changed)
             self.assertEqual(
                 by_id["Gemini-4-Hydrogen"]["reasoningEfforts"],
-                {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
+                {"off": "off", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
             )
         finally:
             S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")

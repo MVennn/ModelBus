@@ -546,7 +546,7 @@ low·medium·high·xhigh·minimal 档位后缀变体一律不收录（档位改�
 | 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:gemini-4-hydrogen-原生1M支持工具`，单跳族） |
 | 显示名 | `ABBR` 把 `gemini-4-hydrogen-原生1m支持工具`（键全小写，因 `abbreviate()` 先 `.lower()`）映射成 `Gemini-4-Hydrogen`；legacy 键 `gem:gemini-4-hydrogen-原生1M支持工具` 保留老会话解析 |
 | 降级链 | 单跳，无降级 |
-| 推理档位 | low / medium / high / xhigh 四档（真 `reasoning_effort`），DSH `reasoningEfforts` 手配；默认档 low |
+| 推理档位 | off / low / medium / high / xhigh 五档（真 `reasoning_effort`），DSH `reasoningEfforts` 手配；off 档 value 用 `off`（123 不认 `disabled`，实测 `disabled` 会回落默认高推理），默认档 low |
 
 **接入落点**：`tools/model_alias.py` 的 `GM_BASE`（→123）、`GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
 `ABBR`（显示名，键须小写）四处；`zgate.json` 的 `upstreams.GM.base`（→123，reload 热加载，无需改 Go/重启）；
@@ -555,7 +555,7 @@ low·medium·high·xhigh·minimal 档位后缀变体一律不收录（档位改�
 再经 `dsh_sync.py` 投影到 `cordis.patch.yml` 的 `zcode-main`（DSH 热加载）。
 
 **推理档位不被每日同步冲掉**：宿主 catalog 把 Gemini-4-Hydrogen 定义成 off/high 开关（装饰项），
-每日 `dsh_sync.py --apply` 默认会据此覆盖手配的四档。故在 `tools/dsh_sync.py` 加
+每日 `dsh_sync.py --apply` 默认会据此覆盖手配的五档。故在 `tools/dsh_sync.py` 加
 `HANDSET_EFFORTS = {"Gemini-4-Hydrogen"}` 白名单：白名单模型始终沿用 patch 手配档位，
 `_keep_efforts()` 与 `tests/test_dsh_sync_efforts.py::test_handset_efforts_beat_source` 锁住此行为。
 `dsh_sync.py --check` 现在打印「保留已有推理档位：Gemini-4-Hydrogen」、`模型表：无变化`、exit 0。
