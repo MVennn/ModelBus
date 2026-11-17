@@ -201,6 +201,33 @@ class MergeKeepsEffortsTest(unittest.TestCase):
         model = item["config"]["providers"]["zcode-free"]["models"][0]
         self.assertNotIn("reasoningEfforts", model)
 
+    def test_handset_efforts_beat_source(self):
+        # 手配白名单模型即使源头算出 off/high，也以 patch 里手配的四档为准
+        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        old = OLD_PATCH.replace(
+            "          - id: Fresh\n            input: [text]",
+            "          - id: Fresh\n            input: [text]\n"
+            "          - id: Gemini-4-Hydrogen\n            input: [text]\n"
+            "            reasoningEfforts: {low: low, medium: medium, high: high, xhigh: xhigh}",
+        )
+        try:
+            text, changed, _ = S._merge_patch(
+                old,
+                {"zcode-free": _route([
+                    {"id": "Gemini-4-Hydrogen", "input": ["text"],
+                     "reasoningEfforts": {"off": "disabled", "high": "high"},
+                     "name": "Gemini-4-Hydrogen"},
+                ])},
+            )
+            by_id = {m["id"]: m for m in yaml.safe_load(text)[0]["config"]["providers"]["zcode-free"]["models"]}
+            self.assertTrue(changed)
+            self.assertEqual(
+                by_id["Gemini-4-Hydrogen"]["reasoningEfforts"],
+                {"low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
+            )
+        finally:
+            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+
     def test_non_zcode_provider_still_preserved(self):
         item, _ = self._merge([{"id": "Beam", "input": ["text"]}])
         providers = item["config"]["providers"]
@@ -236,6 +263,52 @@ class EffortDriftGateTest(unittest.TestCase):
         # 源头写着上游特有的档位名，DSH 侧表达不了就必须报出来，而不是静默丢弃
         self.assertEqual(K._efforts_outside(["disabled", "turbo"]), ["turbo"])
         self.assertEqual(K._efforts_outside(["off", "high"]), [])
+
+
+class DisplayNameProjectionTest(unittest.TestCase):
+    """显示名/代号分离：id 是唯一代号，name 是可撞的显示名，投影进 patch。"""
+
+    def _provider(self, model_ids: list[str]) -> dict:
+        return {
+            "providerId": "opencode-go-chat",
+            "providerName": "主力",
+            "modelIds": model_ids,
+            "baseUrl": "http://127.0.0.1:7871/v1",
+        }
+
+    def test_display_name_projected_into_model(self) -> None:
+        # alias map 说 HY4-Flash-Free 的显示名是 HY4-Flash（去后缀、可撞）
+        display = {"HY4-Flash-Free": "HY4-Flash", "HY4-Flash": "HY4-Flash"}
+        _, route = S._build_route(
+            self._provider(["HY4-Flash-Free", "HY4-Flash"]), {}, {}, display)
+        by_id = {m["id"]: m for m in route["models"]}
+        # 两条代号不同、显示名撞成同一个 —— 正是「重命名撞了无所谓」。
+        self.assertEqual(by_id["HY4-Flash-Free"]["name"], "HY4-Flash")
+        self.assertEqual(by_id["HY4-Flash"]["name"], "HY4-Flash")
+        self.assertNotEqual(by_id["HY4-Flash-Free"]["id"], by_id["HY4-Flash"]["id"])
+
+    def test_no_display_name_falls_back_to_id(self) -> None:
+        # alias map 没这条时 name 缺省，DSH fallback 到 id（改造前行为不变）
+        _, route = S._build_route(self._provider(["Plain"]), {}, {}, {})
+        self.assertNotIn("name", route["models"][0])
+        self.assertEqual(route["models"][0]["id"], "Plain")
+
+    def test_display_names_from_alias_map_reads_and_degrades(self) -> None:
+        import json
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            p = Path(d) / "model-alias-map.json"
+            p.write_text(json.dumps({
+                "models": {
+                    "HY4-Flash-Free": {"displayName": "HY4-Flash", "abbr": "HY4-Flash"},
+                    "NoName": {"abbr": "NoName"},
+                    "BadRow": "not-a-dict",
+                }
+            }), encoding="utf-8")
+            self.assertEqual(
+                S._display_names_from_alias_map(p), {"HY4-Flash-Free": "HY4-Flash"})
+        # 文件不存在时降级空，不抛错
+        self.assertEqual(S._display_names_from_alias_map(Path(d) / "missing.json"), {})
 
 
 if __name__ == "__main__":

@@ -92,15 +92,16 @@ WB_BASE = "http://127.0.0.1:7863/v1"
 QD_BASE = "http://127.0.0.1:8790/v1"
 OC_BASE = "https://opencode.ai/zen/go/v1"
 QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
-# 谷歌 Gemini（catiecli 中转，OpenAI 兼容直连）。第三方转售通道没有公开价目表，
+# 谷歌 Gemini（123 中转 odyfree，OpenAI 兼容直连）。第三方转售通道没有公开价目表，
 # 价格按 DeepSeek 主力标准档估算，只影响组内排序与展示；渠道级返回 None 会让
 # 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
 # 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
-GM_BASE = "https://catiecli.sukaka.top/v1"
-# 2026-11-17：接回新版 Gemini 4 Hydrogen（用户 DSH「1 组」指定的抗截断档）。
+GM_BASE = "https://odyfree.spinsnow.fun/v1"
+# 2026-11-17：GM 渠道从 catiecli 换成 123（odyfree.spinsnow.fun），主力 Gemini-4-Hydrogen
+# 走它的原生支持工具版；推理四档靠 reasoning_effort 真参数（low→xhigh）。
 # 中转无公开价目，沿用 0.11 仅用于组内排序/展示；未登记 id 一律返 None（该跳丢弃）。
 GM_PRICES = {
-    "ais-抗截断-gemini-4-hydrogen": 0.11,
+    "gemini-4-hydrogen-原生1M支持工具": 0.11,
 }
 # 哈基米（gemai.cc）中转渠道：key 走 HJM_API_KEY（providers/hajimi/.env.local）。
 # 2026-11-11 用户口径：该渠道的 Gemini 3.8 族整族下线。渠道本身保留（CHANNEL_BASE /
@@ -140,9 +141,9 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 谷歌 Gemini 4 Hydrogen（2026-11-17）：用户 DSH「1 组」指定的抗截断档，
-    # 走 GM（catiecli）渠道并入主力。单跳族，不混 search / 普通档。
-    "chat:gem:ais-抗截断-gemini-4-hydrogen",
+    # 谷歌 Gemini 4 Hydrogen（2026-11-17）：GM 渠道从 catiecli 换成 123（odyfree），
+    # 走 123 原生支持工具版并入主力，推理四档靠 reasoning_effort 真参数。
+    "chat:gem:gemini-4-hydrogen-原生1M支持工具",
 ]
 MAIN_IDS = set(MAIN_ORDER)
 
@@ -309,6 +310,10 @@ OC_PRICES = {
     "gpt-5.6-luna": {"flat": 0.21},
     "muse-spark-1.3-contributor": {"flat": 0.04},
     "muse-spark-1.2-contributor": {"flat": 0.04},
+    # 2026-11-17 go 段从官网 /models 新增的两个免费入口；补价前被 alias 段判「缺价未收录」静默剔除。
+    # 与 go 段报告的「免费」档一致（flat=0.00），口径同 beam-free / iceman-contributor-free。
+    "hy4-flash-free": {"flat": 0.00},
+    "longcat-2.5-free": {"flat": 0.00},
 }
 # Qoder fallback if the hub is not reachable; live /v1/models wins.
 QD_PRICES = {
@@ -331,8 +336,8 @@ MODEL_META = {}
 ABBR = {
     # 七牛云网关的 id 形如 `qiniu/conatus-free`：去掉 `qiniu/` 前缀，Conatus 自成系列。
     "qiniu/conatus-free": "Conatus",
-    # Gemini 4 Hydrogen（catiecli）：抗截断档并入主力，显示名去掉中转 ais- 前缀。
-    "ais-抗截断-gemini-4-hydrogen": "Gemini-4-Hydrogen",
+    # Gemini 4 Hydrogen（123 中转）：原生支持工具版并入主力，显示名仍叫 Gemini-4-Hydrogen。
+    "gemini-4-hydrogen-原生1m支持工具": "Gemini-4-Hydrogen",
     "moonshotai/kimi-k3-free": "Kimi-K3",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
@@ -381,6 +386,10 @@ ABBR = {
     # hy4flash 是 2026-11-16 上线的 Hy4 Flash 档（0.03），hy4flash-free 是它的限时免费入口；
     # -free 后缀由 abbreviate 统一剥掉，同型号有付费档时自动补回 -Free。
     "hy4flash": "HY4-Flash",
+    # OC 官网 /models 把同一型号写成带连字符的 hy4-flash-free（2026-11-17 收录），
+    # 不带这个别名会走 abbreviate 兜底拼成 'hy4-Flash'，与 WB 的 HY4-Flash 归不进
+    # 一族、各占一条。补齐后按 CHANNEL_RANK（WB 先、OC 后）合并成一条双跳链。
+    "hy4-flash": "HY4-Flash",
     "hy3-b": "HY3",
     "hy3-c": "HY3",
     "fast-model": "HY-Fast",
@@ -602,10 +611,13 @@ def _blank_effort_global(cfg: dict) -> bool:
 # 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
 EMPTY_ALLOWED: set = {
-    # GM（catiecli）的 /v1/models 只有 id、不回 reasoning 能力位，本脚本也无从继承 ——
-    # 这条注定空档位。2026-11-17 接入的 Gemini-4-Hydrogen 同属 GM 渠道，接替本批次
-    # （c8dbbd8）移除的旧 Gemini-AIS 留在白名单里，避免每日同步漂移复查误判失败。
+    # 123 中转的原生支持工具版在 DSH 里带 reasoningEfforts（low/medium/high/xhigh），
+    # 档位由 patch 手配、真源 optionSpecs 缺失，留在白名单避免每日同步漂移复查误判。
     "Gemini-4-Hydrogen",
+    # OC longcat-2.5-free：上游 /models 不声明 reasoning.effort（见 go 段报告的
+    # 「上游目录未声明档位」，与 longcat-2.0 同批），独立成条后注定空档位；
+    # 2026-11-17 收录进免费组后每日同步 --check 会误判成档位漂移，显式豁免。
+    "longcat-2.5",
 }
 
 
@@ -1364,7 +1376,7 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
              qd: dict[str, dict], slot: str) -> float | None:
     if channel == "GM":
         # 中转无公开价目：只认 GM_PRICES 的显式价，未登记 id 返 None（该跳被丢）。
-        # 2026-11-17 接回 Gemini 4 Hydrogen（抗截断档）。
+        # 2026-11-17 Gemini 4 Hydrogen 已从不抗截断的普通档接入。
         return GM_PRICES.get(upstream)
     if channel == "HJ":
         # 哈基米同为转售站，口径同 GM：只认 HJ_PRICES 的显式价，未收录即 None。
@@ -2813,6 +2825,11 @@ def main() -> int:
             })
             base = base_of(row["channel"])
             alias_models[row["new_id"]] = {
+                # 显示名（可撞、去后缀）与代号（row["new_id"]，唯一）分离：
+                # DSH 界面用 displayName 显示，内部调用与 alias map 键仍用 new_id。
+                # abbr 是 family_entries 归一后的族名（-free/-Msg/-Resp 后缀已剥离），
+                # 撞名时 new_id 自动加 -2 而 abbr 不变 —— 正是「重命名可撞、代号唯一」。
+                "displayName": row["abbr"],
                 "channel": row["channel"],
                 "region": "",
                 "upstream": row["upstream"],

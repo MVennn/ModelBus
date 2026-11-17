@@ -50,6 +50,40 @@ class AbbrTest(unittest.TestCase):
         self.assertEqual(ma.abbreviate("qwen3.8-max"), "Qwen-3.8-Max")
 
 
+class DisplayNameSeparationTest(unittest.TestCase):
+    """显示名（abbr，可撞/去后缀）与代号（new_id，唯一）分离的数据源锁。"""
+
+    @staticmethod
+    def _hop(channel: str, upstream: str, price: float) -> dict:
+        return {
+            "raw": upstream, "original": upstream, "channel": channel,
+            "upstream": upstream, "base_model": upstream, "protocol": "chat",
+            "price": price, "fallbacks": [], "chain": [], "legacy_ids": [upstream],
+        }
+
+    def test_abbr_is_display_name_source_and_can_collide(self) -> None:
+        # 同一型号付费档 + 免费档：family_entries 给两条独立 entry，
+        # 它们的 abbr（=写盘 displayName）相同、name（→new_id 代号）不同。
+        items = [
+            self._hop("WB", "hy4flash", 0.03),
+            self._hop("OC", "hy4-flash-free", 0.00),
+        ]
+        entries = ma.family_entries(items, {}, {}, "auto")
+        hy4 = [e for e in entries if e.get("abbr") == "HY4-Flash"]
+        self.assertEqual(len(hy4), 2, "付费档与免费档应各成一条")
+        self.assertEqual({e["abbr"] for e in hy4}, {"HY4-Flash"},
+                         "两条显示名来源相同 —— 重命名可撞")
+        self.assertEqual(len({e["name"] for e in hy4}), 2,
+                         "代号（name→new_id）必须唯一，一条带 -Free")
+        self.assertTrue(any(e["name"].endswith("-Free") for e in hy4))
+
+    def test_writer_projects_abbr_as_display_name(self) -> None:
+        # 写盘约定：alias map 每条的 displayName 取 abbr（去后缀族名）。
+        src = (HERE.parent / "tools" / "model_alias.py").read_text(encoding="utf-8")
+        self.assertIn('"displayName": row["abbr"]', src,
+                      "写盘必须把 abbr 投影成 displayName，供 dsh_sync 读成 DSH name")
+
+
 class ExplicitOcPrefixTest(unittest.TestCase):
     def test_oc_prefix_parses(self) -> None:
         item = ma.classify("oc:qwen3.8-max", "chat", {}, {})
@@ -67,11 +101,11 @@ class ExplicitOcPrefixTest(unittest.TestCase):
     def test_main_order_names_the_gem_hop_explicitly(self) -> None:
         # 主力组 = DeepSeek 三跳 + Gemini 4 Hydrogen（2026-11-17 接入）。
         # Gemini 走 gem: 显式前缀（渠道 GM 不在 cn:/qoder: 这些天然前缀里），
-        # 只登记抗截断这一个新版 id，旧 3.8 flash 族不再回主力。
+        # 2026-11-17 GM 从 catiecli 换到 123（odyfree）原生支持工具版，旧 catiecli id 已撤。
         self.assertIn("chat:cn:deepseek-v4.1-flash", ma.MAIN_ORDER)
-        self.assertIn("chat:gem:ais-抗截断-gemini-4-hydrogen", ma.MAIN_ORDER)
+        self.assertIn("chat:gem:gemini-4-hydrogen-原生1M支持工具", ma.MAIN_ORDER)
         self.assertEqual([m for m in ma.MAIN_ORDER if "gem:" in m],
-                         ["chat:gem:ais-抗截断-gemini-4-hydrogen"])
+                         ["chat:gem:gemini-4-hydrogen-原生1M支持工具"])
 
 
 if __name__ == "__main__":

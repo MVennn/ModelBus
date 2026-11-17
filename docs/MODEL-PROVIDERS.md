@@ -9,7 +9,7 @@
 
 数据快照：**2026-10-20**（§4 WorkBuddy 的倍率与分档于 **2026-10-22** 复核，倍率 / 分档无变化；
 §4.9 Qoder 的模型与价格于 **2026-10-23** 实测；§4.11 的 Gemini 渠道于 **2026-11-17**
-重新接入新版 `gemini-4-hydrogen`（旧 3.8 flash 链已于 2026-11-17 本批次移除）。）
+GM 上游从 catiecli 换成 123 中转的原生支持工具版，四档推理等级（旧 3.8 flash 链与独立 asd/123 provider 均已移除）。）
 
 > **分组沿革（历史，不约束现役）**：七组 provider → 2026-10-23 四组（主力 / 免费 / 低耗 / 高耗）
 > → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并，新增 `QN` 七牛云渠道）
@@ -523,44 +523,47 @@ OpenAI 兼容路径都是 404。所以它走 zgate 的协议桥，模型 id 加 
 
 <a id="gemini-hydrogen"></a>
 
-## 4.11 谷歌 Gemini 4 Hydrogen（catiecli 中转，2026-11-17 接入）
+## 4.11 谷歌 Gemini 4 Hydrogen（123 中转，2026-11-17 接入）
 
-> **一句话**：`Gemini-4-Hydrogen` 是 DSH「1 组」（`cordis.patch.yml` 的 provider `asd`）
-> 指定的抗截断档 `ais-抗截断-gemini-4-hydrogen`，走 `GM` 渠道（catiecli 中转）单跳并入主力组。
-> 旧 `Gemini-AIS`（3.8/3.7/3.6 flash 链）在本批次（2026-11-17，`c8dbbd8`）整族移除，本次是**新模型接入**，不是恢复旧链。
+> **一句话**：`Gemini-4-Hydrogen` 是 DSH 主力组唯一的 Gemini 入口，走 `GM` 渠道（zgate 内部代号不变）
+> 单跳并入主力；2026-11-17 把 GM 上游从 catiecli 换成 **123 中转（odyfree.spinsnow.fun）**，
+> 用它的 **原生支持工具版** `gemini-4-hydrogen-原生1M支持工具`，推理四档 low/medium/high/xhigh 是真参数
+> （`reasoning_effort`，实测 rtok 随档位 702→1131→3037）。
+> 演进：抗截断档（两分钟不出字）→ catiecli 普通档（54.6s，档位是装饰项）→ 123 原生工具版（本版）。
+> 旧 `Gemini-AIS`（3.8/3.7/3.6 flash 链）与独立 `asd`（"123"）provider 均已移除，主力不再多入口并存。
 
-网关：`https://catiecli.sukaka.top/v1`，OpenAI 兼容，`GET /v1/models` 可自取目录。
-2026-11-17 实测目录含 `ais-gemini-4-hydrogen` / `ais-gemini-4-hydrogen-search` /
-`ais-抗截断-gemini-4-hydrogen` 等变体；本仓**只登记抗截断这一档**，search / 普通档不收录。
+网关：`https://odyfree.spinsnow.fun/v1`（123 中转），OpenAI 兼容，`GET /v1/models` 可自取目录。
+本仓**只登记原生支持工具版 `gemini-4-hydrogen-原生1M支持工具`**；单u / 防外审注入不支持工具 /
+low·medium·high·xhigh·minimal 档位后缀变体一律不收录（档位改由 `reasoningEfforts` 表达），minimal 上游明确 400 不支持。
 
 | 项 | 值（2026-11-17） |
 |---|---|
-| 渠道 | `GM`，远程直连，无本地子进程 |
+| 渠道 | `GM`（zgate 内部代号不变），base 指向 123 中转，远程直连无本地子进程 |
 | 协议 | `chat`（OpenAI 兼容），`stream:true` 走 SSE |
 | 鉴权 | `Authorization: Bearer` —— 由 zgate 覆盖注入（`router.go` 的 `forwardHeaders` 名单含 `GM`）；客户端传空/假 Bearer 一律被替换 |
-| 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`；`zgate.json` 的 `geminiEnvFile` 指向它 |
-| 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`（仅用于组内排序/展示）；未登记 id 返 `None` 会被当死链丢弃，新增型号必须先补价 |
-| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:ais-抗截断-gemini-4-hydrogen`，单跳族，不混其它 Gemini 变体） |
-| 显示名 | `ABBR` 把 `ais-抗截断-gemini-4-hydrogen` 映射成 `Gemini-4-Hydrogen`；legacy 键 `gem:ais-抗截断-gemini-4-hydrogen` 保留老会话解析 |
+| 凭据落点 | `providers/gemini/.env.local` 的 `GEMINI_API_KEY`（值来自原 asd 的 `ASD_API_KEY`，不再单列 asd provider） |
+| 价 | 中转无公开价目，`tools/model_alias.py` 的 `GM_PRICES` 显式登记 `0.11`（仅用于组内排序/展示）；未登记 id 返 `None` 会被当死链丢弃 |
+| 分组 | 主力（`MAIN_ORDER` 里 `chat:gem:gemini-4-hydrogen-原生1M支持工具`，单跳族） |
+| 显示名 | `ABBR` 把 `gemini-4-hydrogen-原生1m支持工具`（键全小写，因 `abbreviate()` 先 `.lower()`）映射成 `Gemini-4-Hydrogen`；legacy 键 `gem:gemini-4-hydrogen-原生1M支持工具` 保留老会话解析 |
 | 降级链 | 单跳，无降级 |
+| 推理档位 | low / medium / high / xhigh 四档（真 `reasoning_effort`），DSH `reasoningEfforts` 手配；默认档 low |
 
-**接入落点（5 处代码 + 2 测试 + 2 产物）**：`tools/model_alias.py` 的 `GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
-`ABBR`（显示名）、`price_of()` 的 `GM` 分支（按价表取值）；
-`EMPTY_ALLOWED`（GM 渠道注定空档位，新模型加入白名单避免 `--check` 漂移误报）、
-`tests/test_model_alias_naming.py`（主力 gem 断言）与 `tests/test_model_alias_efforts.py`
-（新增 `test_gemini_hydrogen_is_in_empty_allowlist` 回归）同步更新。
+**接入落点**：`tools/model_alias.py` 的 `GM_BASE`（→123）、`GM_PRICES`（补价）、`MAIN_ORDER`（主力白名单）、
+`ABBR`（显示名，键须小写）四处；`zgate.json` 的 `upstreams.GM.base`（→123，reload 热加载，无需改 Go/重启）；
+`providers/gemini/.env.local` 的 `GEMINI_API_KEY`（→123 key）。
 产物：`~/.zcode/v2/model-alias-map.json` + `provider_config.json`（`model_alias.py --apply` 生成），
-再经 `dsh_sync.py` 投影到 `cordis.patch.yml` 的 `zcode-main`（DSH 热加载，无需重启）。
+再经 `dsh_sync.py` 投影到 `cordis.patch.yml` 的 `zcode-main`（DSH 热加载）。
 
-**验证（2026-11-17 实测）**：`/health` → `alias.models=19`、`revision=2`、GM 段 `state=up/key=true`；
-`/v1/models` 返回 `Gemini-4-Hydrogen`；真实 `POST /v1/chat/completions` 返回 200、正文「收到」、
-上游模型 `ais-抗截断-gemini-4-hydrogen`（含 reasoning_tokens=54）；
-`model_alias.py --check` exit 0（无漂移，档位白名单生效）。
+**推理档位不被每日同步冲掉**：宿主 catalog 把 Gemini-4-Hydrogen 定义成 off/high 开关（装饰项），
+每日 `dsh_sync.py --apply` 默认会据此覆盖手配的四档。故在 `tools/dsh_sync.py` 加
+`HANDSET_EFFORTS = {"Gemini-4-Hydrogen"}` 白名单：白名单模型始终沿用 patch 手配档位，
+`_keep_efforts()` 与 `tests/test_dsh_sync_efforts.py::test_handset_efforts_beat_source` 锁住此行为。
+`dsh_sync.py --check` 现在打印「保留已有推理档位：Gemini-4-Hydrogen」、`模型表：无变化`、exit 0。
 
-**推理档位说明**：GM（catiecli）`/v1/models` 只回 id、不回 reasoning 能力位，这条注定空档位，
-已在 `EMPTY_ALLOWED` 登记（接替本批次移除的旧 `Gemini-AIS`），否则每日同步 `--check` 会误判
-档位漂移、exit 1。DSH 投影里 `Gemini-4-Hydrogen` 的 `reasoningEfforts` 是 GUI 装饰项，
-真正是否生效由上游 `/v1/models` 与 map 表达式决定（GM 无表达式 → 空档位属预期）。
+**验证（2026-11-17 实测）**：`POST /admin/reload`（带 `X-Zgate-Admin: 1`）→ 200、base 与 key 热加载；
+真实 `POST /v1/chat/completions`（model=Gemini-4-Hydrogen + `reasoning_effort=low`）返回 200、
+elapsed 59.7s、正文「收到」、`model=gemini-4-hydrogen`、`rtok=66`；
+`dsh_sync.py --check` exit 0；`test_dsh_sync_efforts.py` 27 测试全绿、`patch-guard --check` ok（asd 已删、主力四档）。
 
 ## 5. 关思考参数矩阵
 

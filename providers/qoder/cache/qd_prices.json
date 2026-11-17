@@ -40,7 +40,7 @@
     }
   },
   "Qwen4-Max": {
-    "price": 0.08,
+    "price": 0.4,
     "peak": 0.5,
     "valley": 0.1,
     "off_peak": {
@@ -102,6 +102,12 @@
     "price": 0.8,
     "peak": 0.8,
     "valley": 0.8,
+    "off_peak": {}
+  },
+  "Qwen4-Max-Preview": {
+    "price": 0.1,
+    "peak": 0.5,
+    "valley": 0.1,
     "off_peak": {}
   },
   "Step-5-Preview": {

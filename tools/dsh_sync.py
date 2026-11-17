@@ -81,8 +81,19 @@ DSH_LEDGER = DSH_HOME / "profiles" / DSH_PROFILE / "zcode-model-ledger.json"
 CATALOG = REPO / "catalog" / "model_caps.json"
 DSH_INVENTORY = DSH_HOME / "profiles" / DSH_PROFILE / "modelbus-inventory.json"
 INVENTORY_SCHEMA = "modelbus-inventory/v1"
+# alias map：model_alias.py 写盘时给每条写入 displayName（可撞、去后缀的显示名）。
+# dsh_sync 读它把显示名投影成 DSH models[].name，让界面显示名与内部调用 id 分离。
+# 与 model_alias.alias_path 同口径：UNIFIED_MODEL_MAP env 可覆盖。
+ALIAS_MAP = Path(
+    os.environ.get("UNIFIED_MODEL_MAP", str(Path.home() / ".zcode" / "v2" / "model-alias-map.json"))
+)
 # 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
 _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
+# 手配档位白名单：这些模型的推理档位由 patch 人工维护，不随宿主 catalog 覆盖。
+# Gemini-4-Hydrogen（2026-11-17）：GM 渠道换成 123（odyfree），原生支持工具版真吃
+# reasoning_effort 四档 low/medium/high/xhigh；但宿主 catalog 只声明 off/high 开关
+# （装饰项），每日同步若照 catalog 投影会把四档冲掉，故显式豁免、以 patch 为准。
+HANDSET_EFFORTS: set = {"Gemini-4-Hydrogen"}
 KNOWN_PROVIDER_IDS = {
     "opencode-go-chat": "zcode-main",
     "opencode-go-chat-free": "zcode-free",
@@ -135,6 +146,28 @@ def _read_json(path: Path) -> dict[str, Any]:
         raise DshSyncError(f"找不到 ZCode 配置：{path}") from exc
     except json.JSONDecodeError as exc:
         raise DshSyncError(f"ZCode 配置不是合法 JSON：{path}（{exc}）") from exc
+
+
+def _display_names_from_alias_map(path: Path) -> dict[str, str]:
+    """读 alias map 的 {唯一代号 new_id: 显示名 displayName}，供 DSH models[].name 投影。
+
+    model_alias.py 写盘时给每条写入 displayName（去后缀、可撞的族名），键是唯一代号。
+    读不到 / 字段缺失时降级空字典，绝不阻断投影：name 缺省时 DSH fallback 到 id，
+    界面行为与改造前一致。
+    """
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError):
+        return {}
+    out: dict[str, str] = {}
+    models = doc.get("models") if isinstance(doc, dict) else None
+    for model_id, row in (models or {}).items():
+        if not isinstance(row, dict):
+            continue
+        name = row.get("displayName")
+        if isinstance(name, str) and name:
+            out[str(model_id)] = name
+    return out
 
 
 def _previous_model_ids(provider_id: str) -> list[str]:
@@ -428,7 +461,7 @@ def _positive_int(value: Any) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
 
-def _build_route(provider: dict[str, Any], effective: dict[str, Any], rules: dict[tuple[str, str], dict[str, Any]]) -> tuple[str, dict[str, Any]]:
+def _build_route(provider: dict[str, Any], effective: dict[str, Any], rules: dict[tuple[str, str], dict[str, Any]], display_names: dict[str, str] | None = None) -> tuple[str, dict[str, Any]]:
     provider_id = provider["providerId"]
     dsh_id = KNOWN_PROVIDER_IDS.get(provider_id)
     if not dsh_id:
@@ -442,6 +475,11 @@ def _build_route(provider: dict[str, Any], effective: dict[str, Any], rules: dic
             _fallback_meta(rules.get((provider_id, model_id), {})),
         )
         model: dict[str, Any] = {"id": model_id}
+        # 显示名（可撞、去后缀）投影：id 仍是唯一代号，name 只影响界面显示。
+        # alias map 没这条 displayName 时不写 name，DSH fallback 到 id（行为不变）。
+        _display = (display_names or {}).get(model_id)
+        if _display:
+            model["name"] = _display
         ctx = _positive_int(meta.get("contextWindow"))
         max_out = _positive_int(meta.get("maxTokens"))
         if ctx:
@@ -532,15 +570,19 @@ def _keep_efforts(routes: dict[str, Any], old_providers: dict[str, Any]) -> dict
             if isinstance(m, dict) and m.get("id")
         }
         for model in new_route.get("models") or []:
-            if not isinstance(model, dict) or model.get("reasoningEfforts"):
+            if not isinstance(model, dict):
                 continue
-            old_model = old_models.get(model.get("id"))
+            mid = model.get("id")
+            # 源头算出档位且不在手配白名单 → 以源头为准；白名单模型始终沿用 patch 手配档位
+            if model.get("reasoningEfforts") and mid not in HANDSET_EFFORTS:
+                continue
+            old_model = old_models.get(mid)
             if not old_model or not old_model.get("reasoningEfforts"):
                 continue
             model["reasoningEfforts"] = old_model["reasoningEfforts"]
             if old_model.get("compat"):
                 model["compat"] = old_model["compat"]
-            kept[model.get("id")] = model["reasoningEfforts"]
+            kept[mid] = model["reasoningEfforts"]
     if kept:
         print("保留已有推理档位：" + ", ".join(sorted(str(k) for k in kept)))
     return routes
@@ -848,9 +890,12 @@ def _main(argv: list[str] | None = None) -> int:
         raise DshSyncError(f"找不到 DSH profile patch：{patch_path}")
 
     providers, effective, rules = _load_source(args.source, args.config, args.inventory)
+    # 显示名只在 compat 源投影（dsh 源按设计不读 ~/.zcode/v2/）；
+    # alias map 缺失 / 无 displayName 时降级空，投影行为与改造前一致。
+    display_names = _display_names_from_alias_map(ALIAS_MAP) if args.source == "compat" else {}
     routes: dict[str, Any] = {}
     for provider in providers:
-        dsh_id, route = _build_route(provider, effective, rules)
+        dsh_id, route = _build_route(provider, effective, rules, display_names)
         if dsh_id in routes:
             raise DshSyncError(f"DSH provider id 冲突：{dsh_id}")
         routes[dsh_id] = route
