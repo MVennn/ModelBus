@@ -299,6 +299,40 @@ def check_ps1(results: list) -> None:
 
 
 # ---------- 4) 流式准入接线守卫（离线；活体探针绝不进 CI） ----------
+def check_policy(results: list) -> None:
+    """channelPolicy x 别名链：zgate 启动自检的离线复刻。
+
+    2026-11-17 15:45 全站 503 25 分钟：GM 只剩单跳模型、配置里留着 maxParallel，
+    ValidatePolicies 拒绝启动，错误只走 stderr。判据正本在
+    gateways/zgate/internal/router/policy.go 的 ValidatePolicies + policyRaceFields，
+    脚本 tools/check-zgate-policy.py 与它逐条对齐；改判据要两边一起改。
+    """
+    script = os.path.join(ROOT, "tools", "check-zgate-policy.py")
+    if not os.path.exists(script):
+        results.append(("FAIL", "策略自检: 缺 tools/check-zgate-policy.py"))
+        return
+    try:
+        proc = subprocess.run(
+            [sys.executable, script],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            timeout=120,
+        )
+    except (OSError, subprocess.SubprocessError) as e:
+        results.append(("FAIL", "策略自检: 跑不起来 " + repr(e)))
+        return
+    out = (proc.stdout or "") + (proc.stderr or "")
+    if proc.returncode == 0:
+        warns = [ln for ln in out.splitlines() if ln.startswith("[WARN]")]
+        results.append(("OK", "策略自检: 无 Fatal / 无引用错误（WARN " + str(len(warns)) + " 条不拦）"))
+        return
+    fails = [ln for ln in out.splitlines() if ln.startswith("[FAIL]")]
+    for ln in fails[:8]:
+        results.append(("FAIL", "策略自检: " + ln.replace("[FAIL] ", "", 1)))
+
+
 def check_stream_contract(results: list) -> None:
     """守住「新增模型免人工测试」这条链：接线掉一处就 FAIL。
 
@@ -372,8 +406,9 @@ def main() -> int:
     ap.add_argument("--lineendings", action="store_true")
     ap.add_argument("--ps1", action="store_true")
     ap.add_argument("--stream-contract", action="store_true")
+    ap.add_argument("--policy", action="store_true")
     a = ap.parse_args()
-    all_ = not (a.semantic or a.lineendings or a.ps1 or a.stream_contract)
+    all_ = not (a.semantic or a.lineendings or a.ps1 or a.stream_contract or a.policy)
     results = []
     if all_ or a.semantic:
         check_semantic(results)
@@ -383,13 +418,15 @@ def main() -> int:
         check_ps1(results)
     if all_ or a.stream_contract:
         check_stream_contract(results)
+    if all_ or a.policy:
+        check_policy(results)
     for st, msg in results:
         print("[" + st + "] " + msg)
     fails = [m for st, m in results if st == "FAIL"]
     if fails:
         print("[FAIL] check-project: " + str(len(fails)) + " 项失败")
         return 1
-    print("[OK] check-project: " + str(len(results)) + " 项通过（语义 / 换行BOM / PS1 / 流式接线）")
+    print("[OK] check-project: " + str(len(results)) + " 项通过（语义 / 换行BOM / PS1 / 流式接线 / 策略自检）")
     return 0
 
 

@@ -46,5 +46,53 @@ for ($i = 0; $i -lt 24; $i++) {
     if (Test-Up) { LogLine 'up=True'; exit 0 }
     Start-Sleep -Milliseconds 500
 }
-LogLine 'up=False (timed out)'
+# 探活失败要分清两种情况：进程已经退出（配置被自检拦下、端口被占、缺 dll），
+# 还是进程活着但没监听（卡在初始化）。老版本一律记 'up=False (timed out)'，
+# 2026-11-17 那天真正的原因（channelPolicy 自检拒绝启动）只写在子进程 stderr 里，
+# 而 stderr 继承自隐藏父进程，等于丢进了 NUL —— 排查时日志只剩三条 WARN。
+$alive = $false
+try { $alive = -not $p.HasExited } catch { $alive = $false }
+if ($alive) {
+    LogLine ('up=False (alive but not listening) pid={0}' -f $p.Id)
+    exit 1
+}
+$code = $null
+try { $code = $p.ExitCode } catch { }
+LogLine ('up=False (process exited) code={0}' -f $code)
+
+# 启动即退出：重跑一次并抓 stderr。只在这条失败路径上 redirect —— 给活着的网关
+# 挂管道有副作用（脚本退出后管道断，进程再写 stdout 会 EPIPE）。
+$errFile = Join-Path $here 'zgate-launch.err.log'
+$outFile = Join-Path $here 'zgate-launch.out.log'
+Remove-Item $errFile, $outFile -ErrorAction SilentlyContinue
+try {
+    $psi2 = New-Object System.Diagnostics.ProcessStartInfo
+    $psi2.FileName = $exe
+    $psi2.Arguments = 'serve'
+    $psi2.WorkingDirectory = $ZgateHome
+    $psi2.UseShellExecute = $false
+    $psi2.CreateNoWindow = $true
+    $psi2.WindowStyle = [System.Diagnostics.ProcessWindowStyle]::Hidden
+    $psi2.RedirectStandardError = $true
+    $psi2.RedirectStandardOutput = $true
+    # zgate 是 Go 程序，stderr 一律 UTF-8；不指定编码时 PS 5.1 会按控制台代码页
+    # 解码，中文报错会变成一堆问号（2026-11-17 harness 实测）。
+    $psi2.StandardErrorEncoding = [System.Text.Encoding]::UTF8
+    $psi2.StandardOutputEncoding = [System.Text.Encoding]::UTF8
+    $p2 = [System.Diagnostics.Process]::Start($psi2)
+    $deadline = (Get-Date).AddSeconds(6)
+    while (-not $p2.HasExited -and (Get-Date) -lt $deadline) { Start-Sleep -Milliseconds 200 }
+    if (-not $p2.HasExited) { try { $p2.Kill() } catch { } }
+    $errText = $p2.StandardError.ReadToEnd()
+    $outText = $p2.StandardOutput.ReadToEnd()
+    if ($errText) {
+        Set-Content -Path $errFile -Value $errText -Encoding UTF8
+        foreach ($ln in ($errText -split "`r?`n" | Where-Object { $_.Trim() } | Select-Object -First 8)) {
+            LogLine ('stderr: ' + $ln.Trim())
+        }
+    }
+    if ($outText) { Set-Content -Path $outFile -Value $outText -Encoding UTF8 }
+} catch {
+    LogLine ('stderr probe failed: ' + $_.Exception.Message)
+}
 exit 1
