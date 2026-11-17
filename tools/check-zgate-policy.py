@@ -129,12 +129,19 @@ def main() -> int:
     policy_map = cfg.get("channelPolicy") or {}
     upstreams = cfg.get("upstreams") or {}
 
+    # 别名表是运行时状态（~/.zcode/v2/model-alias-map.json），不进仓库：CI 的干净检出
+    # 里必然没有它。缺表时只跳过「单跳/多跳」这一半判定，其余三项（渠道引用、策略键
+    # 拼写、判据漂移）照跑 —— 2026-11-17 第一版把它当 FAIL，直接让 CI 红了。
     alias_path = resolve_alias_path(cfg)
     if not os.path.exists(alias_path):
-        problems.append("别名表不存在: " + alias_path)
+        notes.append("别名表不存在（" + alias_path + "），跳过单跳/多跳判定（CI 干净检出属常态）")
         chains = {}
     else:
-        chains = chains_of(load_json(alias_path))
+        try:
+            chains = chains_of(load_json(alias_path))
+        except (OSError, ValueError) as e:
+            problems.append("别名表解析失败: " + alias_path + " " + repr(e))
+            chains = {}
 
     # --- 1) 复刻 ValidatePolicies ---
     single: dict[str, list[str]] = {}
@@ -200,6 +207,8 @@ def main() -> int:
 
     notes.append("模型 %d 条 / 渠道 %d 个 / channelPolicy %d 段"
                  % (len(chains), len(upstreams), len(policy_map)))
+    if not chains:
+        notes.append("本次未做单跳/多跳判定：Fatal 结论只能在本机（有别名表）得出")
 
     if not a.quiet:
         for n in notes:
