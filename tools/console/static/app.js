@@ -152,7 +152,7 @@
     const kpis = [
       kpi("网关状态", d.ok === true ? pill("正常", "ok") : pill("异常", "bad"), "来自 /health 的 ok 字段"),
       kpi("别名模型", n(d.alias_models ?? "—"), "alias.models"),
-      kpi("渠道段", n(Object.keys(segs).length), "workbuddy / qoder / qwen / qiniu / gemini / hajimi / opencode"),
+      kpi("渠道段", n(Object.keys(segs).length), "workbuddy / qoder / qwen / gemini / hajimi / opencode"),
       kpi("跳数可用", n(hop.ok ?? "—") + " / " + n(hop.total ?? "—"), "hops 段 ok 计数"),
       kpi("探测通过", n(pr.ok ?? "—") + " / " + n(pr.total ?? "—"), "model_probe.json"),
       kpi("请求采样", n(tr.requests ?? "—"), tr.file ? esc(tr.file) : "当日 jsonl 尾部"),

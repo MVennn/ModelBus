@@ -17,6 +17,16 @@
 
 ## 未发版（2026-11-17）
 
+### QN（七牛云）渠道下线 —— 去掉千牛渠道及其全部投影
+
+> 未发版，版本号不动（[docs/VERSIONING.md](docs/VERSIONING.md) §5）。
+
+- **网关层**：`zgate.json` 删 `QN` upstream 与 `qiniuEnvFile`；`internal/keys/keys.go` 的 `Set` / `Channels` / `Load` 参数 / `reQNBase` 一并删 QN；`internal/config/config.go` 删 `QiniuEnvFile` 字段、缺省值与两处 `applyDefaults` 块；`router.go` 删 `case "QN"`、`isQiniu()`、回退候选与 `/health` 段名。现网 6 个 upstreams（OC / WB / QD / QW / GM / HJ）。
+- **工具链**：`model_alias.py` 删 `CHANNEL_RANK.QN` / `EFFORT_CHANNELS` / `CHANNEL_PREFIX` / `price_of` 的 QN 分支 / `qn:` 前缀解析 / `QN_FREE_UNTIL`；`caps_upstream.py` 不再采 QN 目录；`tools/console` 段名去 `qiniu`；`check-project.py` 的 upstreams 口径 7 → 6。
+- **数据**：`model-alias-map.json`、`provider_config.json`、`quota-windows.json`、`model-sync-state.json`、`model_probe.json` 清掉 `Conatus` 与 `qn:*` 条目；`catalog/*.json` 去掉 QN 源与 Conatus 行；`dsh_sync.py --apply` 重投影，DSH 模型表少 Conatus。
+- **文档 / 记忆**：删除 `docs/QINIU.md`；README / AGENTS / ARCHITECTURE / TOOLS / MODEL-PROVIDERS / MODEL-ALIAS / ROUTING-POLICY / MAINTENANCE / MODEL-VISIBILITY / CAPABILITY-AUDIT / DSH-FIRST / SECRETS / ZGATE-LIFECYCLE / ZEN-FREE-INTEGRATION-PLAN 统一改 6 个 upstreams；mnemon 5 篇 active 文档去掉 QN 引用。
+- **回退**：本机 `.work/qn-retire-20261118/` 存 `QINIU.md`、`providers/qiniu/.env.local`、5 个 zcode 状态文件与 `cordis.patch.yml.bak`；DSH 侧另有 `cordis.patch.yml.bak-dshsync-20261118-*`。恢复 QN 需同时还原这几处并重启 zgate。
+
 ### 模型隐藏名单：OC 线先藏起来，配置一条不删
 
 > 未发版，版本号不动（[docs/VERSIONING.md](docs/VERSIONING.md) §5）。
@@ -716,7 +726,7 @@
   `glm-4.5-air-free` 已退役
 - 顺带修 `providers/qoder/qoder_zcode_sync.py`：它还在找已删除的
   `opencode-go-chat-slow`，定时任务第三步会直接退出；现统一落到省钱组
-- 新增 [docs/QINIU.md](docs/QINIU.md)
+- 新增 `docs/QINIU.md`（2026-11-18 随 QN 渠道下线删除，正文转存 `.work/qn-retire-20261118/QINIU.md`）
 
 
 ### 千问集合体下线，只留主力链尾跳（2026-10-29）

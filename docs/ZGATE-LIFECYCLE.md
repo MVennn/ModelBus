@@ -17,12 +17,12 @@
 | 开机自启 | 计划任务 `\ModelBus-zgate-watchdog`（LogonTrigger 登录即拉起 + PT1M 每分钟兜底）→ `ensure-zgate.vbs` → `ensure-zgate.ps1` | `Start-Process`、`cmd /c`、HKCU Run、Startup 快捷方式 |
 | 进程掉线兜底 | 计划任务 `\ModelBus-zgate-watchdog`（每 1 分钟）→ `ensure-zgate.vbs` → `ensure-zgate.ps1` | 会话内起常驻 PowerShell 守护 |
 | 改了 `zgate.json` 策略 / 空闲 / 窗口 / 上游 base / 凭据 | `POST /admin/reload`（热加载配置与 `ApplyConfig(children)`，不换二进制） | 为了改策略去重启整个实例 |
-| 改了监听地址 / 新增子进程 / alias map 路径 | `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版 | 指望 `POST /admin/reload` 热加载这三项（源码 `router.go:984` 的 note 明确仍需重启） |
+| 改了监听地址 / 新增子进程 / alias map 路径 | `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版 | 指望 `POST /admin/reload` 热加载这三项（源码 `router.go` 的 `reload()` 返回 `note` 明确仍需重启） |
 | 改了 `gateways/zgate/` 下的 Go 代码 | `tools/zgate-lifecycle/restart-zgate.cmd` 受控换版 | 裸 `go build .`、直接覆盖 `zgate.exe`、手工停进程 |
 | 编译候选 | `python gateways/zgate/build.py --candidate` → `zgate.candidate.exe` | 在 `gateways/zgate/` 里裸跑 `go build .` |
 | 验证存活 | 会话结束后另起会话 `curl http://127.0.0.1:7871/health` 仍 200 | 只看启动那一刻的 `/health` |
 
-监听 `127.0.0.1:7871`；`zgate.json` 配 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ）与 2 个按需拉起的 child：
+监听 `127.0.0.1:7871`；`zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / GM / HJ）与 2 个按需拉起的 child：
 workbuddy `:7863`（health `/panel/`）、qoder `:8790`（health `/ping`），两者 policy 均为 `ondemand`、`idleSeconds=300`。
 
 ---

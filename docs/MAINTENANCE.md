@@ -251,7 +251,6 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | **峰谷价切换** | 不额外注册 08:00 / 22:00 峰谷任务：`--slot auto` 在每天 12:00 运行时按当前时刻取价，下一次同步自然纠正（见 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4.1 与「现行自动切换」段） |
 | **每月** | 复核 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) 里的价格 / 额度（`wb_pricing.json` 已由每日任务自动刷新） |
 | **换套餐 / 换账号池后** | 全量重探 WorkBuddy（`--sleep 20`）+ 重跑同步 |
-| **2026-11-30 前后** | 七牛 `qiniu/conatus-free` 的限时免费到期：`QN_FREE_UNTIL` 会让该跳自动消失，只需跑一次 `python tools/model_alias.py --slot auto --apply` 确认免费组只剩 4 条。想续用就换其它 `-free` 模型（[QINIU.md](QINIU.md) §3） | 详见 [QINIU.md](QINIU.md) |
 | **每月 / 千问额度到期前后** | 千问已被降级为「主力链尾跳」：集合体与单型号都已下线（2026-10-29，理由见 [QWEN.md](QWEN.md) §4.5）。只需确认主力链的 `QW` 尾跳还在（`model_alias.py --check` 无漂移即可）；¥300 预付额度到期（2027-10-28）后 `QW_CREDIT_UNTIL` 会让该跳自动消失 | 详见 [QWEN.md](QWEN.md) §3、§4.6.1 |
 | **每次接入新供应商** | 照 §1.1 的通用做法写一份取数脚本 + 在 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §0 的表里补一行；凭据按 [SECRETS.md](SECRETS.md) §2、§3.5 加环境变量 |
 | **每次新增模型（自动，无需人工测试）** | 模型只要进 `~/.dsh/profiles/<profile>/cordis.patch.yml` 的 `llm-pi-ai` 表，每日 12:00 同步链尾的 `model_stream_check.py --changed --soft` 就自动纳入并实测流式 / 思考 / 输出 / TPS；离线守卫 `check-project.py --stream-contract` 守住接线不被拆。规则见 [MODEL-STREAM.md](MODEL-STREAM.md) |
@@ -283,12 +282,12 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 ## 8. 网关生命周期（zgate）
 
 2026-10-23 起，5 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
-它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 5 条上游（OC / WB / QD / QW / QN），
+它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 4 条上游（OC / WB / QD / QW），
 并按策略拉起 / 回收 2 个本地子进程（workbuddy 7863 / qoder 8790）：
 
 | 上游 | 端口 | 谁在跑 | 策略 |
 |---|---|---|---|
-| OpenCode-Go（OC）/ Qwen（QW）/ Qiniu（QN） | 远程 | — | 直连，无本地进程 |
+| OpenCode-Go（OC）/ Qwen（QW） | 远程 | — | 直连，无本地进程 |
 | WorkBuddy（`wb2api`） | 7863 | zgate 的子进程 | `ondemand`：首个 WB 请求时拉起，空闲 300 秒回收 |
 | Qoder（QD，`qoder_proxy.py`） | 8790 | zgate 的子进程 | `ondemand`：同上，随用随拉 |
 
@@ -340,7 +339,7 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 > 该入口编候选 → 暂停 watchdog → `Stop-Process zgate` → 备份 → 原子替换 →
 > `schtasks /run /tn ModelBus-zgate-watchdog` → `/health` 轮询 → 恢复 watchdog，失败自动回滚旧二进制。
 > `POST /admin/reload` 热加载策略 / 空闲 / 窗口 / 上游 base / 凭据（`keys.Load` 六通道 + `ApplyConfig(children)` + `aliases.Reload()`）；监听地址 / 新增子进程 / alias map 路径与 Go 代码变更必须换版
-> 重启（源码 `router.go:984` 的 note）。**严禁在会话里用 `Start-Process` /
+> 重启（源码 `router.go` 的 `reload()` 返回的 `note`）。**严禁在会话里用 `Start-Process` /
 > `cmd /c` 直接拉起 zgate**（会落进会话 Job Object 被回收）。完整流程见
 > [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 

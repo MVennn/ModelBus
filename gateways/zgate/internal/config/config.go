@@ -165,7 +165,6 @@ type Config struct {
 	WBGatewayConfig string         `json:"wbGatewayConfig"`
 	QoderEnvFile    string         `json:"qoderEnvFile"`
 	QwenEnvFile     string         `json:"qwenEnvFile"`
-	QiniuEnvFile    string         `json:"qiniuEnvFile"`
 	GeminiEnvFile   string         `json:"geminiEnvFile"`
 	HajimiEnvFile   string         `json:"hajimiEnvFile"`
 	Session         string         `json:"session"`
@@ -276,9 +275,6 @@ func (c *Config) applyDefaults() {
 	if c.QwenEnvFile == "" {
 		c.QwenEnvFile = "../../providers/qwen/.env.local"
 	}
-	if c.QiniuEnvFile == "" {
-		c.QiniuEnvFile = "../../providers/qiniu/.env.local"
-	}
 	if c.GeminiEnvFile == "" {
 		c.GeminiEnvFile = "../../providers/gemini/.env.local"
 	}
@@ -379,16 +375,6 @@ func (c *Config) applyDefaults() {
 		u.KeyEnv = "QWEN_API_KEY"
 		c.Upstreams["QW"] = u
 	}
-	// 七牛云 AI 网关（api.qnaigc.com）同样只提供 Anthropic Messages。
-	if u, ok := c.Upstreams["QN"]; !ok {
-		c.Upstreams["QN"] = Upstream{
-			Base:   "https://api.qnaigc.com/v1",
-			KeyEnv: "QINIU_API_KEY",
-		}
-	} else if u.KeyEnv == "" {
-		u.KeyEnv = "QINIU_API_KEY"
-		c.Upstreams["QN"] = u
-	}
 	// 谷歌 Gemini 经 catiecli 中转，OpenAI 兼容直连；无本地进程、无孪生跳。
 	if u, ok := c.Upstreams["GM"]; !ok {
 		c.Upstreams["GM"] = Upstream{
@@ -432,16 +418,6 @@ func (c *Config) resolvePaths() error {
 		u.Base = strings.TrimRight(expandEnv(u.Base), "/")
 		c.Upstreams[name] = u
 	}
-	// 七牛云 AI 网关（api.qnaigc.com）同样只提供 Anthropic Messages。
-	if u, ok := c.Upstreams["QN"]; !ok {
-		c.Upstreams["QN"] = Upstream{
-			Base:   "https://api.qnaigc.com/v1",
-			KeyEnv: "QINIU_API_KEY",
-		}
-	} else if u.KeyEnv == "" {
-		u.KeyEnv = "QINIU_API_KEY"
-		c.Upstreams["QN"] = u
-	}
 	for name, child := range c.Children {
 		child.Exe = c.resolveExe(child.Exe)
 		child.Cwd = c.resolve(child.Cwd)
@@ -457,7 +433,6 @@ func (c *Config) resolvePaths() error {
 	c.WBGatewayConfig = c.resolve(c.WBGatewayConfig)
 	c.QoderEnvFile = c.resolve(c.QoderEnvFile)
 	c.QwenEnvFile = c.resolve(c.QwenEnvFile)
-	c.QiniuEnvFile = c.resolve(c.QiniuEnvFile)
 	c.GeminiEnvFile = c.resolve(c.GeminiEnvFile)
 	c.HajimiEnvFile = c.resolve(c.HajimiEnvFile)
 	c.Log.Dir = c.resolve(c.Log.Dir)

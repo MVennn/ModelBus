@@ -188,7 +188,7 @@
 | QD | 0 | 20 | -1 | 0 | 0 | 2 | 0 | 有 Qwen-3.8-Max 单跳 → 软冷却必须 0 |
 | GM | — | 0 | — | 0 | 0 | — | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次）。**11-17**：GM 只剩单跳模型 `Gemini-4-Hydrogen`，`softCooldownSeconds` / `rateLimitBackoffMs` / `maxParallel` 三个多跳字段已从配置删除 —— 串行链 `attemptChain` 传 `at=nil`，这三个字段永远读不到，留着会被 `ValidatePolicies` 判 Fatal 直接拒绝启动 |
 | HJ | — | — | — | — | — | — | -1 | 单跳直连，只关看门狗 |
-| QW / QN | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | QW 只当链尾且协议不同 → 永不走竞速；QN 只有 Conatus 单跳 |
+| QW | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | QW 只当链尾且协议不同 → 永不走竞速 |
 
 全局：`upstreamHeaderTimeoutSec` 45、`chainBudgetSec` **-1（不限）**、`earlyCommitMs` 未写（生效 8000ms / 10s）。
 

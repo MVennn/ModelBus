@@ -476,9 +476,9 @@ def probe_targets(conf, alias):
 
     `model_alias.py` 会把配置重写成显示名，Go 上游不认识这些 id，直接拿显示名
     探测会 404 后被误判成「已下架」。这里按 alias map 还原上游名，只管 OpenCode-Go
-    （OC）渠道的模型；其它渠道（WB / QD / QN / qwen 等）由各自脚本或别名表管理，
-    **不能拿去当 Go 模型探测**，否则会出现「把 qn: 种子探成 400 后误删」这类事故
-    （2026-10-29 Conatus / Kimi-K3 被清即此因：probe_targets 没排除 QN 渠道）。
+    （OC）渠道的模型；其它渠道（WB / QD / qwen 等）由各自脚本或别名表管理，
+    **不能拿去当 Go 模型探测**，否则会出现「把带渠道前缀的种子探成 400 后误删」这类事故
+    （2026-10-29 曾因 probe_targets 没排除非 OC 渠道而清掉过模型）。
     """
     targets, skipped = {}, 0
     for display, pid in conf.items():
@@ -488,12 +488,12 @@ def probe_targets(conf, alias):
             continue
         entry = alias.get(display) or {}
         channel = str(entry.get("channel") or "")
-        # 有别名且别名指向非 OC 渠道（WB / QD / QN / qwen）→ 不归本脚本管
+        # 有别名且别名指向非 OC 渠道（WB / QD / qwen）→ 不归本脚本管
         if channel and channel != "OC":
             skipped += 1
             continue
         upstream = str(entry.get("upstream") or display)
-        # 即便别名缺失（原始 qn: 种子未归一化），裸上游带前缀也归对应渠道
+        # 即便别名缺失（原始带前缀种子未归一化），裸上游带前缀也归对应渠道
         if upstream.startswith(("qn:", "qwen:", "qoder:", "cn:", "global:", "wb:", "oc:", "qd:")):
             skipped += 1
             continue

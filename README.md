@@ -29,7 +29,7 @@ ZCode 仍作为**兼容投影**保留，不再是中心。`tools/agent_profiles.
 
 仓里的 `providers/opencode-go/`、`providers/workbuddy/` 与 `providers/qoder/` 是三个跑通的**完整示例**（OpenCode-Go 套餐、
 WorkBuddy2API 网关、qoder2api-hub 网关）；现在统一成**三组**（主力 / 免费 / 省钱），
-模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同型号跨渠道合并成一条链路（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程，监听 `127.0.0.1:7871`）按 alias map 分流到 7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ），并按需托管 2 个本地网关子进程（WorkBuddy `7863` / Qoder `8790`）。方法本身与供应商无关，接一个新供应商要做的四步见
+模型 ID 只用型号名（如 `DeepSeek-4.1-Flash`），同型号跨渠道合并成一条链路（WB 固定链首，其余按价格 / 前缀 / 渠道稳定排序），由 `tools/model_alias.py` 生成、`gateways/zgate`（Go，单进程，监听 `127.0.0.1:7871`）按 alias map 分流到 6 个 upstreams（OC / WB / QD / QW / GM / HJ），并按需托管 2 个本地网关子进程（WorkBuddy `7863` / Qoder `8790`）。方法本身与供应商无关，接一个新供应商要做的四步见
 [docs/MODEL-PROVIDERS.md](docs/MODEL-PROVIDERS.md) §0。
 
 **边界**：本仓库**不含 DSH 宿主、也不含 ZCode 客户端**，只写宿主配置 —— DSH 侧 `cordis.patch.yml`、兼容投影 `provider_config.json`；
@@ -51,7 +51,7 @@ WorkBuddy2API 网关、qoder2api-hub 网关）；现在统一成**三组**（主
 顺序不能乱：**先刷价格表 → 再探测 → 最后同步**。探测要慢 —— 一个模型间隔至少 20 秒，
 太密会把对方的账号池打爆；同步是秒级的。
 
-1. **准备环境变量** —— `OPENCODE_GO_KEY`（OpenCode-Go）、`WB_GATEWAY_KEY`（WorkBuddy 网关）、`QD_API_KEY`（Qoder 网关）、`QWEN_API_KEY` / `QWEN_BASE`（千问直连）、`QINIU_API_KEY`（七牛云 AI 网关）、`GEMINI_API_KEY`（GM 渠道）、`HJM_API_KEY`（HJ 渠道）—— 7 个 upstream 各读各的 keyEnv，变量名以 `gateways/zgate/internal/keys/keys.go` 为准；部分也可用 git-ignored 的 `providers/*/.env.local`（`gemini` / `hajimi` / `qwen` / `qiniu` / `qoder` 各一份）。凭据一律从环境变量读，只写变量名、不写真值，完整清单见 [docs/SECRETS.md](docs/SECRETS.md) §3.5。
+1. **准备环境变量** —— `OPENCODE_GO_KEY`（OpenCode-Go）、`WB_GATEWAY_KEY`（WorkBuddy 网关）、`QD_API_KEY`（Qoder 网关）、`QWEN_API_KEY` / `QWEN_BASE`（千问直连）、`GEMINI_API_KEY`（GM 渠道）、`HJM_API_KEY`（HJ 渠道）—— 6 个 upstream 各读各的 keyEnv，变量名以 `gateways/zgate/internal/keys/keys.go` 为准；部分也可用 git-ignored 的 `providers/*/.env.local`（`gemini` / `hajimi` / `qwen` / `qoder` 各一份）。凭据一律从环境变量读，只写变量名、不写真值，完整清单见 [docs/SECRETS.md](docs/SECRETS.md) §3.5。
 2. **刷价格表** —— WorkBuddy 侧先跑 `providers/workbuddy/workbuddy_fetch_pricing.py`；
    OpenCode-Go 侧不用刷，同步脚本每次现拉目录与价格；Qoder 侧也不用刷，`qoder_sync.py` 每次现拉 `/v1/models`。
 3. **探测** —— `providers/workbuddy/workbuddy_probe.py --sleep 20`、`providers/opencode-go/probe/probe_models.py`、

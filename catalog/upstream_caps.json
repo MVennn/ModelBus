@@ -11,10 +11,6 @@
     "oc": {
       "url": "https://opencode.ai/zen/go/v1/models",
       "count": 30
-    },
-    "qn": {
-      "url": "https://api.qnaigc.com/v1/models",
-      "count": 89
     }
   },
   "models": [
@@ -94,20 +90,6 @@
         "max_output_tokens": "OC:beam-free",
         "supports_tool_call": "OC:beam-free",
         "supports_image": "OC:beam-free"
-      },
-      "conflicts": [],
-      "cross": [],
-      "notes": ""
-    },
-    {
-      "display": "Conatus",
-      "channel": "QN",
-      "base": "qiniu/conatus-free",
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "field_sources": {
-        "context_window": "QN:qiniu/conatus-free",
-        "max_output_tokens": "QN:qiniu/conatus-free"
       },
       "conflicts": [],
       "cross": [],

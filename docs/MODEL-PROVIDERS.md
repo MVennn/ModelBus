@@ -12,7 +12,7 @@
 GM 上游从 catiecli 换成 123 中转的原生支持工具版，四档推理等级（旧 3.8 flash 链与独立 asd/123 provider 均已移除）。）
 
 > **分组沿革（历史，不约束现役）**：七组 provider → 2026-10-23 四组（主力 / 免费 / 低耗 / 高耗）
-> → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并，新增 `QN` 七牛云渠道）
+> → 2026-10-28 三组（主力 / 免费 / 省钱，低耗与高耗合并）
 > → 模型 ID 改为型号名（如 `DeepSeek-4.1-Fs`），跨渠道 / 跨协议由本地入口桥接。
 > 逐次变更见根 `CHANGELOG.md`；**现役三组与命名的唯一正本是 [MODEL-ALIAS.md](MODEL-ALIAS.md) §4**。
 价格 / 额度 / 倍率随服务商变动，改之前先看 [MAINTENANCE.md](MAINTENANCE.md) §1。
@@ -130,7 +130,7 @@ python providers/qoder/qoder_sync.py                   # 只打印 Qoder 计划
 > 分离模式（`workbuddy_sync.py --separate`）见 §4.2。
 >
 > **现行 ZCode 只有 3 个 chat provider**（`opencode-go-chat` / `-free` / `-fast`）：
-> Qoder / 千问 / 七牛模型都按成本并入这三组（见 §4.9）。下面的七 provider 表是历史口径。
+> Qoder / 千问模型都按成本并入这三组（见 §4.9）。下面的 provider 表是历史口径。
 
 > 「额度可撑输出」= **月额度 ÷ 输出单价**，是分档与排序的依据（每个模型额度独立，
 > 换模型 = 换一份独立额度）。
@@ -594,7 +594,7 @@ map 是**一段 JS 表达式**，引擎求值成 JSON 对象后再发出去。
 | `map = '{"thinking":{"type":"enabled"}}'` | 上游只认 thinking 一个字段 |
 | 不配 | 模型正常认 ZCode 默认注入的字段（`thinking` + `enable_thinking` + `reasoning_effort` + `reasoning`） |
 
-**空 map 模型清单（历史口径，现网 0 实例）**：`Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、
+**空 map 模型清单（历史口径，现网 0 实例）**：`Kimi-K3`、`Claude-Haiku-5.5`、
 `Muse-Spark1.3`、`GPT-6-Luna` 是 2026-11-10 前采集时点的记录；2026-11-11 实测
 `providerModelRules` 19 条里 0 条 `map = "{}"`，早先 id 已并组改名且不在现网配置。
 机制与历史复现手法见 [PITFALLS.md](PITFALLS.md) §2，档位装饰项的解释见 §5.4。
@@ -644,7 +644,7 @@ high 抬到 max，等于改费用与首字延迟，不能当成排版问题。
 | WB | `/panel/api/models` 的 `supported_efforts` | `workbuddy_sync.py` `build_model_rule()` | `can_disable_thinking=true` 才补 |
 | QD | `/v1/models` 的 `reasoning_efforts` | `qoder_sync.py` `model_rule_config()` | 目录没这字段，不补 |
 | OC | `/models` 的 `capabilities.reasoning.effort` | `go_model_sync.py` `add_model()` | 目录没这字段，不补 |
-| QN / QW | 目录里没有档位字段 | —— | 只能「思考/不思考」，同步日志会列出这些型号 |
+| QW | 目录里没有档位字段 | —— | 只能「思考/不思考」，同步日志会列出这些型号 |
 
 OC 有个特例：四字段原生 body 被拒的型号（`needs_no_thinking`）如果是 chat 协议且不在
 `EFFORT_UNSUPPORTED`（muse 系，带 `reasoning_effort` 直接报错），改写成
@@ -659,7 +659,7 @@ OC 有个特例：四字段原生 body 被拒的型号（`needs_no_thinking`）�
 | 状态 | 模型 | 说明 |
 |---|---|---|
 | 真档位（选择会变成 `reasoning_effort`） | `DeepSeek-4.1-Flash`（disabled/low/high/max）、`Qwen-3.8-Max`（low/medium/xhigh）、`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`、`Space-Bunny`、`Beam`（五档/三档）、`Qwen-3.8-Flash`（low/medium/xhigh）、`HY3`/`HY3-X`（low/high）、`HY4-Pre`（只有 high） | 10 个 |
-| 有档位但**不发**（装饰项） | `Kimi-K3`、`Conatus`、`Claude-Haiku-5.5`、`Muse-Spark1.3`、`GPT-6-Luna` | 5 个：七牛是 Anthropic 桥、后两个是 messages/responses 协议，都只能 `map="{}"` |
+| 有档位但**不发**（装饰项） | `Kimi-K3`、`Claude-Haiku-5.5`、`Muse-Spark1.3`、`GPT-6-Luna` | 4 个：后两个是 messages/responses 协议，都只能 `map="{}"` |
 | 只有开关且开关生效 | `Iceman`、`MiMo-2.6-Flash`、`MiMo-2.6-Pro` | 上游目录没有档位声明（`cn:mimo-v2.6-pro` 的 `supported_efforts` 为空） |
 
 **「面板没列」不等于「不能用」**：2026-11-03 实测 `cn:hy3-x`、`cn:hy3-b`、`cn:hy3-c`、
@@ -680,7 +680,7 @@ OC 有个特例：四字段原生 body 被拒的型号（`needs_no_thinking`）�
 嫌慢就把 `high` 挪到数组末尾（下拉顺序会变成 disabled/low/max/high）。
 
 **规则（新模型准入）**：上游目录声明了档位就必须写进 `values`；写不进去只有两种正当理由
-——目录没有该字段（QN/QW），或该型号必须整包禁发思考字段（messages/responses 协议、
+——目录没有该字段（QW），或该型号必须整包禁发思考字段（messages/responses 协议、
 muse 系）。同步日志会分别打印「未声明档位」和「声明了但写不进去」的型号清单，出现第三种
 理由就是回归。
 

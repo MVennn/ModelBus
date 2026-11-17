@@ -652,7 +652,7 @@ def admin_metrics():
     return cached("admin_metrics", 10000, fn)
 
 
-SEGMENTS = ("workbuddy", "qoder", "qwen", "qiniu", "gemini", "hajimi", "opencode")
+SEGMENTS = ("workbuddy", "qoder", "qwen", "gemini", "hajimi", "opencode")
 
 
 def overview():

@@ -163,7 +163,7 @@ L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名�
 | WB | 39 | 11 | 28 |
 | OC | 30 | 11 | 19 |
 | QD | 12 | 4 | 8 |
-| QW / QN | 1 / 1 | 1 / 1 | 0 / 0 |
+| QW | 1 | 1 | 0 |
 
 **大头不是 bug，是设计**：条目只从 `provider_config.json` 的 `personalModelIds` 与
 `providers/qwen/pools.json` 生成，上游 `/v1/models` 与价格表都不会自动建档。也就是
@@ -321,29 +321,29 @@ QD 按峰谷计价（×`QD_FACTOR` 0.86）：夜里 valley 0.04 → 0.03，白�
 
 ### 3.4 聚合度实测（2026-11-17，29 个别名）
 
-口径：一个别名 = 一条链；聚合度 = 链上**去重后**的端点（` + "`channel` + `base` + `upstream`" + ` 三元组），
+口径：一个别名 = 一条链；聚合度 = 链上**去重后**的端点（`channel` + `base` + `upstream` 三元组），
 同端点写两遍不算备份。
 
 | 聚合度 | 模型数 | 模型 |
 |---|---|---|
-| 3 | 2 | ` + "`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`（WB → QD → OC）" + ` |
-| 2 | 3 | ` + "`DeepSeek-4.1-Flash`（WB→QW）、`HY4-Flash-Free`（WB→OC）、`Qwen-3.8-Flash`（QD→OC）" + ` |
+| 3 | 2 | `GLM-5.3-Flash`、`MiniMax-M3.1-Flash`（WB → QD → OC） |
+| 2 | 3 | `DeepSeek-4.1-Flash`（WB→QW）、`HY4-Flash-Free`（WB→OC）、`Qwen-3.8-Flash`（QD→OC） |
 | 1 | 24 | 其余 |
 
 链上共 49 跳、去重 36 跳：**13 处是同一 (base, upstream, price) 写两遍**，不提供额外可用性
-（失败时还会在同一端点再试一次），属于白试。涉及 ` + "`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`、" + `
-` + "`HY4-Flash-Free`、`Qwen-3.8-Flash` 各 1 跳，以及 9 个 OC 单渠道模型的 `OC>OC`。" + `
+（失败时还会在同一端点再试一次），属于白试。涉及 `GLM-5.3-Flash`、`MiniMax-M3.1-Flash`、`
+`HY4-Flash-Free`、`Qwen-3.8-Flash` 各 1 跳，以及 9 个 OC 单渠道模型的 `OC>OC`。`
 生成时对 chain 按三元组去重一次即可。
 
-端点分布：WB ` + "`127.0.0.1:7863` 7 处、OC 直连 `opencode.ai/zen/go` 26 处、OC 本地 relay `127.0.0.1:8789` 9 处、" + `
-QD ` + "`127.0.0.1:8790` 4 处、QW / QN / GM 各 1 处。" + `
+端点分布：WB `127.0.0.1:7863` 7 处、OC 直连 `opencode.ai/zen/go` 26 处、OC 本地 relay `127.0.0.1:8789` 9 处、`
+QD `127.0.0.1:8790` 4 处、QW / GM 各 1 处。
 
-**9 个模型只挂本地 relay**（` + "`big-pickle`、`DeepSeek-4.1-Flash-Free`、`flint-40b`、`GLM-5.3-Flash-Free`、" + `
-` + "`iceman`、`inkling-2-small`、`MiMo-2.6-Flash-Free`、`nemotron-3.5-lightning`、`nemotron-3.5-super-vl`）" + `
+**9 个模型只挂本地 relay**（`big-pickle`、`DeepSeek-4.1-Flash-Free`、`flint-40b`、`GLM-5.3-Flash-Free`、`
+`iceman`、`inkling-2-small`、`MiMo-2.6-Flash-Free`、`nemotron-3.5-lightning`、`nemotron-3.5-super-vl`）
 —— relay 一停它们整条不可达。2026-11-17 停 relay 后这 9 个已同时进隐藏名单
 （见 [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md)）。
 
-**6 个可见模型没有回落**（` + "`Conatus`、`Gemini-4-Hydrogen`、`HY4`、`HY4-Flash`、`Qwen-3.8-Max`、`Space-Bunny`" + `），
+**5 个可见模型没有回落**（`Gemini-4-Hydrogen`、`HY4`、`HY4-Flash`、`Qwen-3.8-Max`、`Space-Bunny`），
 渠道挂了就是直接失败；要冗余得在 alias map 里补跳，不是在 zgate 里加重试。
 ---
 
@@ -355,7 +355,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
 | 组（providerId） | 装什么 | 判定 |
 |---|---|---|
 | **主力** `opencode-go-chat` | `HY4`（WB 单跳 0.29，竞技榜建模 #8 / 网页 #10）+ `DeepSeek-4.1-Flash`（四跳链：WB → OC → OC@机场 → QW）+ `Qwen-3.8-Max`（贵备份，QD 单跳 0.17；OC 同名跳缺价未收录）+ 竞技榜达标的两条（`MiMo-2.6-Flash` / `Space-Bunny`） | `MAIN_IDS`，键是 `<协议>:<上游 id>`（可写显式渠道，如 `chat:qoder:Qwen3.8-Max`），**不受价格上限约束**；白名单点名但配置里没有的型号会补建条目（见 §6） |
-| **免费** `opencode-go-chat-free` | 真免费条目（当前 5 条：HY3 / HY4-Free / Beam / Conatus / Iceman） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
+| **免费** `opencode-go-chat-free` | 真免费条目（2026-10-28 快照 4 条：HY3 / HY4-Free / Beam / Iceman，现网条数以 --check 输出为准） | 链路最低价 = 0；组内 `HY` 前缀置顶，其余按价格升序 |
 | **省钱** `opencode-go-chat-fast` | **每个厂商 1–2 个最具代表性的现行产品**（当前 8 条）；前旗舰/上一代一律不收录 | 命中 `LOW_PICKS` 即进组，**不受 `LOW_MAX` 价格上限约束**（所以 MiMo-2.6-Pro 0.13 能在组里）；名单外另有一条 **自动补位**（见下） |
 | ~~高耗~~ | 已删除 | 不在两个名单里且价格 > 0.11 → **不收录** |
 
@@ -382,7 +382,7 @@ token 里 86% 是 `DeepSeek-4.1-Flash` 一个模型，高耗组 16 条全部零�
   messages 两种形态同时存在（千问桥接版），只写型号名会把两条一起吸进主力。
 - **跨协议合并是例外而非默认**：`MERGE_ACROSS_PROTOCOL` 里的型号（目前
   `deepseek-v4.1-flash` 与 `qwen3.8-flash`）把 chat 与 messages 跳并成一条链，
-  每跳自带 `protocol`，路由逐跳派发。`CHANNEL_RANK` 再把指定渠道钉到链尾（QW rank 2、QN rank 3），实现「先把月度额度用完，再用
+  每跳自带 `protocol`，路由逐跳派发。`CHANNEL_RANK` 再把指定渠道钉到链尾（QW rank 2），实现「先把月度额度用完，再用
   一年期预付额度」。
 - **主力豁免价格上限**：白名单点名的条目不受 `LOW_MAX` 价格闸约束（现行主力仅 DeepSeek 0.11；历史上 `Qwen-3.8-Max` 0.17 曾是贵备份，2026-11-09 已下沉省钱组、现价 0.43），名单外超限模型一律不收录，
   所以 `--max-price` 只对非主力生效。
@@ -568,7 +568,6 @@ python tools/model_alias.py --check --arena --scores \
 | 0 | WB | 额度优先消费，固定链首，不看价格；`WB_FIRST_CHANNELS` 另做硬保护 |
 | 1 | OC / QD / GM / HJ | 平价付费档，同档内按价格排 |
 | 2 | QW | 一年期预付额度，排在所有付费跳之后（原 `TAIL_HOPS` 的等价表达） |
-| 3 | QN | 限免渠道排最后；免费不等于优先烧，价值是兜底 |
 | 4 | 未登记渠道 | `CHANNEL_RANK_DEFAULT` |
 
 第二维 `HOP_PRIORITY` 只服务「同价多跳」：GM 的 7 个 Gemini Flash 档同价，靠 (价格, upstream 字符串) 排会把 `3.5` 排到 `3.8` 前面，于是把「新一代先试」写成显式数字表（0…6），表外取 99，行为与此表引入前一致。

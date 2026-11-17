@@ -1060,13 +1060,3 @@ func TestStreamingHeaderWatchdogPassesThrough(t *testing.T) {
 		t.Fatalf("正文被吃掉：%q", string(raw))
 	}
 }
-
-func TestQiniuChatHopGetsBearer(t *testing.T) {
-	srv, _ := newServer(t, `{"models":{},"legacy":{}}`, "http://127.0.0.1:1")
-	r := httptest.NewRequest("POST", "/chat/completions", strings.NewReader(`{"model":"m"}`))
-	r.Header.Set("Authorization", "Bearer client-raw")
-	h := srv.forwardHeaders(r, []byte(`{"model":"m"}`), "QN", "qn-key")
-	if got := h.Get("Authorization"); got != "Bearer qn-key" {
-		t.Fatalf("QN Authorization = %q, want Bearer qn-key", got)
-	}
-}

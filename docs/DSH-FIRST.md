@@ -73,7 +73,7 @@
 
 修法见 §4 批 1：`tools/model_caps.py` 从 alias map 反查 site 规则，把每条模型的能力字段连同出处生成 `catalog/model_caps.json`，`--check` 与现网逐字段比对。
 
-**已落地（2026-11-11）**：光有「规则里写了什么」还不够 —— 规则只能证明「没写」，证明不了「真实上限」。新增 `tools/caps_upstream.py` 直连上游模型接口取真值（WB 面板 / OC / QN），`model_caps.py --upstream` 用真值压过规则解析结果，`--apply-source upstream:` 保证**规则推断值不落盘**。20 条里 16 条已是接口实测值，剩 Gemini×2 / Qwen-3.8-Max / HY3-X 四条标 `source=none` 不伪装。细节见 [CAPABILITY-AUDIT.md](CAPABILITY-AUDIT.md) §9。
+**已落地（2026-11-11）**：光有「规则里写了什么」还不够 —— 规则只能证明「没写」，证明不了「真实上限」。新增 `tools/caps_upstream.py` 直连上游模型接口取真值（WB 面板 / OC），`model_caps.py --upstream` 用真值压过规则解析结果，`--apply-source upstream:` 保证**规则推断值不落盘**。20 条里 16 条已是接口实测值，剩 Gemini×2 / Qwen-3.8-Max / HY3-X 四条标 `source=none` 不伪装。细节见 [CAPABILITY-AUDIT.md](CAPABILITY-AUDIT.md) §9。
 
 ---
 

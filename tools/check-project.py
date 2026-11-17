@@ -63,10 +63,9 @@ STALE = [
     (r"3\s*个\s*provider", "旧口径：3 个 provider"),
     (r"四个常驻进程", "旧口径：四个常驻进程"),
     (r"293\s*MB", "旧口径：293 MB"),
-    # upstreams 数量跟着 zgate.json 真值走：2026-11-10 加入 HJ（哈基米 gemai.cc）后
-    # 是 7 个（OC/WB/QD/QW/QN/GM/HJ）。数字口径已最后一次变动，再写 6 就是漏渠道；
-    # 当年「6 个含 CP」的写法也一并被这条抓住（CP = 已退役的 CLIProxyAPI）。
-    (r"6\s*个\s*upstreams?", "旧口径：6 个 upstreams（HJ 哈基米加入后应为 7 个）"),
+    # upstreams 数量跟着 zgate.json 真值走：2026-11-18 QN（七牛）渠道下线后是
+    # 6 个（OC/WB/QD/QW/GM/HJ）。再写 7 就是多算了已下线的 QN。
+    (r"7\s*个\s*upstreams?", "旧口径：7 个 upstreams（QN 七牛渠道下线后应为 6 个）"),
     (r"3\s*个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：3 个 child（Gemini 反代已移除）"),
     (r"三个\s*(?:child|children|本地子进程|本地网关子进程)", "旧口径：三个 child（Gemini 反代已移除）"),
     (r"8317", "旧口径：CLIProxyAPI 端口 8317（Gemini 反代已移除）"),
@@ -101,7 +100,7 @@ def check_canonical(results: list) -> None:
 
 
 def check_gateway(results: list) -> None:
-    # 评估 m00494 暴露的三处回归：聚合 catalog、五段 /health、QN Bearer。
+    # 评估 m00494 暴露的三处回归：聚合 catalog、五段 /health、原生 chat 跳的 Bearer 覆盖。
     # 门面文档写「已落地」之前源码实现必须真的在位；pre-commit 与 CI 共用这道闸。
     before = len(results)
     try:
@@ -112,7 +111,6 @@ def check_gateway(results: list) -> None:
         return
     checks = [
         ('func (s *Server) models(', 'GET /v1/models 聚合 catalog handler'),
-        ('case "WB", "QD", "QW", "QN", "GM", "HJ"', 'QN/GM/HJ 原生 chat 跳的 Bearer 覆盖'),
     ]
     for needle, why in checks:
         if needle not in router:
@@ -159,8 +157,23 @@ def check_gateway(results: list) -> None:
             unknown_pol = sorted(pol - ch)
             if unknown_pol:
                 results.append(('FAIL', 'zgate.json channelPolicy 指向未登记渠道: ' + str(unknown_pol)))
+            # Bearer 覆盖也跟着渠道集合走：不再写死 case 列表（2026-11-18 下线 QN 时
+            # 正是这行写死值需要人工跟着改）。规则：除 OC 外的每个登记渠道都必须在
+            # forwardHeaders 的 case 分支里，多一个少一个都算漂移。
+            m_fh = re.search(r'func \(s \*Server\) forwardHeaders\([^\n]*\n(.*?)\n\}\n',
+                             router, re.S)
+            m_case = re.search(r'case ((?:"[A-Z0-9]{2}"(?:,\s*)?)+):', m_fh.group(1)) if m_fh else None
+            if not m_case:
+                results.append(('FAIL', 'router.go: forwardHeaders 的 Bearer 渠道分支解析不出'))
+            else:
+                bearer = set(re.findall(r'"([^"]+)"', m_case.group(1)))
+                want_bearer = ch - {'OC'}
+                if bearer != want_bearer:
+                    results.append(('FAIL', 'forwardHeaders Bearer 分支与渠道清单不一致 多='
+                                    + str(sorted(bearer - want_bearer)) + ' 缺='
+                                    + str(sorted(want_bearer - bearer))))
     if len(results) == before:
-        results.append(('OK', '网关实现: /v1/models 聚合 + /health 段表由 keys.Channels 驱动 + QN/GM/HJ Bearer 在位'))
+        results.append(('OK', '网关实现: /v1/models 聚合 + /health 段表由 keys.Channels 驱动 + Bearer 分支覆盖全部远程渠道'))
 
 
 def check_semantic(results: list) -> None:

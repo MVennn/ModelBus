@@ -124,10 +124,6 @@ HJ_PRICES: dict = {}
 # 路由的 hopFatal + 冷却会把这跳摘掉，不需要有人回来改配置。
 QW_CREDIT_UNTIL = "2027-10-28"
 
-# 七牛云 `qiniu/conatus-free` 是限时免费（到 2026-11-30）。过期后 price_of 返回 None，
-# 这一跳自动消失 —— 和限免到期同一条机制，不需要人工回来删配置。
-QN_FREE_UNTIL = "2026-11-30"
-
 # Hand-picked core. `~/.zcode/v2/arena-main.json` can add more (see
 # tools/arena_leaderboard.py); `--no-arena` restores this list only.
 # 键一律 `<协议>:<上游 id>`：同一型号会以 chat / messages 两种形态出现
@@ -237,16 +233,14 @@ MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash", "qwen3.8-flash"}
 WB_FIRST_CHANNELS = {"WB"}
 
 # 渠道消费优先级 —— 链内跳排序的**第一维**（用户 2026-11-06 口径：
-# WB → OC → 千问 ¥300 额度 → 七牛限免）。取代原来「WB 布尔特判 + TAIL_HOPS 布尔特判」
+# WB → OC → 千问 ¥300 额度）。取代原来「WB 布尔特判 + TAIL_HOPS 布尔特判」
 # 两段并列逻辑，让「哪个渠道先烧」变成一个可读的表，而不是两条 if。
 #   · WB=0：额度优先消费，固定链首，不看价格、不受任何降级开关影响（历史教训见上）
 #   · OC / QD=1：平价付费档，同档内按价格排
 #   · QW=2：一年期预付额度，必须排在所有付费跳之后（原 TAIL_HOPS 的等价表达）
-#   · QN=3：限免渠道排最后 —— 免费不等于该优先烧，它的价值是兜底
 # 与旧键等价性：旧键第 1 维「WB?0:1」+ 第 2 维「TAIL?1:0」在 WB(0,0)/OC(1,0)/QW(1,1)
-# 三种情况下与 (0,1,2) 完全同序；QN 目前没有与其它渠道混链的条目，rank 3 无实际影响。
 #   · GM=1：第三方中转直连付费档，与 OC/QD 同档，按价格排
-CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "QN": 3, "GM": 1, "HJ": 1}
+CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "GM": 1, "HJ": 1}
 CHANNEL_RANK_DEFAULT = 4
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
@@ -378,8 +372,6 @@ QD_PRICES = {
 MODEL_META = {}
 
 ABBR = {
-    # 七牛云网关的 id 形如 `qiniu/conatus-free`：去掉 `qiniu/` 前缀，Conatus 自成系列。
-    "qiniu/conatus-free": "Conatus",
     # Gemini 4 Hydrogen（123 中转）：原生支持工具版并入主力，显示名仍叫 Gemini-4-Hydrogen。
     "gemini-4-hydrogen-原生1m支持工具": "Gemini-4-Hydrogen",
     "moonshotai/kimi-k3-free": "Kimi-K3",
@@ -632,9 +624,8 @@ def provider_rules(cfg: dict) -> list[dict]:
 # 各渠道能力不同，档位格式不能跨渠道搬：
 #   WB / QD 走统一路由（zgate），认 reasoning_effort；
 #   OC 直连 opencode.ai/zen/go，只认 reasoning_effort；
-#   QN 直连七牛；
 #   其余（hjm: 哈基米、gem: 中转）档位是装饰项，不回写。
-EFFORT_CHANNELS = ("WB", "QD", "OC", "QN")
+EFFORT_CHANNELS = ("WB", "QD", "OC")
 
 
 def _effort_values(rule_config) -> list:
@@ -1101,7 +1092,7 @@ def _effort_is_live(entry: dict, reasoning) -> bool:
     """这条档位是否真能发出去（不是 GUI 上的装饰）。
 
     判据只看有没有可求值的 map 表达式：
-      · 渠道在自己的能力表里（WB/QD/OC/QN）→ 网关或上游自己吃档位；
+      · 渠道在自己的能力表里（WB/QD/OC）→ 网关或上游自己吃档位；
       · 或者 map 里写了字段（Gemini 的 thinking_budget、reasoning_effort 之类）
         → 客户端按表达式拼 body，跟渠道无关，实测同样生效
        ）。
@@ -1122,7 +1113,7 @@ def _enforce_non_chat_effort(config: dict, entry: dict) -> None:
     但 2026-11-10 实测：opencode-go 的 messages 桥（claude-haiku-5-5 / gpt-6-luna /
     muse-spark-1.3 / beam-free）自己认档位，网关会把它翻成各家的 thinking 字段，
     照旧写 "{}" 等于每天同步一次就把 6 档清成「关/开」。现在按渠道分流：
-      · 档位渠道（WB/QD/OC/QN）：保留档位，只在上游确实没有 reasoning_effort 写法
+      · 档位渠道（WB/QD/OC）：保留档位，只在上游确实没有 reasoning_effort 写法
         时把 map 留原样；带 reasoning_effort 的一律不动；
       · 装饰渠道（hjm: / gem: 之类）：去掉 values，map 归 "{}"，免得 GUI 给假下拉。
     """
@@ -1438,12 +1429,6 @@ def price_of(channel: str, upstream: str, wb: dict[str, dict],
         return HJ_PRICES.get(upstream)
     if channel == "QW":
         return 0.0 if qw_credit_active() else None
-    if channel == "QN":
-        # 七牛限免只覆盖带 -free 后缀的模型（2026-11-30 前）。渠道级一律返 0
-        # 会把将来播种的付费模型也误标成免费，所以必须按上游 id 判定。
-        if not str(upstream).endswith("-free"):
-            return None
-        return 0.0 if datetime.now().strftime("%Y-%m-%d") <= QN_FREE_UNTIL else None
     if channel == "WB":
         record = wb.get(upstream)
         if not record:
@@ -1496,7 +1481,7 @@ def abbreviate(model: str) -> str:
     # （用户 2026-11-06 口径：没有真正不同的模型就不要尾缀）。
     if re.match(r"hy4-preview(-|$)", key):
         return "HY4-Preview"
-    # 厂商前缀（`qiniu/` `moonshotai/`）与 `-free` / `-f` 标记都不进显示名：
+    # 厂商前缀（如 `moonshotai/`）与 `-free` / `-f` 标记都不进显示名：
     # 「免费」由分组表达，只有同型号同时存在免费与付费档时才加 `-Free`。
     # 哈基米售卖站的档位前缀（[满血A] / [官逆B] …）是渠道标，不属于型号：
     # 不去掉的话显示名会变成 "A-gemini-3.8-Flash"，同一型号被拆成一堆名字。
@@ -1669,20 +1654,6 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "base_model": upstream,
             # 千问平台只提供 Anthropic Messages 端点：协议必须钉成 messages，
             # 否则 zgate 会按 chat 直转，上游直接 404。
-            "protocol": "messages",
-            "fallbacks": [],
-            "legacy_ids": [model],
-        }
-    if model.startswith("qn:"):
-        upstream = model[len("qn:"):]
-        return {
-            "raw": model,
-            "original": model,
-            "channel": "QN",
-            "region": "CN",
-            "upstream": upstream,
-            "base_model": upstream,
-            # 七牛云 AI 网关同样只有 Anthropic Messages 端点。
             "protocol": "messages",
             "fallbacks": [],
             "legacy_ids": [model],
@@ -1882,9 +1853,8 @@ def raw_models(cfg: dict, alias_models: dict, legacy: dict) -> list[dict]:
     return out
 
 
-QN_BASE = "https://api.qnaigc.com/v1"
 CHANNEL_BASE = {"WB": WB_BASE, "QD": QD_BASE, "OC": OC_BASE, "QW": QW_BASE,
-                "QN": QN_BASE, "GM": GM_BASE, "HJ": HJ_BASE}
+                "GM": GM_BASE, "HJ": HJ_BASE}
 
 
 def base_of(channel: str, upstream: str | None = None) -> str:
@@ -1956,7 +1926,7 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
 
         for group in groups:
             # 第一键：渠道消费优先级（CHANNEL_RANK）—— WB 链首、OC/QD 其次、
-            # QW 预付额度垫后、QN 限免兜底。原「WB 布尔特判 + TAIL_HOPS 布尔特判」
+            # QW 预付额度垫后。原「WB 布尔特判 + TAIL_HOPS 布尔特判」
             # 两段并列逻辑已并入这张表，行为等价性见 CHANNEL_RANK 的注释。
             # 其后按价格、GB/CN 前缀、渠道、名称稳定排序。
             group = sorted(group, key=lambda h: (
@@ -2075,7 +2045,7 @@ def pool_entries(pools: list[dict], slot: str) -> list[dict]:
 
 
 CHANNEL_PREFIX = {"CN": "cn:", "GB": "global:", "QD": "qoder:", "OC": "oc:",
-                  "QW": "qwen:", "QN": "qn:", "GM": "gem:", "HJ": "hjm:"}
+                  "QW": "qwen:", "GM": "gem:", "HJ": "hjm:"}
 
 
 def hop_specs(protocol: str, hop: dict) -> list[str]:
@@ -2350,13 +2320,11 @@ def write_quota_windows(path: Path = QUOTA_WINDOWS) -> None:
     """把渠道额度窗口落成独立文件，供 sync_report.py 与客户端只读消费。
 
     为什么单独落一份：这两个日期不影响今天的分组，不该参与选模计算（否则每天
-    都报漂移）；但也不能只躺在代码常量里 —— 2026-11-06 之前 QN 限免只剩 24 天、
-    QW 试用池只剩 39 天，全仓没有任何地方提醒过。
+    都报漂移）；但也不能只躺在代码常量里 —— 2026-11-06 之前 QW 试用池只剩 39 天，
+    全仓没有任何地方提醒过。
     """
     today = datetime.now().date()
     rows = [
-        ("QN", QN_FREE_UNTIL,
-         "七牛限免（conatus-free / kimi-k3-free），到期后这两条直接从配置消失"),
         ("QW", QW_TRIAL_UNTIL,
          "千问每模型 1M tokens 试用池，到期后边际成本从 0 变真钱"),
         ("QW", QW_CREDIT_UNTIL,

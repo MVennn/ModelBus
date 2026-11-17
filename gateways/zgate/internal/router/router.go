@@ -154,7 +154,7 @@ const transportRetryDelay = 300 * time.Millisecond
 // 125 次（沉默 79 + 首块 46），其中上游真说过 503 的只有 7 次（5.3%）；HJ 判死 32 次，
 // 一大半与 502 同秒返回。网关一判死就回 502 → 客户端 retryPolicy 命中 SERVER 必然重打
 // → 上游那边又在跑 token → 用户看到「本地断开、又跑一次」。根因是把「上游慢」当成「上游死」。
-// 结论：判死权归上游。HJ（与 QN 同级的普通供应商）headerTimeoutSec = -1 不设看门狗；
+// 结论：判死权归上游。HJ（普通供应商，无本地子进程）headerTimeoutSec = -1 不设看门狗；
 // GM 同样 -1，只用 hedgeAfterMs 18s 对冲（对冲不取消前一路，只多开一路）。
 // 全局兜底 12s → 45s，只兜住「真的挂了」的渠道。见 docs/MODEL-PROVIDERS.md §4.11.3。
 const upstreamHeaderTimeout = 12 * time.Second
@@ -800,7 +800,7 @@ func (s *Server) serveHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	if !isChat && (isQoder(model) || isWorkBuddy(model) || isQwen(model) || isQiniu(model)) {
+	if !isChat && (isQoder(model) || isWorkBuddy(model) || isQwen(model)) {
 		writeJSON(w, 400, errorBody("WorkBuddy/Qoder/Qwen models only support chat/completions", "invalid_request_error"))
 		return
 	}
@@ -960,31 +960,6 @@ func (s *Server) routeFallback(w http.ResponseWriter, r *http.Request, body []by
 		})
 		finishBridge(w, cw, result)
 		return
-	case "QN":
-		// 七牛云 AI 网关：同样只认 Anthropic Messages，裸 `qn:` id 还没进 alias map
-		// 时（播种后、归一化前）也要能落到正确上游。
-		channel, label, key = "QN", "qiniu", ks.QN
-		base = cfg.Upstreams["QN"].Base
-		if key == "" {
-			writeJSON(w, 502, errorBody("Qiniu key not configured", "configuration_error"))
-			return
-		}
-		s.log.Infof("%s %s%s model=%s -> QN:messages", r.Method, path, search, model)
-		streaming := wantsStream(body)
-		cw := newBridgeChunkWriter(w)
-		result := bridge.Forward(s.client, bridge.Options{
-			Protocol:      "messages",
-			Base:          base,
-			Key:           key,
-			Body:          body,
-			UpstreamModel: trimPrefixFold(model, "qn:"),
-			DisplayModel:  model,
-			Ctx:           r.Context(),
-			Stream:        streaming,
-			OnChunk:       cw.write,
-		})
-		finishBridge(w, cw, result)
-		return
 	case "WB":
 		channel, label, key = "WB", "workbuddy", ks.WB
 		base = cfg.Upstreams["WB"].Base
@@ -1016,8 +991,6 @@ func fallbackChannelFor(model string, isChat bool) string {
 		return "QD"
 	case isChat && isQwen(model):
 		return "QW"
-	case isChat && isQiniu(model):
-		return "QN"
 	case isChat && isWorkBuddy(model):
 		return "WB"
 	default:
@@ -1057,9 +1030,9 @@ func (s *Server) forwardHeaders(r *http.Request, body []byte, channel, key strin
 		h.Set("User-Agent", "unified-router/1.0")
 	}
 	switch channel {
-	case "WB", "QD", "QW", "QN", "GM", "HJ":
+	case "WB", "QD", "QW", "GM", "HJ":
 		// 这些通道一律用 zgate 自己的 key 覆盖 Authorization：
-		// QN 是七牛云网关、GM 是 catiecli 中转、HJ 是哈基米（gemai.cc）；
+		// GM 是 catiecli 中转、HJ 是哈基米（gemai.cc）；
 		// 漏掉任一通道都会把客户端原始 Bearer（或空）透传上去被回 401「未提供API Key」。
 		h.Set("Authorization", "Bearer "+key)
 	case "OC":
@@ -1719,7 +1692,6 @@ var healthSegments = map[string]string{
 	"WB": "workbuddy",
 	"QD": "qoder",
 	"QW": "qwen",
-	"QN": "qiniu",
 	"GM": "gemini",
 	"HJ": "hajimi",
 }
@@ -2331,7 +2303,7 @@ func (s *Server) reload(w http.ResponseWriter, r *http.Request) {
 			strings.Join(fatal, "；"), "configuration_error"))
 		return
 	}
-	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.QiniuEnvFile, next.GeminiEnvFile, next.HajimiEnvFile)
+	ks := keys.Load(next.ProviderConfig, next.WBGatewayConfig, next.QoderEnvFile, next.QwenEnvFile, next.GeminiEnvFile, next.HajimiEnvFile)
 	applied, stale, added := s.sup.ApplyConfig(next.Children)
 	s.setRuntime(next, ks)
 	// 强制下一次探测别名表：热加载之后不该再等一个节流窗口。
@@ -2920,10 +2892,6 @@ func isQoder(model string) bool {
 
 func isQwen(model string) bool {
 	return strings.HasPrefix(strings.ToLower(model), "qwen:")
-}
-
-func isQiniu(model string) bool {
-	return strings.HasPrefix(strings.ToLower(model), "qn:")
 }
 
 func orDash(s string) string {

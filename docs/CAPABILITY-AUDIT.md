@@ -1,6 +1,6 @@
 # 模型能力配置审计（2026-11-10）
 
-> **更新（2026-11-11）**：本文描述的问题已落地修复 —— 新增 `tools/caps_upstream.py` 直连 WB 面板 / OC / QN 三个上游模型接口取真值，15/19 个模型的能力字段已换成接口实测值或取证值并投影进 DSH，剩 4 条无真值的老实标 none。落地细节、逐模型终值与验收命令见文末 **§9**。
+> **更新（2026-11-11）**：本文描述的问题已落地修复 —— 新增 `tools/caps_upstream.py` 直连 WB 面板 / OC 两个上游模型接口取真值，15/19 个模型的能力字段已换成接口实测值或取证值并投影进 DSH，剩 4 条无真值的老实标 none。落地细节、逐模型终值与验收命令见文末 **§9**。
 >
 > **2026-11-11 15:00 复算**：`Gemini-3.8-Flash` 整族下线（`HJ_PRICES` 清空、渠道保留），现网模型 20 → 19；下文的计数与逐模型表已按 19 复算。
 >
@@ -224,7 +224,7 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 | **显示名** | DSH 下拉用 ZCode 别名（`DeepSeek-4.1-Flash`），上游 name 是 `DeepSeek V4.1 Flash`；WB 面板还有中文 `description` | 有 | 未取，且别名还导致规则匹配全灭 |
 | **价格** | `model_alias.py` 按 WB `credits` 与 QD 价格算，有 0.11 阈值分组；`--check` 今天 **exit 1**：Qwen-3.8-Flash 0.09→0.03、Qwen-3.8-Max 0.43→0.17（价格 2 处 + 连带链路签名 2 处，同一根因） | 有（OC 的 `cost` 带分时倍率） | 只用了 WB 一份，OC 的 `cost.multipliers`（工作日白昼 ×2）完全没进模型 |
 | **分组与排序** | `PROVIDER_MAIN/LOW_ORDER/CHANNEL_RANK` 全是代码常量手写 | 无（是用户偏好） | 合理，但要写清「这是偏好不是真值」 |
-| **协议** | `protocol` 按渠道猜（OC=openai、QW/QN=anthropic） | OC 目录每条带 `api` 字段 | 未取 |
+| **协议** | `protocol` 按渠道猜（OC=openai、QW=anthropic） | OC 目录每条带 `api` 字段 | 未取 |
 | **弃用/时间** | 上游有 `last_updated`、`release_date`，本地不用 | 有 | 未取，模型下架只能靠 404 发现 |
 | **副本漂移** | 同一份能力数据存在 4 处：`provider_config.json`、`cordis.patch.yml`、`zcode-builtin.json`、`wb_panel_models.json` | —— | 只有 provider_config 是源头，其余是投影/快照，无一致性门禁 |
 | **漂移检测** | `dsh_sync.py:206-229` 只查「源头有档位、投影变空」，**不查 ctx/max/img/tool，也不查反向** | —— | 今天这类错误它一律看不见 |
@@ -306,7 +306,7 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 | 项 | 内容 |
 |---|---|
 | 工具 | `tools/caps_upstream.py`（只用标准库） |
-| 取材 | WB `/panel/api/models`（ctx / max / tool / img / efforts）、OC `/zen/go/v1/models`（`limit.*`、`capabilities.tools`、`modalities.input`）、QN `/v1/models`（`context_length` / `max_tokens`） |
+| 取材 | WB `/panel/api/models`（ctx / max / tool / img / efforts）、OC `/zen/go/v1/models`（`limit.*`、`capabilities.tools`、`modalities.input`） |
 | 对号 | 按别名 `chain[].channel` 选上游，主用跳优先；WB 的 `cn:` 前缀与大小写差异都会试 |
 | 产物 | `catalog/upstream_caps.json`（证据快照，可提交、可离线复算，门禁不联网） |
 | 纪律 | 上游没给就是 `null`，**不推算**；跨跳不一致进 `conflicts` 只记录不擅自取舍；主用渠道不提供元数据时只写 `cross` 交叉参考，不填字段 |

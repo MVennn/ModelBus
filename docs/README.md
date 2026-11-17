@@ -11,12 +11,11 @@
 
 | 文档 | 一句话定位 |
 |---|---|
-| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、兼容投影配置落点、7 个 upstreams（OC / WB / QD / QW / QN / GM / HJ）的分组 / 协议 / 工具调用 / 关思考参数 |
+| [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) | **provider 与模型参数正本**：接供应商的四步方法、兼容投影配置落点、6 个 upstreams（OC / WB / QD / QW / GM / HJ）的分组 / 协议 / 工具调用 / 关思考参数 |
 | [MODEL-ALIAS.md](MODEL-ALIAS.md) | **统一命名与分组正本**：纯型号名（真重名才加后缀）、跨渠道合并链路（WB 固定链首、其余按价格稳定排序）、同类模型的判定（看上游回包 model / quota / credit，不看名字）、主力/免费/省钱三组、组内顺序由 `MAIN_ORDER`/`LOW_ORDER` 决定、alias map 与流式协议桥接 |
 | [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md) | **模型隐藏名单正本**：`~/.zcode/v2/model-hidden.json` 的格式与 `tools/model_visibility.py` 命令（hide / show / list）、投影侧过滤点与 `--check` 对齐、OC 暂停续费时隐藏 18 个纯 OC 型号的实例与恢复步骤 |
 | [QODER.md](QODER.md) | **Qoder 接入正本**：qoder2api-hub 的 8790 进程、OAuth/签到、`qoder` provider 的模型与同步/探测命令、边界与故障处理 |
 | [QWEN.md](QWEN.md) | **千问（qianwenai）接入正本**：只提供 Anthropic Messages 的直连上游、`QW` 渠道与协议桥、506 条免费额度四道漏斗筛到 14 个（2026-10 快照）、用完即停与 Go 协议桥流式双路径的边界 |
-| [QINIU.md](QINIU.md) | **七牛云 AI 网关接入正本**：`QN` 渠道、只认 Anthropic Messages、`qiniu/conatus-free` 限免到 2026-11-30、同网关其它免费模型的实测结论 |
 | [MODEL-QUICK-REF.md](MODEL-QUICK-REF.md) | 早期速查（2026-10-20）：价格、额度与实测首字。**结论已并入 MODEL-PROVIDERS.md**，本篇保留作历史快照 |
 | [archive/OPENCODE-GO-ANALYSIS.md](archive/OPENCODE-GO-ANALYSIS.md) | 2026-10-19 的阶段性分析（归档只读）：协议归属实测、价格带筛选、出口方案 |
 
@@ -25,7 +24,7 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [DOC-RULES.md](DOC-RULES.md) | **文档规则正本**：文件命名（全大写连字符）、分类定位、单一正本映射表、链接纪律、变更触发矩阵、体量预算 |
-| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：2 个 child（7863 / 8790）与 7 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | **运行架构整合方案（已落地 2026-10-23）**：2 个 child（7863 / 8790）与 6 个 upstreams 的实测拆解、`zgate` 单入口 + 按需子进程方案、`gateways/` 与 `providers/` 两轴目录重构、分阶段验收与回退 |
 | [DSH-FIRST.md](DSH-FIRST.md) | **DSH 主导的方向正本**：当前架构（DSH 主宿主 + 各类 agent，ZCode 降为兼容投影）、三层命名口径（契约层不动 / 实现层已去 ZCode / 新层用 agent 词汇）、catalog 真源 + 多宿主投影、批 1–批 4 状态与验收口径、DSH 侧可用接缝与多 agent 适配 |
 | [MAINTENANCE.md](MAINTENANCE.md) | 日常维护：刷价格表、探测限速、快照保留、`--apply` 备份与回退、热重载注意事项 |
 | [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md) | **zgate 生命周期正本**：计划任务单任务自启、CMD/DSH 会话树与 Job Object 问题、`build.py --candidate` + `tools/zgate-lifecycle/` 换版流程、失败回滚与常见故障 |

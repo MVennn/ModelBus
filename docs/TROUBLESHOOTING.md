@@ -543,7 +543,7 @@ curl http://127.0.0.1:7871/health
 **现象**：改了 `gateways/zgate/` 下的 Go 代码，`POST /admin/reload` 之后新逻辑没生效。
 
 **原因**：`/admin/reload` 热加载 `zgate.json` 的策略 / 空闲阈值 / 定时窗口 / 上游 base / 凭据
-（`gateways/zgate/internal/router/router.go:963-986`：`config.Load` + `keys.Load` 六通道 + `ApplyConfig(children)` + `setRuntime` + `aliases.Reload()`），不替换二进制；
+（`gateways/zgate/internal/router/router.go` 的 `reload()`：`config.Load` + `keys.Load` 六通道 + `ApplyConfig(children)` + `setRuntime` + `aliases.Reload()`），不替换二进制；
 监听地址 / 新增子进程 / alias map 路径与 Go 代码变更必须换 `zgate.exe` 并重启实例。
 
 **解法**：agent 改完 Go 代码后自动执行 `tools/zgate-lifecycle/restart-zgate.cmd`（CMD 入口，

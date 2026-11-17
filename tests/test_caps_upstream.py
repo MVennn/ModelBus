@@ -36,14 +36,13 @@ def alias(display, hops):
     ]}}}
 
 
-def sources(wb=None, oc=None, qn=None):
+def sources(wb=None, oc=None):
     def table(items):
         return {key: dict(value) for key, value in (items or {}).items()}
 
     return {
         "wb": {"url": "wb", "count": len(table(wb)), "models": table(wb)},
         "oc": {"url": "oc", "count": len(table(oc)), "models": table(oc)},
-        "qn": {"url": "qn", "count": len(table(qn)), "models": table(qn)},
     }
 
 

@@ -87,22 +87,22 @@ class ProbeFilterTest(unittest.TestCase):
     def test_403_unavailable_is_blocked_not_removed(self):
         """事故 1：403 被写成 unavailable 时按地区拒绝处理，不判死。"""
         # blocked 是瞬时限流集合的一员，历史账本不会写 ever_ok，这里复刻原样。
-        g = grouped(free=[row("Conatus", "qn:qiniu/conatus-free", channel="QN")])
-        probe = {"qn:qiniu/conatus-free": {"status": "unavailable", "http": 403}}
+        g = grouped(free=[row("Conatus", "conatus-free", channel="GM")])
+        probe = {"gm:conatus-free": {"status": "unavailable", "http": 403}}
         out, _, suspect, skipped = self._run(g, probe)
         self.assertEqual([r["new_id"] for r in out["free"]], [], "无 ever_ok 的 blocked 照旧摘除")
         self.assertEqual(len(skipped), 1, "403 只能改判 blocked 后再判，不能直接按 unavailable 判死")
         self.assertEqual(out["free"], [], "没有 ever_ok 的 blocked 仍按原语义摘除")
 
-        g2 = grouped(free=[row("Conatus", "qn:qiniu/conatus-free", channel="QN")])
-        probe2 = {"qn:qiniu/conatus-free": {"status": "blocked", "http": 403, "ever_ok": True}}
+        g2 = grouped(free=[row("Conatus", "conatus-free", channel="GM")])
+        probe2 = {"gm:conatus-free": {"status": "blocked", "http": 403, "ever_ok": True}}
         out2, _, _, _ = self._run(g2, probe2)
         self.assertEqual([r["new_id"] for r in out2["free"]], ["Conatus"])
 
     def test_upstream_says_gone_removes_non_main(self):
         """真下架（unavailable 且不是 403）仍然照删 —— 策略不能被改成「永不删」。"""
-        g = grouped(free=[row("Kimi", "qn:moonshotai/kimi-k3-free", channel="QN")])
-        probe = {"qn:moonshotai/kimi-k3-free": {"status": "unavailable", "http": 404}}
+        g = grouped(free=[row("Kimi", "kimi-k3-free", channel="GM")])
+        probe = {"gm:kimi-k3-free": {"status": "unavailable", "http": 404}}
         out, _, _, skipped = self._run(g, probe)
         self.assertEqual(out["free"], [])
         self.assertEqual(len(skipped), 1)

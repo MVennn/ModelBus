@@ -57,7 +57,7 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 | 文件:行号 | 当前内容 | 落地时要做的事 |
 |---|---|---|
 | `gateways/zgate/zgate.json:15-59` | `channelPolicy` 现有配置 | 按需给 `ZF` 加策略；先沿用现有默认再决定是否单列 |
-| `gateways/zgate/zgate.json:75-82` | `upstreams` 当前 7 个渠道（OC / WB / QD / QW / QN / GM / HJ） | 新增 `ZF`，`base` 指向本地 Bun 代理 `http://127.0.0.1:PORT`（PORT 待定，例 `8789`） |
+| `gateways/zgate/zgate.json:75-82` | `upstreams` 当前 6 个渠道（OC / WB / QD / QW / GM / HJ） | 新增 `ZF`，`base` 指向本地 Bun 代理 `http://127.0.0.1:PORT`（PORT 待定，例 `8789`） |
 | `gateways/zgate/zgate.json:83-105` | `children` 现有托管进程 | 新增 Bun 子进程条目：`exe` 指向本地 bun，`args` 指向代理脚本，`cwd`/`port`/`health`/`startTimeoutSeconds` 按现有 child 模板 |
 | `gateways/zgate/internal/config/config.go:21-47` | `Upstream{Base,Child,KeyEnv,GuardReasoning}`、`Child{Policy,IdleSeconds,Exe,Args,Cwd,Port,Health,StartTimeoutSeconds,Windows}` | 结构已含 base / child / keyEnv，无需改结构体 |
 | `gateways/zgate/internal/router/router.go:1042-1072` | `forwardHeaders`，`OC` case 当前注 `opencode-cli/1.0` UA 与 `X-Opencode-Session` | 仿 `OC` 加 `ZF` case，注入第一道门全部头；`Authorization` 是否覆盖由 Bun 代理最终决定 |

@@ -132,7 +132,7 @@ func loadConfig() (*config.Config, keys.Set, error) {
 	if err != nil {
 		return nil, keys.Set{}, err
 	}
-	ks := keys.Load(cfg.ProviderConfig, cfg.WBGatewayConfig, cfg.QoderEnvFile, cfg.QwenEnvFile, cfg.QiniuEnvFile, cfg.GeminiEnvFile, cfg.HajimiEnvFile)
+	ks := keys.Load(cfg.ProviderConfig, cfg.WBGatewayConfig, cfg.QoderEnvFile, cfg.QwenEnvFile, cfg.GeminiEnvFile, cfg.HajimiEnvFile)
 	return cfg, ks, nil
 }
 
@@ -216,7 +216,7 @@ func serve() error {
 
 	log.Infof("zgate %s 已启动: http://%s/v1", version, cfg.Listen)
 	log.Infof("配置文件 : %s", cfg.Path)
-	for _, name := range []string{"OC", "WB", "QD", "QW", "QN"} {
+	for _, name := range []string{"OC", "WB", "QD", "QW"} {
 		u := cfg.Upstreams[name]
 		state := "missing"
 		if ks.For(name) != "" {
@@ -314,7 +314,7 @@ func status() error {
 	fmt.Println()
 
 	fmt.Println("凭据（只报有无）:")
-	for _, name := range []string{"OC", "WB", "QD", "QW", "QN"} {
+	for _, name := range []string{"OC", "WB", "QD", "QW"} {
 		want := ks.For(name) != ""
 		fmt.Printf("  %-3s %-8s %s\n", name, yesNo(want), cfg.Upstreams[name].Base)
 	}

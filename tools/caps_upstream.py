@@ -11,7 +11,6 @@ model_caps.py 的解析链是「别名 → 兼容投影内置规则 → 现网 p
                                                 supports_tool_call / supports_images
   OC  https://opencode.ai/zen/go/v1/models      limit.context / limit.output /
                                                 capabilities.tools / modalities.input
-  QN  https://api.qnaigc.com/v1/models          context_length / max_tokens
 
 本工具按别名链路的每一跳去对应上游对号，取第一跳（主用跳）的值，跨跳不一致就记
 conflicts 但不擅自取舍；取不到的字段留 null，绝不推算。产出是证据快照：可以提交、
@@ -40,7 +39,6 @@ DEFAULT_CURRENT = os.path.expanduser("~/.zcode/v2/provider_config.json")
 DEFAULT_EVIDENCE = os.path.join(REPO, "catalog", "upstream_caps_evidence.json")
 
 OC_BASE = "https://opencode.ai/zen/go/v1"
-QN_BASE = "https://api.qnaigc.com/v1"
 
 CAPABILITY_FIELDS = ("context_window", "max_output_tokens", "supports_tool_call", "supports_image")
 
@@ -111,26 +109,10 @@ def fetch_oc():
     return {"url": OC_BASE + "/models", "count": len(table), "models": table}
 
 
-def fetch_qn():
-    payload = http_json(QN_BASE + "/models")
-    table = {}
-    for model in payload.get("data") or []:
-        ctx = model.get("context_length")
-        out = model.get("max_tokens")
-        table[str(model.get("id"))] = {
-            "context_window": int(ctx) if ctx else None,
-            "max_output_tokens": int(out) if out else None,
-            "supports_tool_call": None,
-            "supports_image": None,
-            "reasoning_values": None,
-        }
-    return {"url": QN_BASE + "/models", "count": len(table), "models": table}
-
-
 # ---------------------------------------------------------------- 别名对号
 
 # 渠道 → 上游表；不在表里的渠道（QD / GM / HJ / QW）目前不提供能力元数据。
-CHANNEL_SOURCE = {"WB": "wb", "OC": "oc", "QN": "qn"}
+CHANNEL_SOURCE = {"WB": "wb", "OC": "oc"}
 
 UNKNOWN_CHANNELS = {
     "QD": "Qoder 端点（127.0.0.1:8790）未暴露 context/limit 元数据",
@@ -296,7 +278,7 @@ def merge_evidence(models, evidence):
 def build_snapshot(alias_map, fetch=True, evidence=None):
     sources = {}
     if fetch:
-        for key, loader in (("wb", fetch_wb), ("oc", fetch_oc), ("qn", fetch_qn)):
+        for key, loader in (("wb", fetch_wb), ("oc", fetch_oc)):
             try:
                 sources[key] = loader()
             except Exception as exc:  # 单个上游失败不影响其它来源

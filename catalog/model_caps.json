@@ -262,52 +262,6 @@
       }
     },
     {
-      "display": "Conatus",
-      "base_model": "qiniu/conatus-free",
-      "channel": "QN",
-      "api_type": "anthropic-messages",
-      "context_window": 1000000,
-      "max_output_tokens": 128000,
-      "reasoning_values": [
-        "disabled",
-        "high"
-      ],
-      "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}",
-      "source": "current",
-      "confidence": "low",
-      "notes": "providerSiteRules 无命中，内置规则只有通配 .* 命中（ctx 1000000 / max 128000 / tool true / img false），不算证据；无上游证据，沿用现网 provider_config 现值；上游接口真值 QN:qiniu/conatus-free",
-      "provenance": {
-        "field_sources": {
-          "context_window": "current",
-          "max_output_tokens": "current",
-          "reasoning_values": "current",
-          "reasoning_map": "current"
-        },
-        "conflicts": [],
-        "hops": [
-          {
-            "priority": 0,
-            "main": true,
-            "channel": "QN",
-            "base": "https://api.qnaigc.com/v1",
-            "protocol": "messages",
-            "api_type": "anthropic-messages",
-            "site_hit_indexes": [],
-            "evidence": []
-          }
-        ],
-        "current": {
-          "context_window": 1000000,
-          "max_output_tokens": 128000,
-          "reasoning_values": [
-            "disabled",
-            "high"
-          ],
-          "reasoning_map": "{\"reasoning_effort\": reasoningLevel == \"disabled\" ? \"none\" : reasoningLevel, \"enable_thinking\": reasoningLevel != \"disabled\"}"
-        }
-      }
-    },
-    {
       "display": "Iceman",
       "base_model": "iceman-contributor-free",
       "channel": "OC",
