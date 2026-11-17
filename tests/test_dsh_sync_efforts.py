@@ -66,6 +66,83 @@ class ReasoningMappingTest(unittest.TestCase):
         self.assertEqual(out["compat"], {"thinkingFormat": "deepseek"})
 
 
+class SharedDefaultEffortTest(unittest.TestCase):
+    """provider 级默认档只取组内共同支持的最高档，无共同档则不设。"""
+
+    def test_shared_high_is_set(self):
+        models = [
+            {"reasoningEfforts": {"off": "disabled", "high": "high"}},
+            {"reasoningEfforts": {"low": "low", "high": "high", "max": "max"}},
+        ]
+        self.assertEqual(S._shared_default_effort(models), "high")
+
+    def test_highest_common_level_wins(self):
+        models = [
+            {"reasoningEfforts": {"low": "low", "medium": "medium", "high": "high"}},
+            {"reasoningEfforts": {"medium": "medium", "high": "high", "max": "max"}},
+        ]
+        self.assertEqual(S._shared_default_effort(models), "high")
+
+    def test_no_common_level_returns_none(self):
+        # 一组只有 high、一组只有 medium：一刀切会让后者 dispatch 抛错
+        models = [
+            {"reasoningEfforts": {"high": "high"}},
+            {"reasoningEfforts": {"low": "low", "medium": "medium"}},
+        ]
+        self.assertIsNone(S._shared_default_effort(models))
+
+    def test_non_reasoning_model_disables_default(self):
+        models = [
+            {"reasoningEfforts": {"high": "high"}},
+            {"reasoning": False},
+        ]
+        self.assertIsNone(S._shared_default_effort(models))
+
+    def test_empty_group_returns_none(self):
+        self.assertIsNone(S._shared_default_effort([]))
+
+
+class ScatteredDefaultEffortTest(unittest.TestCase):
+    """档位分散组：选覆盖面最广的档 + 给缺失模型注入 wire 别名。"""
+
+    def test_scattered_group_picks_low_and_injects_alias(self):
+        models = [
+            {"id": "HY4", "reasoningEfforts": {"high": "high"}},
+            {"id": "Qwen", "reasoningEfforts": {"low": "low", "medium": "medium", "xhigh": "xhigh"}},
+            {"id": "GLM", "reasoningEfforts": {"low": "low", "high": "high", "max": "max"}},
+        ]
+        best = S._apply_default_effort(models)
+        self.assertEqual(best, "low")
+        # 只有 high 的 HY4 被注入 low->high 别名；原生支持 low 的不动
+        self.assertEqual(models[0]["reasoningEfforts"]["low"], "high")
+        # Qwen 原生支持 low，未被注入任何新档位键
+        self.assertEqual(set(models[1]["reasoningEfforts"].keys()), {"low", "medium", "xhigh"})
+        self.assertEqual(models[2]["reasoningEfforts"]["low"], "low")
+
+    def test_consistent_group_no_alias_injected(self):
+        models = [
+            {"id": "a", "reasoningEfforts": {"high": "high"}},
+            {"id": "b", "reasoningEfforts": {"off": "disabled", "high": "high", "max": "max"}},
+        ]
+        import copy
+        before = copy.deepcopy(models)
+        best = S._apply_default_effort(models)
+        self.assertEqual(best, "high")
+        self.assertEqual(models, before)  # 天然一致组不注入任何别名
+
+    def test_alias_uses_highest_supported_wire(self):
+        # 缺失默认档的模型有多个档时，别名应指向它最高的那一档的 wire 值
+        models = [
+            {"id": "x", "reasoningEfforts": {"low": "low", "medium": "M-WIRE", "xhigh": "X-WIRE"}},
+            {"id": "y", "reasoningEfforts": {"high": "high"}},  # 只有 high
+        ]
+        best = S._apply_default_effort(models)
+        # low 覆盖 1、high 覆盖 1、medium 覆盖 1... 并列取靠前 low
+        self.assertEqual(best, "low")
+        # y 只有 high，注入 low->high
+        self.assertEqual(models[1]["reasoningEfforts"]["low"], "high")
+
+
 OLD_PATCH = """- id: llm-pi-ai
   config:
     providers:

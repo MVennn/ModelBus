@@ -73,6 +73,8 @@ DSH_PROFILE = os.environ.get("DSH_PROFILE", "desktop")
 API_KEY_ENV = "ZCODE_GATEWAY_KEY"
 DEFAULT_BASE = "http://127.0.0.1:7871/v1"
 DSH_LEVELS = {"off", "minimal", "low", "medium", "high", "xhigh", "max"}
+# 默认推理档的选择顺序（低→高）；off 不作为默认档。
+_LEVEL_ESCALATION = ["minimal", "low", "medium", "high", "xhigh", "max"]
 # 上一轮投影到 DSH 的型号清单（只用来报「这次少了谁」，不是配置来源）
 DSH_LEDGER = DSH_HOME / "profiles" / DSH_PROFILE / "zcode-model-ledger.json"
 # DSH 原生真源：DSH 侧清单 + catalog 能力真值（--source dsh，默认仍走 compat）
@@ -350,6 +352,78 @@ def _reasoning(values: list[Any], map_expr: Any) -> dict[str, Any]:
     return out
 
 
+def _shared_default_effort(models: list[dict[str, Any]]) -> str | None:
+    """组内所有模型共同支持的最高推理档，作为 provider 级默认档。
+
+    llm-pi-ai 的 profile.reasoning 既是 UI 选择器的 defaultEffort 来源，也是
+    请求未声明档位时的 dispatch 兜底档。因此只能取“整组都支持”的档：
+    若并存只支持 high 与只支持 medium 的模型，一刀切会让后者在 dispatch
+    阶段抛 UNSUPPORTED_REASONING_EFFORT，这时宁可不设（UI 退回 provider default）。
+    """
+    shared: set[str] | None = None
+    for model in models:
+        efforts = model.get("reasoningEfforts")
+        if not isinstance(efforts, dict):
+            return None
+        levels = {k for k in efforts if k in _LEVEL_ESCALATION}
+        shared = levels if shared is None else shared & levels
+        if not shared:
+            return None
+    if not shared:
+        return None
+    for level in reversed(_LEVEL_ESCALATION):
+        if level in shared:
+            return level
+    return None
+
+
+def _apply_default_effort(models: list[dict[str, Any]]) -> str | None:
+    """为整组挑一个 provider 级默认档，必要时给个别模型注入 wire 别名。
+
+    llm-pi-ai 的 profile.reasoning 同时驱动两处：
+      * UI 选择器的 defaultEffort —— describableReasoningLevel 对模型不支持的
+        档静默降级，于是显示 "Default" 伪档；
+      * 请求兜底档 —— resolveReasoningLevel 对不支持的档直接抛
+        UNSUPPORTED_REASONING_EFFORT。
+    所以整组必须有一个「每个模型都支持」的默认档。组内档位天然一致时直接用
+    共同最高档（不注入任何别名）；档位分散时选覆盖面最广的档，并给缺失该档
+    的模型注入一条 wire 别名（档位名 -> 该模型真实支持的最高档 wire 值），
+    让 UI 与请求都走同一个档名，而实际发给上游的仍是模型支持的 wire 值。
+    """
+    # 1. 档位天然一致的组：直接用共同最高档，不注入任何别名。
+    shared = _shared_default_effort(models)
+    if shared is not None:
+        return shared
+
+    # 2. 档位分散的组：选覆盖面最广、开销最低的档作默认。
+    reasoning_models = [m for m in models if isinstance(m.get("reasoningEfforts"), dict)]
+    if not reasoning_models:
+        return None
+    counts = {lv: 0 for lv in _LEVEL_ESCALATION}
+    for m in reasoning_models:
+        for lv in _LEVEL_ESCALATION:
+            if lv in m["reasoningEfforts"]:
+                counts[lv] += 1
+    # 并列时取 _LEVEL_ESCALATION 中靠前的档（low 优先于 high，思考开销更小）。
+    best = max(_LEVEL_ESCALATION, key=lambda lv: (counts[lv], -_LEVEL_ESCALATION.index(lv)))
+    if counts[best] == 0:
+        return None
+
+    # 3. 给不支持 best 的模型补别名：best -> 它真实支持的最高档 wire 值。
+    for m in models:
+        efforts = m.get("reasoningEfforts")
+        if not isinstance(efforts, dict) or best in efforts:
+            continue
+        wire = None
+        for lv in reversed(_LEVEL_ESCALATION):
+            if lv in efforts and isinstance(efforts[lv], str):
+                wire = efforts[lv]
+                break
+        if wire is not None:
+            efforts[best] = wire
+    return best
+
+
 def _positive_int(value: Any) -> int | None:
     return value if isinstance(value, int) and value > 0 else None
 
@@ -386,6 +460,11 @@ def _build_route(provider: dict[str, Any], effective: dict[str, Any], rules: dic
         "apiKeyEnv": API_KEY_ENV,
         "models": models,
     }
+    # provider 级默认档 → llm-pi-ai 的 reasoningInfo() 生成 defaultEffort，
+    # UI 模型选择器据此显示真实档名而不是 "Default" 伪档。
+    default_effort = _apply_default_effort(models)
+    if default_effort is not None:
+        route["reasoning"] = default_effort
     return dsh_id, route
 
 
