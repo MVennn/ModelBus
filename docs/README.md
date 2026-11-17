@@ -67,3 +67,4 @@
 
 > 新增 / 删除文档后**必须同步更新本索引**（规则见 [DOC-RULES.md](DOC-RULES.md)）；
 > 新文档至少要被一处既有文档引用，不允许孤儿。
+> 新增踩点：[ZEN-FREE-INTEGRATION-PLAN.md](ZEN-FREE-INTEGRATION-PLAN.md) —— OpenCode Zen 免费模型接入 ModelBus 的两道门、接入点与可回滚落地步骤（只踩点，未改真配置）。
