@@ -58,10 +58,13 @@ class DshCheckWithoutCredentialTest(unittest.TestCase):
             (home / ".credentials.yaml").write_text("refs: {}\n", encoding="utf-8")
             inv = home / "modelbus-inventory.json"
             dsh_sync._export_inventory(FIXTURE_CFG, inv, catalog_caps=False)
-            rc = dsh_sync._main([
-                "--source", "dsh", "--check",
-                "--dsh-home", str(home), "--inventory", str(inv),
-            ])
+            # 隔离本机隐藏名单：否则开发机上藏过的型号会把 fixture 一起过滤掉，
+            # 测试结果就取决于「这台机器藏了什么」，CI 干净检出里却永远不触发。
+            with mock.patch.object(dsh_sync, "HIDDEN_FILE", home / "no-hidden.json"):
+                rc = dsh_sync._main([
+                    "--source", "dsh", "--check",
+                    "--dsh-home", str(home), "--inventory", str(inv),
+                ])
             self.assertIn(rc, (0, 1))
             self.assertNotEqual(rc, 2)
 

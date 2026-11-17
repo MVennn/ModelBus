@@ -319,6 +319,32 @@ QD 按峰谷计价（×`QD_FACTOR` 0.86）：夜里 valley 0.04 → 0.03，白�
 回退：删掉 `LOW_ORDER` 里的 `chat:qoder:Qwen3.8-Flash` 与两个 `MERGE_*` 常量里的
 `qwen3.8-flash`，再跑一次 `--apply`。
 
+### 3.4 聚合度实测（2026-11-17，29 个别名）
+
+口径：一个别名 = 一条链；聚合度 = 链上**去重后**的端点（` + "`channel` + `base` + `upstream`" + ` 三元组），
+同端点写两遍不算备份。
+
+| 聚合度 | 模型数 | 模型 |
+|---|---|---|
+| 3 | 2 | ` + "`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`（WB → QD → OC）" + ` |
+| 2 | 3 | ` + "`DeepSeek-4.1-Flash`（WB→QW）、`HY4-Flash-Free`（WB→OC）、`Qwen-3.8-Flash`（QD→OC）" + ` |
+| 1 | 24 | 其余 |
+
+链上共 49 跳、去重 36 跳：**13 处是同一 (base, upstream, price) 写两遍**，不提供额外可用性
+（失败时还会在同一端点再试一次），属于白试。涉及 ` + "`GLM-5.3-Flash`、`MiniMax-M3.1-Flash`、" + `
+` + "`HY4-Flash-Free`、`Qwen-3.8-Flash` 各 1 跳，以及 9 个 OC 单渠道模型的 `OC>OC`。" + `
+生成时对 chain 按三元组去重一次即可。
+
+端点分布：WB ` + "`127.0.0.1:7863` 7 处、OC 直连 `opencode.ai/zen/go` 26 处、OC 本地 relay `127.0.0.1:8789` 9 处、" + `
+QD ` + "`127.0.0.1:8790` 4 处、QW / QN / GM 各 1 处。" + `
+
+**9 个模型只挂本地 relay**（` + "`big-pickle`、`DeepSeek-4.1-Flash-Free`、`flint-40b`、`GLM-5.3-Flash-Free`、" + `
+` + "`iceman`、`inkling-2-small`、`MiMo-2.6-Flash-Free`、`nemotron-3.5-lightning`、`nemotron-3.5-super-vl`）" + `
+—— relay 一停它们整条不可达。2026-11-17 停 relay 后这 9 个已同时进隐藏名单
+（见 [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md)）。
+
+**6 个可见模型没有回落**（` + "`Conatus`、`Gemini-4-Hydrogen`、`HY4`、`HY4-Flash`、`Qwen-3.8-Max`、`Space-Bunny`" + `），
+渠道挂了就是直接失败；要冗余得在 alias map 里补跳，不是在 zgate 里加重试。
 ---
 
 ## 4. 三组规则（2026-10-28 起）
