@@ -107,6 +107,47 @@ def hidden_sets(hidden_file: Path | str | None = None) -> tuple[set[str], set[st
         {str(k) for k, v in models.items() if v is not False},
     )
 
+
+def hidden_channels(hidden_file: Path | str | None = None) -> set[str]:
+    """读隐藏名单的 channels 段 -> 被整条关掉的渠道集合（大写）。
+
+    这是「渠道级真开关」：被关掉的渠道从所有 alias chain 里移除；一个型号
+    的 chain 被删空后整条从 alias map 消失，zgate 侧也无法点名调用。show 后
+    重新 --apply 从源重算，跳自动插回 —— 可逆、幂等。
+
+    与 hidden_sets 同样的降级纪律：文件缺失 / 损坏 / 非对象一律空集合，值为
+    false 视作未隐藏。list 展示、dsh_sync 都不依赖这个维度，所以它单独成函数，
+    不改变 hidden_sets 的二元组签名。
+    """
+    path = Path(hidden_file) if hidden_file else HIDDEN_FILE
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return set()
+    if not isinstance(doc, dict):
+        return set()
+    channels = doc.get("channels") if isinstance(doc.get("channels"), dict) else {}
+    return {str(k).upper() for k, v in channels.items() if v is not False}
+
+
+def chain_without_hidden_channels(row: dict, hidden_ch: set[str]) -> list[dict]:
+    """返回该型号过滤掉隐藏渠道跳之后的 chain（不改入参）。
+
+    chain 为空的老式单上游条目按 row 自身构造一跳，保证过滤维度齐全。
+    hidden_ch 为空时原样返回（保留 list 拷贝，行为与旧版完全一致）。
+    """
+    chain = row.get("chain") or [{
+        "upstream": row.get("upstream"), "base": row.get("base"),
+        "channel": row.get("channel"), "protocol": row.get("protocol"),
+        "price": row.get("price"), "original": row.get("original"),
+        "base_model": row.get("base_model"),
+    }]
+    chain = list(chain)
+    if not hidden_ch:
+        return chain
+    return [h for h in chain if str(h.get("channel") or "").upper() not in hidden_ch]
+
+
 PROVIDER_MAIN = "opencode-go-chat"
 PROVIDER_FREE = "opencode-go-chat-free"
 PROVIDER_LOW = "opencode-go-chat-fast"
@@ -1601,6 +1642,10 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "CN" if channel == "WB" and upstream.startswith("cn:") else
             "GB" if channel == "WB" else "CN" if channel == "QD" else ""
         ))
+        # full_chain：渠道隐藏期间 alias 里只写过滤后的截断链，这里用隐藏前
+        # 快照重建，show 后被藏的跳才能自动插回（否则读回截断态永久丢失）。
+        # 没有该字段的老条目照旧读 chain，行为不变。
+        _rebuild = entry.get("full_chain") or entry.get("chain") or []
         return {
             "raw": model,
             "original": str(entry.get("original") or model),
@@ -1610,7 +1655,7 @@ def classify(model: str, protocol: str, alias_models: dict, legacy: dict) -> dic
             "base_model": base_model,
             "protocol": str(entry.get("protocol") or protocol),
             "fallbacks": list(entry.get("fallbacks") or []),
-            "chain": list(entry.get("chain") or []),
+            "chain": list(_rebuild),
             "legacy_ids": list(entry.get("legacy_ids") or [entry.get("original") or model, upstream]),
         }
     legacy_target = legacy.get(model)
@@ -2851,8 +2896,27 @@ def main() -> int:
     all_rows = [row for group in ("main", "free", "low") for row in grouped[group]]
     inherited_configs = pick_rule_config(all_rows, cfg, old_rules)
     hidden_providers, hidden_models = hidden_sets()
-    if hidden_providers or hidden_models:
-        print(f"隐藏：{len(hidden_models)} 个型号 / {len(hidden_providers)} 个 provider 不进 ZCode 投影")
+    hidden_ch = hidden_channels()
+    if hidden_providers or hidden_models or hidden_ch:
+        print(f"隐藏：{len(hidden_models)} 个型号 / {len(hidden_providers)} 个 provider / "
+              f"{len(hidden_ch)} 个渠道（{', '.join(sorted(hidden_ch))}）不进投影与调用链")
+    # 渠道级隐藏会让纯该渠道的型号 chain 变空 —— 这些型号整条消失（连 alias
+    # map 都不写），zgate 侧也点名不到，是真「隐藏=消失」。show 后重跑自动插回。
+    # 先给所有 row 预计算过滤结果，ids / 规则 / alias / legacy 共用同一份，避免
+    # 四处各算一遍导致选择器里还留着已经从 alias map 删掉的型号。
+    hidden_ch_rows: set[str] = set()
+    filtered_chain_by_id: dict[str, list[dict]] = {}
+    if hidden_ch:
+        for _row in all_rows:
+            _fc = chain_without_hidden_channels(_row, hidden_ch)
+            if not _fc:
+                hidden_ch_rows.add(str(_row["new_id"]))
+            else:
+                filtered_chain_by_id[str(_row["new_id"])] = _fc
+        if hidden_ch_rows:
+            _sample = "、".join(sorted(hidden_ch_rows)[:12])
+            print(f"渠道隐藏后 {len(hidden_ch_rows)} 个型号链路变空，整条移除："
+                  + _sample + ("…" if len(hidden_ch_rows) > 12 else ""))
     for group, provider_id in (("main", PROVIDER_MAIN), ("free", PROVIDER_FREE),
                                ("low", PROVIDER_LOW)):
         rows = grouped[group]
@@ -2861,7 +2925,8 @@ def main() -> int:
         # 照建 —— zgate 侧仍能直接点名调用，隐藏不是删除。
         group_hidden = provider_id in hidden_providers
         ids = [row["new_id"] for row in rows
-               if not group_hidden and row["new_id"] not in hidden_models]
+               if not group_hidden and row["new_id"] not in hidden_models
+               and row["new_id"] not in hidden_ch_rows]
         if not group_hidden:
             new_providers.append({
                 "providerId": provider_id,
@@ -2875,6 +2940,14 @@ def main() -> int:
                 },
             })
         for row in rows:
+            # 渠道隐藏后链路全空的型号整条消失：不写选择器规则、不写 alias、不写
+            # legacy。show 后从源重算，chain 恢复、这里自然不再跳过。
+            if row["new_id"] in hidden_ch_rows:
+                continue
+            # 隐藏前完整链：写进 alias 条目的 full_chain，供下一轮 classify 重建。
+            # 否则 hide 把截断链写回去，show 时 classify 读回截断态，被藏的跳
+            # 永久丢失（实测 HY4 恢复后停在 WB-only）——可逆性就断了。
+            _full: list[dict] = []
             # 继承源顺序与 family_entries 生成的名字对齐（raw 是显示名），再用显式
             # 上游名兜底；档位补齐在 pick_rule_config / _inherit_efforts 里做。
             config = copy.deepcopy(inherited_configs.get(str(row["new_id"])) or {})
@@ -2894,6 +2967,23 @@ def main() -> int:
                     "config": config,
                     "providerId": provider_id,
                 })
+            # 有隐藏渠道时，chain 与依赖它的头字段一起换成过滤后的版本；
+            # 无隐藏渠道时 filtered_chain_by_id 为空，全部走原值，行为与旧版一致。
+            if hidden_ch:
+                _fc = filtered_chain_by_id[str(row["new_id"])]
+                _full = list(row.get("chain") or [])
+                row = dict(row)
+                row["chain"] = _fc
+                row["channel"] = _fc[0]["channel"]
+                row["upstream"] = _fc[0]["upstream"]
+                row["price"] = _fc[0].get("price", row["price"])
+                row["fallbacks"] = [c["upstream"] for c in _fc[1:]]
+                # dropped_hops 里可能混有旧字符串 id：dict 按渠道过滤，其余原样留。
+                row["dropped_hops"] = [
+                    h for h in (row.get("dropped_hops") or [])
+                    if not isinstance(h, dict)
+                    or str(h.get("channel") or "").upper() not in hidden_ch
+                ]
             base = base_of(row["channel"], row["upstream"])
             alias_models[row["new_id"]] = {
                 # 显示名（可撞、去后缀）与代号（row["new_id"]，唯一）分离：
@@ -2924,6 +3014,11 @@ def main() -> int:
                 "chain": list(row.get("chain") or []),
                 "legacy_ids": _consistent_legacy_ids(row),
             }
+            if hidden_ch and _full:
+                # 本机重建用的完整链：show 后 classify 优先读它，恢复被藏的跳。
+                # Go(zgate) 的 Target 结构没有这个字段，json.Unmarshal 自动忽略，
+                # 不影响运行时；它只是「开关可逆」的本地快照。
+                alias_models[row["new_id"]]["full_chain"] = _full
             if row.get("dropped_hops"):
                 alias_models[row["new_id"]]["dropped_hops"] = list(row["dropped_hops"])
             if row.get("is_pool"):

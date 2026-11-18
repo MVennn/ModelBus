@@ -134,21 +134,21 @@
 
 | scope | 返回 | 用途 |
 |---|---|---|
-| canonical（缺省） | 统一名（当前 19 条，2026-11-13 实测） | 客户端该用的那张表 |
-| legacy | 旧 id（当前 72 条，2026-11-13 实测） | 历史兼容，`canonical_id` 指回统一名 |
+| canonical（缺省） | 统一名（当前 10 条，2026-11-18 OC 隐藏后实测） | 客户端该用的那张表 |
+| legacy | 旧 id（当前 46 条，2026-11-18 实测） | 历史兼容，`canonical_id` 指回统一名 |
 | all | 两边都要 | 排障 / 对账 |
 
 返回体带 `scope`、`total`、`catalog_total` 三个字段，语义分清楚：
 
 | 字段 | 含义 | 例（canonical） |
 |---|---|---|
-| `total` | **本次返回**的条数，客户端直接拿来数「我有几个模型」 | 19 |
-| `catalog_total` | 全部两拨加起来的条数，对账用 | 91 |
-| `data` | 本条 scope 的条目 | 19 条 |
+| `total` | **本次返回**的条数，客户端直接拿来数「我有几个模型」 | 24 |
+| `catalog_total` | 全部两拨加起来的条数，对账用 | 56 |
+| `data` | 本条 scope 的条目 | 10 条 |
 
-两个数混成一个会让 19 条的响应写着 91，看起来像分页没给完 —— 2026-11-10 首版就是这样（当时 20 / 93），当晚拆开。
+两个数混成一个会让 10 条的响应写着 56，看起来像分页没给完 —— 2026-11-10 首版就是这样（当时 20 / 93），当晚拆开。
 未知 scope 回 400 `invalid_request_error`，不静默退回默认（拼错才不会被藏住）。
-改默认值是一个**对外行为变更**：老客户端如果依赖「一口气拿到 91 条」，需要显式写 `?scope=all`。
+改默认值是一个**对外行为变更**：老客户端如果依赖「一口气拿到全部 56 条」，需要显式写 `?scope=all`。
 
 ---
 
@@ -245,7 +245,7 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard / upstream / hops 五段
    （`hops` 里各跳的 `ok/try` 反映该跳最近到底行不行）
    （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
-   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=19 / catalog_total=91`、`?scope=legacy` 应 `total=72`、`?scope=bad` 应 400（2026-11-11 下线一个模型后的实测值；`catalog_total` 随上游目录走，会自己变）。
+   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=10 / catalog_total=56`、`?scope=legacy` 应 `total=46`、`?scope=bad` 应 400（2026-11-18 OC 渠道隐藏后的实测值；`total` 随隐藏名单变、`catalog_total` 随上游目录走，两个都会自己变，别写死当契约）。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。
 5. 回退：配置问题改 `zgate.json` 加 reload；代码问题 `git revert` 后跑同一条换版脚本。
 

@@ -65,6 +65,16 @@ class QwenFlashChainTest(unittest.TestCase):
             self.skipTest("没有 model-alias-map.json")
         data = json.loads(ALIAS_MAP.read_text(encoding="utf-8"))
         self.models = data.get("models") or {}
+        # 渠道级隐藏开关：OC 被 hide 时，alias chain 里的 OC 跳会被移除，
+        # 依赖「OC 付费兜底跳存在」的断言必须先让路（否则与本轮新语义冲突）。
+        hidden_path = Path(os.path.expanduser("~/.zcode/v2/model-hidden.json"))
+        try:
+            hidden = json.loads(hidden_path.read_text(encoding="utf-8"))
+            chans = hidden.get("channels") if isinstance(hidden, dict) else {}
+            self.hidden_channels = {str(k).upper() for k, v in (chans or {}).items()
+                                    if v is not False}
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            self.hidden_channels = set()
 
     def test_qd_hop_leads_the_chain(self) -> None:
         """QD 必须是这条链最便宜的一跳。
@@ -83,6 +93,14 @@ class QwenFlashChainTest(unittest.TestCase):
         head_price = head.get("price")
         self.assertIsNotNone(head_price, "QD 跳没有价格，会被静默剔除")
         others = [h.get("price") for h in chain[1:] if h.get("price") is not None]
+        if "OC" in self.hidden_channels:
+            # OC 渠道被隐藏：chain 里的 OC 跳按设计已移除，不再断言兜底跳存在；
+            # 只保留「QD 链首 + 有价格」的核心约束。
+            self.assertEqual(
+                [hop.get("channel") for hop in chain], ["QD"],
+                f"OC 隐藏后应只剩 QD 首跳：{chain}",
+            )
+            return
         self.assertTrue(others, f"链里没有 OC 付费兜底跳：{chain}")
         self.assertLessEqual(head_price, min(others), f"QD 不再是最便宜的一跳：{head_price} vs {others}")
         # 同一条链里必须还留着 OC 的付费跳做兜底（跨协议合并）。

@@ -13,8 +13,14 @@ MODEL_HIDDEN_FILE 覆盖）：
       "version": 1,
       "updatedAt": "2026-11-17T23:58:00+08:00",
       "providers": {"opencode-go-chat-fast": {"reason": "...", "at": "..."}},
-      "models": {"DeepSeek-4.1-Flash-OC": {"reason": "...", "at": "...", "channel": "OC"}}
+      "models": {"DeepSeek-4.1-Flash-OC": {"reason": "...", "at": "...", "channel": "OC"}},
+      "channels": {"OC": {"reason": "...", "at": "..."}}
     }
+
+channels 是渠道级真开关：关掉后该渠道的所有跳从 alias chain 里移除，纯该渠道
+的型号整条从 alias map 消失（zgate 也点名不到）；show --channel OC 后从源
+重算，跳自动插回。models/providers 是选择器投影级隐藏；hide --channel 同时
+写两者，保证「选择器看不到」和「调用链走不到」一致。
 
 用法：
 
@@ -77,11 +83,15 @@ def load_state(path: Path | None = None) -> dict[str, Any]:
     doc = _read_json(path)
     providers = doc.get("providers") if isinstance(doc.get("providers"), dict) else {}
     models = doc.get("models") if isinstance(doc.get("models"), dict) else {}
+    channels = doc.get("channels") if isinstance(doc.get("channels"), dict) else {}
     return {
         "version": 1,
         "updatedAt": str(doc.get("updatedAt") or ""),
         "providers": {str(k): v for k, v in providers.items()},
         "models": {str(k): v for k, v in models.items()},
+        # channels 是渠道级真开关：hide 后该渠道的所有跳从 alias chain 里消失，
+        # 纯该渠道的型号整条不再投影；show 后从源重算自动插回。
+        "channels": {str(k).upper(): v for k, v in channels.items()},
     }
 
 
@@ -170,8 +180,13 @@ def cmd_list(args: argparse.Namespace) -> int:
         print(json.dumps(state, ensure_ascii=False, indent=2))
         return 0
     print(f"隐藏名单：{HIDDEN_FILE}")
-    if not state["models"] and not state["providers"]:
-        print("名单为空：所有模型都在投影里。")
+    if state.get("channels"):
+        print(f"已关闭渠道开关 {len(state['channels'])} 个（链路里这些渠道的跳全被移除）：")
+        for ch in sorted(state["channels"]):
+            row = state["channels"][ch] if isinstance(state["channels"][ch], dict) else {}
+            print(f"  {ch}  {row.get('reason') or ''}  {row.get('at') or ''}".rstrip())
+    if not state["models"] and not state["providers"] and not state.get("channels"):
+        print("名单为空：所有模型 / 渠道都在投影里。")
         return 0
     if state["models"]:
         print(f"已隐藏型号 {len(state['models'])} 个：")
@@ -220,12 +235,24 @@ def cmd_hide(args: argparse.Namespace) -> int:
         state["models"][mid] = _entry(args.reason, ch)
     for pid in providers:
         state["providers"][pid] = _entry(args.reason)
-    print(f"本次隐藏：型号 {len(models)} 个 / provider {len(providers)} 个"
+    # 渠道级隐藏：channels 段是真开关，过滤掉所有 alias chain 上的该渠道跳；
+    # 纯该渠道的型号链路变空、整条从 alias map 消失（zgate 侧也点名不到）。
+    # --model/--channel 都写：选择器投影（enabled=false）+ 调用链（channels）一致。
+    hidden_chs = [str(c).upper() for c in (args.channel or [])]
+    for ch in hidden_chs:
+        state["channels"][ch] = _entry(args.reason)
+    if not models and not providers and not hidden_chs:
+        print("ERROR: 至少给 --model / --provider / --channel 之一", file=sys.stderr)
+        return 2
+    print(f"本次隐藏：型号 {len(models)} 个 / provider {len(providers)} 个 / "
+          f"渠道 {len(hidden_chs)} 个"
           + (f"（理由：{args.reason}）" if args.reason else ""))
     if models:
         print("  型号：" + "、".join(sorted(models)))
     if providers:
         print("  provider：" + "、".join(sorted(providers)))
+    if hidden_chs:
+        print("  渠道开关：" + "、".join(sorted(hidden_chs)) + "（链路里这些渠道的跳会被移除）")
     if args.dry_run:
         print("dry-run：名单未写入")
         return 0
@@ -239,11 +266,14 @@ def cmd_show(args: argparse.Namespace) -> int:
     chans = model_channels()
     removed_models: list[str] = []
     removed_providers: list[str] = []
+    removed_channels: list[str] = []
     if args.all:
         removed_models = sorted(state["models"])
         removed_providers = sorted(state["providers"])
+        removed_channels = sorted(state["channels"])
         state["models"].clear()
         state["providers"].clear()
+        state["channels"].clear()
     else:
         matchers = set()
         if args.channel:
@@ -252,6 +282,11 @@ def cmd_show(args: argparse.Namespace) -> int:
                 row_ch = row.get("channel") if isinstance(row, dict) else None
                 if str(row_ch or chans.get(mid) or "").upper() in wanted:
                     matchers.add(mid)
+            # 渠道级开关：show --channel 同时清掉 channels 段，链路重建自动插回。
+            for ch in sorted(wanted):
+                if ch in state["channels"]:
+                    state["channels"].pop(ch)
+                    removed_channels.append(ch)
         matchers.update(str(m) for m in (args.model or []))
         for mid in sorted(matchers):
             if mid in state["models"]:
@@ -264,12 +299,15 @@ def cmd_show(args: argparse.Namespace) -> int:
         if not matchers and not (args.provider or []):
             print("ERROR: 至少给 --model / --provider / --channel 或 --all", file=sys.stderr)
             return 2
-    print(f"本次恢复：型号 {len(removed_models)} 个 / provider {len(removed_providers)} 个")
+    print(f"本次恢复：型号 {len(removed_models)} 个 / provider {len(removed_providers)} 个"
+          f" / 渠道 {len(removed_channels)} 个")
     if removed_models:
         print("  型号：" + "、".join(removed_models))
     if removed_providers:
         print("  provider：" + "、".join(removed_providers))
-    if not removed_models and not removed_providers:
+    if removed_channels:
+        print("  渠道开关：" + "、".join(removed_channels) + "（链路从源重建，跳自动插回）")
+    if not removed_models and not removed_providers and not removed_channels:
         print("名单里没有这些条目，无需改动")
         return 0
     if args.dry_run:

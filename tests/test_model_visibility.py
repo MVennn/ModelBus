@@ -2,6 +2,7 @@
 """隐藏名单（tools/model_visibility.py）与投影过滤（tools/dsh_sync.py）回归。"""
 from __future__ import annotations
 
+import argparse
 import json
 import os
 import sys
@@ -140,6 +141,88 @@ class SharedHiddenSetsTest(unittest.TestCase):
         self.path.write_text(json.dumps({"models": {"Beam": {}}}), encoding="utf-8")
         with mock.patch.object(dsh_sync, "HIDDEN_FILE", self.path):
             self.assertEqual(dsh_sync._hidden_sets(), (set(), {"Beam"}))
+
+
+class ChannelHideSwitchTest(unittest.TestCase):
+    """渠道级真开关：隐藏渠道跳从 chain 移除，纯该渠道型号整条消失，show 可逆。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.path = self.root / "h.json"
+
+    def _write(self, doc):
+        self.path.write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+
+    def test_hidden_channels_reads_and_normalizes_case(self):
+        self._write({"channels": {"OC": {"reason": "暂停"}, "wb": False}})
+        self.assertEqual(model_alias.hidden_channels(self.path), {"OC"})
+
+    def test_missing_corrupt_and_false_degrade_to_empty(self):
+        self.assertEqual(model_alias.hidden_channels(self.root / "nope.json"), set())
+        bad = self.root / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        self.assertEqual(model_alias.hidden_channels(bad), set())
+        self._write({"channels": {"OC": False}})
+        self.assertEqual(model_alias.hidden_channels(self.path), set())
+
+    def test_chain_filters_hidden_channel_hops(self):
+        row = {"chain": [
+            {"channel": "WB", "upstream": "w1"},
+            {"channel": "OC", "upstream": "o1"},
+            {"channel": "OC", "upstream": "o2", "proxy": "px"},
+        ]}
+        got = model_alias.chain_without_hidden_channels(row, {"OC"})
+        self.assertEqual(got, [{"channel": "WB", "upstream": "w1"}])
+        self.assertEqual(len(row["chain"]), 3)  # 入参不改
+
+    def test_pure_hidden_channel_chain_becomes_empty(self):
+        row = {"chain": [{"channel": "OC", "upstream": "o1"}]}
+        self.assertEqual(model_alias.chain_without_hidden_channels(row, {"OC"}), [])
+
+    def test_legacy_single_upstream_entry_gets_one_hop(self):
+        row = {"upstream": "o1", "channel": "OC", "base_model": "x"}
+        got = model_alias.chain_without_hidden_channels(row, set())
+        self.assertEqual(len(got), 1)
+        self.assertEqual(got[0]["channel"], "OC")
+        self.assertEqual(model_alias.chain_without_hidden_channels(row, {"OC"}), [])
+
+    def test_no_hidden_channel_preserves_chain(self):
+        row = {"chain": [{"channel": "OC", "upstream": "o1"}]}
+        self.assertEqual(model_alias.chain_without_hidden_channels(row, set()),
+                         [{"channel": "OC", "upstream": "o1"}])
+
+    def test_classify_prefers_full_chain_for_show_restore(self):
+        # 隐藏期间 alias 里 chain 被截断，full_chain 留完整快照；show 重建时
+        # classify 必须优先读 full_chain，否则被藏的跳永久丢失（实测过的回归）。
+        alias_models = {"HY4-Flash-Free": {
+            "channel": "WB", "upstream": "cn:hy4flash-free",
+            "base_model": "hy4flash-free", "protocol": "chat",
+            "chain": [{"channel": "WB", "upstream": "cn:hy4flash-free"}],
+            "full_chain": [
+                {"channel": "WB", "upstream": "cn:hy4flash-free"},
+                {"channel": "OC", "upstream": "hy4-flash-free"},
+            ],
+        }}
+        got = model_alias.classify("HY4-Flash-Free", "chat", alias_models, {})
+        self.assertEqual([h["channel"] for h in got["chain"]], ["WB", "OC"])
+
+    def test_classify_without_full_chain_uses_chain(self):
+        alias_models = {"X": {"channel": "WB", "upstream": "cn:x",
+                              "chain": [{"channel": "WB", "upstream": "cn:x"}]}}
+        got = model_alias.classify("X", "chat", alias_models, {})
+        self.assertEqual([h["channel"] for h in got["chain"]], ["WB"])
+
+    def test_show_all_clears_channels(self):
+        state = V.load_state(self.path)
+        state["channels"]["OC"] = {"reason": "test"}
+        V.save_state(state, self.path)
+        with mock.patch.object(V, "HIDDEN_FILE", self.path), \
+             mock.patch.object(V, "_sync", return_value=0):
+            V.cmd_show(argparse.Namespace(all=True, channel=None, model=None,
+                                          provider=None, dry_run=False, no_sync=False))
+        self.assertEqual(V.load_state(self.path)["channels"], {})
 
 
 if __name__ == "__main__":
