@@ -57,6 +57,36 @@ func TestOnDemandStartAndIdleStop(t *testing.T) {
 	t.Fatalf("idle child was not reclaimed: %v", sup.States()["dummy"])
 }
 
+// IdleStopped 只认「空闲停止」这一种静止态：从未启动、或干净退出且无错误。
+// starting / running / external / error 都必须返回 false，否则会每请求都强拉。
+func TestIdleStoppedStates(t *testing.T) {
+	sup, _ := newTestSup(t, config.Child{Policy: "ondemand", Health: ""})
+	if !sup.IdleStopped("dummy") {
+		t.Fatal("未启动的 ondemand child 应视为 idle-stopped")
+	}
+	if sup.IdleStopped("missing") {
+		t.Fatal("不存在的 child 不该算 idle-stopped")
+	}
+	// 直接摆状态，避开真实进程启动。
+	s := sup.kids["dummy"]
+	s.starting = true
+	if sup.IdleStopped("dummy") {
+		t.Fatal("starting 中的 child 不该算 idle-stopped")
+	}
+	s.starting = false
+	s.external = true
+	s.ready = true
+	if sup.IdleStopped("dummy") {
+		t.Fatal("external 实例不该算 idle-stopped")
+	}
+	s.external = false
+	s.ready = false
+	s.lastErr = "启动失败"
+	if sup.IdleStopped("dummy") {
+		t.Fatal("error 态 child 不该算 idle-stopped（交给 nextTry 退避）")
+	}
+}
+
 func TestAlwaysRestartsAfterCrash(t *testing.T) {
 	if testing.Short() {
 		t.Skip("spawns a real child process")

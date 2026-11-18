@@ -459,6 +459,12 @@ func (s *Server) rankedChain(chain []alias.Hop) []int {
 	for i, hop := range chain {
 		snap, ok := stats[hopKeyForLog(hop)]
 		switch {
+		case s.idleStoppedChild(hop):
+			// on-demand 子进程空闲停止：这一跳从未有机会被拉起。给一次首发机会，
+			// 让 prepare→Ensure 把它拉起来，打破「停→没观测→不发车→不拉起」的饿死环。
+			// 只认空闲停止，不认 error（反复启动失败的跳有自己的 nextTry 退避，
+			// 无脑首只会每请求拖慢首字）。拉起后转为 running，本分支自动失效。
+			entries = append(entries, entry{idx: i, class: -1})
 		case !ok || snap.stale(now):
 			// 没测过，或者上次的结论已经过期：按声明顺序重新给一次机会。
 			entries = append(entries, entry{idx: i, class: 1})

@@ -469,6 +469,29 @@ func (s *Supervisor) failCountOf(name string) int {
 	return 0
 }
 
+// IdleStopped reports whether a child exists but is down through the normal
+// idle-recycle path (never started yet, or stopped cleanly with no error).
+// It is false for a child that is starting, running, externally adopted, or in
+// error state — those must not be force-launched on every request.
+//
+// Why this exists: on-demand children are started lazily from prepare()→Ensure()
+// only when their hop is actually launched. In race mode a hop that was once
+// slow sinks to the back of rankedChain and never gets launched, so its child
+// is never started — a starvation loop. Callers use this to give such a hop one
+// launch opportunity so its child can come back up and be observed again.
+func (s *Supervisor) IdleStopped(name string) bool {
+	if name == "" {
+		return false
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	k, ok := s.kids[name]
+	if !ok {
+		return false
+	}
+	return k.proc == nil && !k.starting && !k.external && k.lastErr == ""
+}
+
 func (s *Supervisor) healthy(url string) bool {
 	if url == "" {
 		return true

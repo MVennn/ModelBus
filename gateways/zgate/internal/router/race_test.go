@@ -251,3 +251,33 @@ func TestRankedChainRetriesStaleObservations(t *testing.T) {
 		t.Fatalf("过期成功观测应回到声明顺序: %v", got)
 	}
 }
+
+// 回归：ondemand child 空闲停止的跳必须拿到首发机会，打破
+// 「停 → 没观测 → 不发车 → 不拉起 → 永远停」的饿死环。
+func TestRankedChainPrioritizesIdleStoppedChild(t *testing.T) {
+	chain := []alias.Hop{
+		{Channel: "WB", Upstream: "cn:hy4flash-free"},
+		{Channel: "OC", Upstream: "hy4-flash-free"},
+	}
+	now := time.Now()
+	wbKey := hopKeyForLog(chain[0])
+	ocKey := hopKeyForLog(chain[1])
+	// 没有修复时：OC 首块 10836ms < WB 24076ms，OC 必排第一。
+	mkServer := func(wbIdleStopped bool) *Server {
+		return &Server{
+			raceStat: map[string]hopStatSnap{
+				wbKey: {FirstBlockMs: 24076, Verdict: "ok", Seen: now},
+				ocKey: {FirstBlockMs: 10836, Verdict: "ok", Seen: now},
+			},
+			idleStoppedFn: func(h alias.Hop) bool { return wbIdleStopped && h.Channel == "WB" },
+		}
+	}
+	// WB 的 child 空闲停止 → 强制首发，让 prepare 能拉起它。
+	if got := mkServer(true).rankedChain(chain); got[0] != 0 {
+		t.Fatalf("idle-stopped child 的跳应首发: got %v", got)
+	}
+	// child 已 running（不再 idle-stopped）→ 回到「快者先行」的既有语义。
+	if got := mkServer(false).rankedChain(chain); got[0] != 1 {
+		t.Fatalf("child running 后应恢复按首块排序（OC 更快）: got %v", got)
+	}
+}

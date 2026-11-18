@@ -59,6 +59,8 @@ type Server struct {
 	// 只是观测，不参与决策；进程重启清空。
 	raceMu   sync.Mutex
 	raceStat map[string]hopStatSnap
+	// idleStoppedFn 可注入以在测试里模拟 child 判活，生产为 nil 走真实 supervisor。
+	idleStoppedFn func(alias.Hop) bool
 	// guardMu/guardMem 是 reasoningGuard 的按模型学习表：记住哪些模型能拿到明文
 	// 思考、哪些模型重抽多少次都只回加密。前者让守卫一直有效，后者在连续几轮
 	// 全程加密后自动停手一段时间（省掉每轮白等几十秒），到期再重新探路。
@@ -629,6 +631,23 @@ func (s *Server) Config() *config.Config {
 	s.cfgMu.RLock()
 	defer s.cfgMu.RUnlock()
 	return s.cfg
+}
+
+// idleStoppedChild reports whether this hop's channel is served by an on-demand
+// child that is currently idle-stopped and due for a launch so it can be brought
+// back up. See Supervisor.IdleStopped for the starvation loop this breaks.
+func (s *Server) idleStoppedChild(hop alias.Hop) bool {
+	if s.idleStoppedFn != nil {
+		return s.idleStoppedFn(hop)
+	}
+	if s.sup == nil || s.Config() == nil {
+		return false
+	}
+	up, ok := s.Config().Upstreams[hop.Channel]
+	if !ok || up.Child == "" {
+		return false
+	}
+	return s.sup.IdleStopped(up.Child)
 }
 
 func (s *Server) setRuntime(cfg *config.Config, ks keys.Set) {
