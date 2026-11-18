@@ -1,7 +1,7 @@
 # 模型隐藏名单（隐藏 ≠ 删除）
 
-> **一句话**：型号或 provider 不想出现在宿主模型选择器里时，把它们写进 `~/.zcode/v2/model-hidden.json`，
-> 投影时跳过即可；源配置一条不删，恢复是一条命令。
+> **一句话**：型号或 provider 不想出现在模型选择器里时，把它们写进 `~/.zcode/v2/model-hidden.json`，
+> 两条投影（ZCode 兼容投影、DSH）都跳过；源配置一条不删，恢复是一条命令。
 
 ---
 
@@ -12,7 +12,9 @@
 所以「暂时不用」一律走隐藏：**定义留在源里，只是不投影**。
 
 - 源（不动）：`~/.zcode/v2/provider_config.json`、`~/.zcode/v2/model-alias-map.json`
-- 投影（受影响）：`~/.dsh/profiles/<profile>/cordis.patch.yml` 里 `llm-pi-ai` 的 `providers`
+- 投影（受影响，两处都读同一份名单）：
+  - ZCode 兼容投影：`provider_config.json` 里被藏型号 `config.enabled=false` 且不进 `personalModelIds` / `modelOrder`；
+  - DSH 投影：`~/.dsh/profiles/<profile>/cordis.patch.yml` 里 `llm-pi-ai` 的 `providers`
 - 名单（新增，本机状态，不进仓库）：`~/.zcode/v2/model-hidden.json`
 
 环境变量 `MODEL_HIDDEN_FILE` 可覆盖名单路径（测试、对照实验用）。
@@ -44,7 +46,7 @@
 
 ## 命令
 
-工具：`tools/model_visibility.py`（改完名单默认立刻 `dsh_sync.py --apply` 重投影，DSH 热加载，不用重启）。
+工具：`tools/model_visibility.py`（改完名单默认立刻先跑 `model_alias.py --slot auto --apply` 重写 ZCode 兼容投影，再跑 `dsh_sync.py --apply` 投 DSH；DSH 热加载，不用重启）。
 
 ```powershell
 python tools/model_visibility.py list                      # 看隐藏了什么、投影里还剩什么
@@ -63,7 +65,14 @@ python tools/model_visibility.py show --all                 # 清空名单（全
 
 ## 投影侧怎么实现
 
-`tools/dsh_sync.py`：
+`tools/model_alias.py`（解析只此一份：`hidden_sets()`）：
+
+1. 写 `provider_config.json` 时，名单里的型号 `config.enabled=false`，且不写进
+   `personalModelIds` / `modelOrder` —— ZCode 的选择器只认这两个数组，所以看不到它；
+2. 整组隐藏的 provider 不写 provider 规则，也不写该组型号规则；
+3. alias map 照旧写入 —— 隐藏的型号在 zgate 侧仍能直接点名调用。
+
+`tools/dsh_sync.py`（调用同一个 `model_alias.hidden_sets()`，两边解析不会漂）：
 
 1. `_hidden_sets()` 读名单 → `(hidden_providers, hidden_models)`；
 2. `_apply_hidden()` 在两条真源（`compat` / `dsh`）都载入之后统一过滤，整组隐藏或组内清空的分组直接跳过；
@@ -101,6 +110,8 @@ Get-NetTCPConnection -State Listen | Where-Object LocalPort -eq 8789   # 无输�
 
 2026-11-17 那次停的就是它（PID 18828）；watchdog 已停，所以不会再被拉起来。
 
+> 2026-11-18 补：此前「隐藏只作用于 DSH」是当时的口径，ZCode 仍收到 18 个 OC 型号；现已改成两条投影共用同一份名单（`model_alias.hidden_sets()`），ZCode 侧同样看不到被藏型号。
+
 ---
 
 ## 已落地的一次实例（2026-11-17）
@@ -128,8 +139,8 @@ Enable-ScheduledTask -TaskName "ModelBus-zen-relay-watchdog"
 
 ## 边界
 
-- **ZCode 兼容投影不动**：`provider_config.json` 还被 ZCode 读着，隐藏只作用于 DSH 投影。
-  要让 ZCode 也看不到，ZCode 侧的等价物是 `config.enabled=false`，本篇不做，避免两处开关漂移。
+- **两条投影共用一份名单**：ZCode 侧的等价物是 `config.enabled=false` + 不进 `personalModelIds`，
+  由 `model_alias.py` 在写盘时统一施加；名单只有 `model-hidden.json` 一个开关，不会出现两处漂移。
 - **至少留一个 provider**：全藏光时 `dsh_sync.py` 直接报错退出，不会写出 DSH 无模型可选的 patch。
 - **不是权限控制**：隐藏只影响投影，别名仍能被 `/v1/chat/completions` 直接点名调用（zgate 侧没变）。
   要真正拦住调用，得在 alias map 或渠道策略里做，那是另一层。

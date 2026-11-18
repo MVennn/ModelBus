@@ -8,9 +8,11 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "tools"))
 import dsh_sync  # noqa: E402
+import model_alias  # noqa: E402
 import model_visibility as V  # noqa: E402
 
 CFG = {
@@ -102,6 +104,42 @@ class ProjectionFilterTest(unittest.TestCase):
         }}
         self.assertEqual(len(dsh_sync._efforts_lost(rules, {})), 1)
         self.assertEqual(dsh_sync._efforts_lost(rules, {}, {"Beam"}), [])
+
+
+class SharedHiddenSetsTest(unittest.TestCase):
+    """隐藏名单解析只有一份：model_alias.hidden_sets()，dsh_sync 也走它。"""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        self.addCleanup(self.tmp.cleanup)
+        self.path = self.root / "model-hidden.json"
+
+    def test_reads_models_and_providers(self):
+        self.path.write_text(json.dumps({
+            "version": 1,
+            "providers": {"opencode-go-chat-free": True},
+            "models": {"Beam": {"reason": "OC 暂停", "channel": "OC"}},
+        }, ensure_ascii=False), encoding="utf-8")
+        providers, models = model_alias.hidden_sets(self.path)
+        self.assertEqual(providers, {"opencode-go-chat-free"})
+        self.assertEqual(models, {"Beam"})
+
+    def test_false_means_visible_again(self):
+        self.path.write_text(json.dumps({"models": {"Beam": False, "Iceman": {}}}), encoding="utf-8")
+        _, models = model_alias.hidden_sets(self.path)
+        self.assertEqual(models, {"Iceman"})
+
+    def test_missing_and_corrupt_degrade_to_empty(self):
+        self.assertEqual(model_alias.hidden_sets(self.root / "nope.json"), (set(), set()))
+        bad = self.root / "bad.json"
+        bad.write_text("{not json", encoding="utf-8")
+        self.assertEqual(model_alias.hidden_sets(bad), (set(), set()))
+
+    def test_dsh_sync_delegates_to_the_same_reader(self):
+        self.path.write_text(json.dumps({"models": {"Beam": {}}}), encoding="utf-8")
+        with mock.patch.object(dsh_sync, "HIDDEN_FILE", self.path):
+            self.assertEqual(dsh_sync._hidden_sets(), (set(), {"Beam"}))
 
 
 if __name__ == "__main__":

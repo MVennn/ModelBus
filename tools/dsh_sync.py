@@ -63,6 +63,10 @@ for _stream in (sys.stdout, sys.stderr):
         _stream.reconfigure(encoding="utf-8", errors="replace")
 
 HERE = Path(__file__).resolve().parent
+if str(HERE) not in sys.path:
+    sys.path.insert(0, str(HERE))
+
+import model_alias  # noqa: E402  （隐藏名单解析的唯一实现，见 hidden_sets）
 REPO = HERE.parent
 EFFECTIVE_SCRIPT = REPO / "providers" / "workbuddy" / "effective_body.js"
 ZCODE_CONFIG = Path(
@@ -252,22 +256,11 @@ def _zcode_providers(cfg: dict[str, Any]) -> list[dict[str, Any]]:
 def _hidden_sets() -> tuple[set[str], set[str]]:
     """读隐藏名单 -> (providerIds, 型号 ids)。
 
-    名单缺失 / 损坏 / 不是对象一律退化为空集合：隐藏是可选层，绝不能因为它
-    读不出来就把整条投影打断（那会让 DSH 模型列表在每日同步时整体停更）。
+    解析只留一份实现：tools/model_alias.py 的 hidden_sets()。ZCode 兼容投影与
+    DSH 投影读同一份名单，两边不会因为解析差异对不上。缺失 / 损坏 / 不是对象
+    一律退化为空集合：隐藏是可选层，绝不能因为它读不出来就把整条投影打断。
     """
-    try:
-        doc = json.loads(HIDDEN_FILE.read_text(encoding="utf-8"))
-    except (FileNotFoundError, json.JSONDecodeError, OSError):
-        return set(), set()
-    if not isinstance(doc, dict):
-        return set(), set()
-    providers = doc.get("providers") if isinstance(doc.get("providers"), dict) else {}
-    models = doc.get("models") if isinstance(doc.get("models"), dict) else {}
-    # 值为 false 视作显式取消隐藏（手写名单时的一个自然写法）。
-    return (
-        {str(k) for k, v in providers.items() if v is not False},
-        {str(k) for k, v in models.items() if v is not False},
-    )
+    return model_alias.hidden_sets(HIDDEN_FILE)
 
 
 def _apply_hidden(

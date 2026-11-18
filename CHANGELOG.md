@@ -17,6 +17,16 @@
 
 ## 未发版（2026-11-17）
 
+### 模型隐藏名单：ZCode 兼容投影也开始生效
+
+> 未发版，版本号不动。
+
+- **背景**：2026-11-17 隐藏 OC 18 个型号时只过滤 DSH 投影，`provider_config.json` 仍列出全部型号，ZCode 的选择器里照样能看到 OC。
+- **改法**：隐藏名单解析收敛到 `tools/model_alias.py` 的 `hidden_sets()`（`dsh_sync.py` 改为调用它）。写 `provider_config.json` 时被藏型号 `config.enabled=false` 且不进 `personalModelIds` / `modelOrder`；整组隐藏的 provider 不写规则。alias map 照旧写，zgate 侧仍可点名调用。
+- **联动**：`tools/model_visibility.py` 改名单后依次跑 `model_alias.py --slot auto --apply` 与 `dsh_sync.py --apply`。
+- **结果**：ZCode 可见 10 个型号（主力 2 / 免费 1 / 省钱 7），14 条被藏规则 `enabled=false`；`dsh_sync.py --check` = 0，两条投影同源。
+- **源侧变化（非本次引入）**：OC 线上游目录本轮只回 20 个型号，`Beam` / `Iceman` / `Muse-Spark1.3` / `longcat-2.5` 已不在源里，别名表从 28 降到 24；OC 恢复订阅后重跑同步即回。
+
 ### QN（七牛云）渠道下线 —— 去掉千牛渠道及其全部投影
 
 > 未发版，版本号不动（[docs/VERSIONING.md](docs/VERSIONING.md) §5）。

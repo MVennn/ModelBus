@@ -25,7 +25,7 @@ MODEL_HIDDEN_FILE 覆盖）：
     python tools/model_visibility.py show --channel OC
     python tools/model_visibility.py show --all
 
-改完名单默认立刻重投影（dsh_sync.py --apply，DSH 热加载 profile patch）；
+改完名单默认立刻重两条投影（model_alias.py --apply 写 ZCode 配置 + dsh_sync.py --apply 写 DSH patch，DSH 热加载）；
 --no-sync 只改名单，--dry-run 连名单都不写。
 """
 from __future__ import annotations
@@ -282,14 +282,19 @@ def cmd_show(args: argparse.Namespace) -> int:
 
 def _sync(args: argparse.Namespace) -> int:
     if getattr(args, "no_sync", False):
-        print("--no-sync：名单已改，投影未动；需要时手动跑 python tools/dsh_sync.py --apply")
+        print("--no-sync：名单已改，两条投影未动；需要时手动跑 python tools/model_alias.py --slot auto --apply 与 python tools/dsh_sync.py --apply")
         return 0
-    script = HERE / "dsh_sync.py"
-    print(f"重投影：{script} --apply")
-    code = subprocess.call([sys.executable, str(script), "--apply"], cwd=str(REPO))
-    if code != 0:
-        print(f"WARN: dsh_sync.py 退出码 {code}，投影未完成", file=sys.stderr)
-    return 0 if code == 0 else 1
+    # 两条投影都吃这份名单：先重写 ZCode 兼容投影（provider_config + alias map，
+    # 被藏型号 enabled=false 且不列进 personalModelIds），再投 DSH。顺序不能反 ——
+    # dsh_sync 读的是 provider_config 的最终状态。
+    for script, extra in ((HERE / "model_alias.py", ["--slot", "auto", "--apply"]),
+                          (HERE / "dsh_sync.py", ["--apply"])):
+        print(f"重投影：{script} {' '.join(extra)}")
+        code = subprocess.call([sys.executable, str(script), *extra], cwd=str(REPO))
+        if code != 0:
+            print(f"WARN: {script.name} 退出码 {code}，投影未完成", file=sys.stderr)
+            return 1
+    return 0
 
 
 def main(argv: list[str] | None = None) -> int:

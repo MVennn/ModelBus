@@ -77,6 +77,36 @@ QD_ENV = REPO / "providers" / "qoder" / ".env.local"
 POOLS_FILE = REPO / "providers" / "qwen" / "pools.json"
 DEFAULT_ARENA = Path.home() / ".zcode" / "v2" / "arena-main.json"
 
+# 隐藏名单（本机状态，不进仓库）：tools/model_visibility.py 维护。
+# 语义单一实现放在这里 —— ZCode 兼容投影（本文件写的 provider_config）与 DSH
+# 投影（tools/dsh_sync.py）都读同一份名单。隐藏只发生在「写投影」这一步：
+# alias map 与路由一条不删，被藏的型号在 provider_config 里 enabled=false 且
+# 不进 personalModelIds/modelOrder，ZCode 的选择器同样看不到它。
+HIDDEN_FILE = Path(
+    os.environ.get("MODEL_HIDDEN_FILE", str(Path.home() / ".zcode" / "v2" / "model-hidden.json"))
+)
+
+
+def hidden_sets(hidden_file: Path | str | None = None) -> tuple[set[str], set[str]]:
+    """读隐藏名单 -> (providerIds, 型号 ids)。
+
+    名单缺失 / 损坏 / 不是对象一律退化成空集合：隐藏是可选层，不能因为它读不出来
+    就把整条投影打断（那会让模型列表在每日同步时整体停更）。值为 false 视作取消隐藏。
+    """
+    path = Path(hidden_file) if hidden_file else HIDDEN_FILE
+    try:
+        doc = json.loads(path.read_text(encoding="utf-8"))
+    except (FileNotFoundError, json.JSONDecodeError, OSError, ValueError):
+        return set(), set()
+    if not isinstance(doc, dict):
+        return set(), set()
+    providers = doc.get("providers") if isinstance(doc.get("providers"), dict) else {}
+    models = doc.get("models") if isinstance(doc.get("models"), dict) else {}
+    return (
+        {str(k) for k, v in providers.items() if v is not False},
+        {str(k) for k, v in models.items() if v is not False},
+    )
+
 PROVIDER_MAIN = "opencode-go-chat"
 PROVIDER_FREE = "opencode-go-chat-free"
 PROVIDER_LOW = "opencode-go-chat-fast"
@@ -2820,26 +2850,35 @@ def main() -> int:
     # 各写一份的话守门迟早和实际行为对不上（守门绿着、配置照样被清空）。
     all_rows = [row for group in ("main", "free", "low") for row in grouped[group]]
     inherited_configs = pick_rule_config(all_rows, cfg, old_rules)
+    hidden_providers, hidden_models = hidden_sets()
+    if hidden_providers or hidden_models:
+        print(f"隐藏：{len(hidden_models)} 个型号 / {len(hidden_providers)} 个 provider 不进 ZCode 投影")
     for group, provider_id in (("main", PROVIDER_MAIN), ("free", PROVIDER_FREE),
                                ("low", PROVIDER_LOW)):
         rows = grouped[group]
-        ids = [row["new_id"] for row in rows]
-        new_providers.append({
-            "providerId": provider_id,
-            "providerName": PROVIDER_NAMES[provider_id],
-            "config": {
-                "group": group_name,
-                "access": copy.deepcopy(access),
-                "api": {"type": "openai-chat-completions", "baseUrl": ROUTER_BASE},
-                "personalModelIds": ids,
-                "modelOrder": ids,
-            },
-        })
+        # 整组隐藏的 provider 不写进 provider_config；被藏的型号不进
+        # personalModelIds/modelOrder（ZCode 选择器只认这两个数组），但 alias 条目
+        # 照建 —— zgate 侧仍能直接点名调用，隐藏不是删除。
+        group_hidden = provider_id in hidden_providers
+        ids = [row["new_id"] for row in rows
+               if not group_hidden and row["new_id"] not in hidden_models]
+        if not group_hidden:
+            new_providers.append({
+                "providerId": provider_id,
+                "providerName": PROVIDER_NAMES[provider_id],
+                "config": {
+                    "group": group_name,
+                    "access": copy.deepcopy(access),
+                    "api": {"type": "openai-chat-completions", "baseUrl": ROUTER_BASE},
+                    "personalModelIds": ids,
+                    "modelOrder": ids,
+                },
+            })
         for row in rows:
             # 继承源顺序与 family_entries 生成的名字对齐（raw 是显示名），再用显式
             # 上游名兜底；档位补齐在 pick_rule_config / _inherit_efforts 里做。
             config = copy.deepcopy(inherited_configs.get(str(row["new_id"])) or {})
-            config["enabled"] = True
+            config["enabled"] = (not group_hidden) and row["new_id"] not in hidden_models
             meta = MODEL_META.get(str(row.get("upstream") or "").lower())
             if meta:
                 if not config.get("properties"):
@@ -2849,11 +2888,12 @@ def main() -> int:
                     specs.setdefault(key, value)
             if row["protocol"] != "chat":
                 _enforce_non_chat_effort(config, row)
-            new_model_rules.append({
-                "modelId": row["new_id"],
-                "config": config,
-                "providerId": provider_id,
-            })
+            if not group_hidden:
+                new_model_rules.append({
+                    "modelId": row["new_id"],
+                    "config": config,
+                    "providerId": provider_id,
+                })
             base = base_of(row["channel"], row["upstream"])
             alias_models[row["new_id"]] = {
                 # 显示名（可撞、去后缀）与代号（row["new_id"]，唯一）分离：
