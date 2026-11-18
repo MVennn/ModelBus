@@ -90,17 +90,17 @@
 
 统一入口按 alias map 分流：统一名（如 `Qwen-3.8-Max` / `HY4`）解析成跨渠道 `chain` 逐跳回落，legacy 键映射到对应统一名；`chain` 覆盖 6 个 upstreams（OC / WB / QD / QW / GM / HJ）。
 它由 `gateways/zgate` 常驻提供（登录自启，见
-[MAINTENANCE.md](MAINTENANCE.md) §8），健康检查 `GET http://127.0.0.1:7871/health`（七段 upstream + `children` / `alias` / `cooling` / `uptime_s`）。
+[MAINTENANCE.md](MAINTENANCE.md) §8），健康检查 `GET http://127.0.0.1:7871/health`（6 个渠道段 + `children` / `alias` / `cooling` / `uptime_s`）。
 
 模型怎么分档、哪些模型进哪一组，见 [MODEL-PROVIDERS.md](MODEL-PROVIDERS.md) §4.0、§4.2；
 守护器与开机自启，见 [MAINTENANCE.md](MAINTENANCE.md) §8。
 统一入口按 `zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / GM / HJ）；自启父链、换版与回滚正本在 `tools/zgate-lifecycle/`，见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 **当前生效清单单一真值**：`tools/zgate-lifecycle/current-models.ps1` 读 alias map + `zgate.json` 写出
-`%LOCALAPPDATA%/ModelBus/current-models.json`（22 统一名 + 94 legacy 键 + 6 upstreams + 3 children）；
+`%LOCALAPPDATA%/ModelBus/current-models.json`（24 统一名 + 55 legacy 键 + 6 upstreams + 2 children）；
 `install-sync-schedule.ps1` 只读核对 `\ModelBus 模型同步` 每日 12:00 触发器（不注册新任务）。
 `GET /v1/models` 与 `GET /models` 走 zgate 的 alias 命名空间聚合 handler（统一名优先 + legacy 去重，
-`owned_by=zgate`；`?scope=canonical|legacy|all` 分档，缺省只给 20 条统一名，口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §6），不再逐字节等于 OC 单家 catalog 透传；OC 独有裸 id 仍由 `routeFallback` 默认分支直穿 OC 兜底。
+`owned_by=zgate`；`?scope=canonical|legacy|all` 分档，缺省只给 24 条统一名，口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §6），不再逐字节等于 OC 单家 catalog 透传；OC 独有裸 id 仍由 `routeFallback` 默认分支直穿 OC 兜底。
 
 **Qoder 经过统一路由**：模型 id 带 `qoder:` 前缀，7871 剥掉前缀后转给
 `127.0.0.1:8790`；兼容投影侧没有独立 `qoder` provider。模型矩阵见

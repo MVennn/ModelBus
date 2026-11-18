@@ -1,7 +1,7 @@
 # OpenCode Zen 免费模型接入 ModelBus：踩点文档
 
 > **一句话**：把 OpenCode Zen 免费模型接进 ModelBus 要过两道门，本文档钉死接入点与可回滚落地步骤。
-> **结论**：本文档只踩点、未改动任何真配置、未装 Bun、未碰长驻网关；确认后再按分阶段回滚方案落地。
+> **结论**：本文档是 2026-11-09 踩点快照。踩点结论（两道门、关键模型、回滚边界）有效；落地动作已在 2026-11-11 执行，现状是**已实现但当前停用**——Bun v1.4.4 已装、zen-relay 曾监听 8789、2026-11-17 停用（任务 `ModelBus-zen-relay-watchdog` 已 Disabled、8789 已关闭）。以 `CHANGELOG.md` 2026-11-17 条与 `providers/opencode-zen/README.md` 为准。
 
 ---
 
@@ -76,15 +76,15 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 
 ---
 
-## 4. 可回滚最小落地步骤（待用户拍板后执行）
+## 4. 可回滚最小落地步骤（历史方案，2026-11-11 已执行、2026-11-17 已停用）
 
-以下都是**建议步骤**，本轮没有执行。原则：每一阶段先备份、再验证、失败按本阶段回滚；长驻网关禁止会话自动重启，受控重启前后按三步（备份 → md5 → 受控重启）执行。
+以下保留当时方案供回滚参考，本轮（踩点）未执行；落地与停用记录见 `CHANGELOG.md` 2026-11-11 / 2026-11-17。原则：每一阶段先备份、再验证、失败按本阶段回滚；长驻网关禁止会话自动重启，受控重启前后按三步（备份 → md5 → 受控重启）执行。
 
 ### 阶段 0：前置拍板与准备
 
-- 确认：是否接受新装 Bun、是否接受 Big Pickle 免费数据条款、免费档 Console 通用端点与 key 来源。
+- 历史待确认项（2026-11-09 口径）：当时问是否新装 Bun；实测 Bun v1.4.4 已装（`~\.bun\bin\bun.exe`），Big Pickle 数据条款与端点/key 边界见下文。
 - 备份：`docs/ZEN-FREE-INTEGRATION-PLAN.md` 所在仓库做一次可回溯快照（建议 `git status` 留痕 + 相关文件复制到 `.work/zen-free-backup/`）。
-- 验证：`where bun` 或 `Get-Command bun` 确认本机无 Bun；记录 Node v24 当前状态。
+- 验证：`Get-Command bun` 实测 `~\.bun\bin\bun.exe` v1.4.4；Node v24.13.1。
 - 回滚：阶段 0 只创建备份目录，删除该目录即回滚。
 
 ### 阶段 1：本地 Bun 代理（第二道门）
@@ -120,7 +120,7 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 
 | 风险 / 未决项 | 现状 | 对策 / 待定 |
 |---|---|---|
-| Bun 未安装 | 本机 PATH 无、项目无 `bun.exe`，只有 Node v24；`docs/ARCHITECTURE.md:424` 记录过评估后未采用 Bun | 落地前确认安装渠道与版本；这是新增运行时，需要用户拍板 |
+| Bun 安装状态（历史项） | 踩点时 PATH 无 Bun；落地后实测 `~\.bun\bin\bun.exe` v1.4.4（Node v24.13.1）；`docs/ARCHITECTURE.md:424` 是早期评估记录 | 已安装；zen-relay 于 2026-11-17 停用，见 `CHANGELOG.md` |
 | 第二道门只能在 Bun 层过 | zgate 纯 Go 标准库，`router.go:1242` 走 `net/http`，无 TLS 指纹伪装 | 必须在本地代理用 Bun TLS；不要把 429 误判成 zgate 头问题 |
 | 第一道门两处重复 | zgate `ZF` case 与 Bun 代理都要补头 | 明确唯一真源（建议 Bun 代理最终负责，zgate 只兜底）后再写，避免 header 被覆盖或重复 |
 | 端点与 key 边界 | Go 凭据 `oc_sk_` 在 `/zen/go/v1/chat/completions` 返 `400 Model is unavailable` | 免费档走 Console 通用端点（`opencode-zen-chat`），不沿用 Go key |

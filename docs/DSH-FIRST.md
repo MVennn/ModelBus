@@ -65,9 +65,9 @@
 
 | 事实 | 证据 |
 |---|---|
-| 现网 19 条规则中 9 条带 `properties`，10 条只有 `optionSpecs.reasoningLevel` | `provider_config.json` 逐条核对（缺失：某主力模型 / Beam / Conatus / Iceman / Qwen-3.8-Max / Qwen-3.8-Flash / MiMo-2.6-Flash / Claude-Haiku-5.5 / Muse-Spark1.3 / GPT-6-Luna） |
-| 这 10 条在运行时被 builtin 通配规则兜住 | `third-party/zcode/zcode-builtin.json` → `modelConfigRules.modelRules[0]`：`modelMatch: ".*"`，`contextWindow 1000000` / `maxTokens 128000` / `supportsToolCall true` / `supportsImage false` |
-| 真值其实在仓里，只是没匹配上 | 同文件 `modelConfigRules.providerSiteRules` 54 条，27 条带能力字段，按 `(modelMatch, apiTypeMatch, baseUrlMatch)` 三元组生效；我们过去拿**显示别名**和 `127.0.0.1:7871` 的 baseUrl 去匹配，规则要的是 `deepseek-v4\.1-flash` 与 `https://opencode\.ai/zen/go/v1/?` |
+| 现网 `config.modelConfigRules.providerModelRules` 24 条（manual 0），能力字段与出处见 [CAPABILITY-AUDIT.md](CAPABILITY-AUDIT.md) §9（本表为 2026-11-10 历史快照） | `provider_config.json` 实测：24 条 providerModelRules；旧 `modelRules`/`providerSiteRules` 字段已不存在 |
+| 历史快照：旧 10 条靠 builtin `.*` 兜底，现网已由 `tools/caps_upstream.py` 取真值 | `third-party/zcode/zcode-builtin.json` 的 `modelConfigRules` 现结构以实测为准；落地见 [CAPABILITY-AUDIT.md](CAPABILITY-AUDIT.md) §9 |
+| 历史快照：旧 `providerSiteRules`（54 条）曾按 `(modelMatch, apiTypeMatch, baseUrlMatch)` 三元组生效；该字段现网已不存在 | 现网以 `providerModelRules` + `tools/caps_upstream.py` 真值为准，见 [CAPABILITY-AUDIT.md](CAPABILITY-AUDIT.md) §9 |
 | 映射现成 | `~/.zcode/v2/model-alias-map.json` 每条模型带 `base_model`，`chain[]` 每跳带 `base` / `protocol` / `channel`，正好拼出匹配三元组 |
 | 后果 | ZCode / DSH 都按 `contextWindow` 定压缩阈值；1M 的声明把阈值推到 800k，长会话才会突然涨 token 与延迟 |
 

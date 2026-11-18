@@ -281,8 +281,8 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 
 ## 8. 网关生命周期（zgate）
 
-2026-10-23 起，5 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
-它监听 `127.0.0.1:7871`，按 alias map 把统一命名（22 个）与 legacy 键（94 个）的请求分流到 4 条上游（OC / WB / QD / QW），
+2026-10-23 起，6 个 upstream 由**一个进程**托管：`gateways/zgate`（Go，约 19 MB）。
+它监听 `127.0.0.1:7871`，按 alias map 把统一命名（24 个）与 legacy 键（55 个）的请求分流到 6 条上游（OC / WB / QD / QW / GM / HJ），
 并按策略拉起 / 回收 2 个本地子进程（workbuddy 7863 / qoder 8790）：
 
 | 上游 | 端口 | 谁在跑 | 策略 |
@@ -312,8 +312,8 @@ python -c "import json,os; json.load(open(os.path.expanduser('~/.zcode/v2/provid
 | 前台启动（排错用；正常由登录自启拉起） | `gateways/zgate/zgate.exe serve` |
 | 注册登录自启（现行） | `powershell -NoProfile -ExecutionPolicy Bypass -File tools/zgate-lifecycle/install-lifecycle.ps1`（写计划任务；`zgate.exe install` 只管旧的启动文件夹快捷方式，正常不跑） |
 | 移除登录自启 | `gateways/zgate/zgate.exe uninstall` |
-| 热加载配置 / 上游 base / 凭据（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload`；监听地址 / 新增子进程 / alias map 路径 / Go 代码用 `restart-zgate.cmd` |
-| 健康检查 | `curl http://127.0.0.1:7871/health`（七段 upstream 各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
+| 热加载配置 / 上游 base / 凭据（改完 `zgate.json`） | `gateways/zgate/zgate.exe reload`；监听地址 / 新增子进程 / alias map 路径 / Go 代码用 `tools/zgate-lifecycle/restart-zgate.cmd` |
+| 健康检查 | `curl http://127.0.0.1:7871/health`（6 个渠道段各带 `base` / `key` / `child` / `state` / `last_error`，加 `children`（子进程 `state` / `pid` / `idle_s`）、`alias` / `cooling` / `uptime_s`）；`GET /v1/models` 返回 alias 命名空间聚合视图 |
 | 只重启 WorkBuddy 上游 | `taskkill /IM wb2api.exe /F`，下一次 WB 请求自动拉起 |
 | 只重启 Qoder 上游 | `taskkill /IM python.exe /F` 后用下面的 bat 兜底，或重启 zgate |
 | 重新构建 zgate | `python gateways/zgate/build.py` |
@@ -369,7 +369,7 @@ zgate 按 **GUI 子系统**编译（`-H windowsgui` 就是干这个的）：登�
 
 | 键 | 默认 | 说明 |
 |---|---|---|
-| `listen` | `127.0.0.1:7871` | 统一命名（22 个）与 legacy 键（94 个）的 `baseUrl` 指向这里；环境变量 `ZGATE_LISTEN` 可覆盖 |
+| `listen` | `127.0.0.1:7871` | 统一命名（24 个）与 legacy 键（55 个）的 `baseUrl` 指向这里；环境变量 `ZGATE_LISTEN` 可覆盖 |
 | `aliasMap` | `~/.zcode/v2/model-alias-map.json` | 显示名 → 上游；按 mtime 热加载，改完不用重启 |
 | `providerConfig` | `~/.zcode/v2/provider_config.json` | 凭据兜底来源 |
 | `children.<name>.policy` | `ondemand` | `always` 常驻 / `ondemand` 按需（默认谁都不用就不起） |

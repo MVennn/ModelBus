@@ -354,7 +354,7 @@ schtasks /query /tn "ModelBus-zgate-watchdog" /fo LIST
 | 端口被占但健康检查不通 | zgate 会拒绝重复启动并报「端口被占用且健康检查不通」；先清掉占用进程 |
 | 子进程老是退出 | 默认 `ondemand` 模式下 WB 空闲 15 分钟会被回收，这是正常行为；不是「挂了」 |
 | `status` 的 Provider 段显示 key 缺失 | 三组没指向 7871，或 provider 里没有 apiKey：重跑 `python tools/model_alias.py --slot auto --apply`，或检查 `ZCODE_PERSONAL_PROVIDER_CONFIG_FILE` |
-| 想彻底回到手动 | `zgate.exe uninstall` 移除自启；网关仍可用 `gateways/upstream/workbuddy/run.bat`、Qoder 用 `start-qoder-proxy.bat` 单独起 |
+| 想彻底回到手动 | `Disable-ScheduledTask ModelBus-zgate-watchdog` 停用现行自启（`zgate.exe uninstall` 只移旧快捷方式）；网关仍可用 `gateways/upstream/workbuddy/run.bat`、Qoder 用 `start-qoder-proxy.bat` 单独起 |
 
 > zgate 常驻（约 19 MB），不跟随 ZCode 起停：它自己按策略管 2 个子进程
 > （workbuddy / qoder，均 `ondemand` + `windows` 定时窗口兜底）。ZCode 最小化到托盘不影响任何进程，
@@ -384,7 +384,7 @@ python -c "import os; p=os.path.join(os.environ['LOCALAPPDATA'],'ZCodeGateway','
 
 | 原因 | 解法 |
 |---|---|
-| 入口没起 | `gateways/zgate/zgate.exe serve` 前台启动排错，或 `zgate.exe install` 重建自启 |
+| 入口没起 | `gateways/zgate/zgate.exe serve` 前台启动排错，或 `tools/zgate-lifecycle/install-lifecycle.ps1` 校正计划任务（现行自启是 `ModelBus-zgate-watchdog`，见 :349） |
 | 7871 被别的进程占用 | `Get-NetTCPConnection -LocalPort 7871`；换 `ZGATE_LISTEN` 后同步改三组的 `baseUrl` |
 | 缺 OpenCode key | 设置 `OPENCODE_GO_KEY`，或检查 `provider_config.json` 里 OpenCode provider 的 `access.apiKey` |
 | 缺 WorkBuddy key | 设置 `WB_GATEWAY_KEY`，或检查 `gateways/upstream/workbuddy/config.json` 的 `api_key` |

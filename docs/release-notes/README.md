@@ -29,7 +29,7 @@ Release 说明是**给使用者看的**，要短、写成清单、只讲「我�
 ```markdown
 **首版：把 OpenCode-Go 套餐与 WorkBuddy2API 网关接进 ZCode，探测与同步脚本齐了。**
 
-遇到问题、想要新功能，到 [Issues](https://github.com/MVennn/ZcodeAIModels/issues/new/choose) 反馈。
+遇到问题、想要新功能，到 [Issues](https://github.com/MVennn/ModelBus/issues/new/choose) 反馈。
 
 ## 本版内容
 
@@ -58,7 +58,7 @@ Release 说明是**给使用者看的**，要短、写成清单、只讲「我�
 
 - 反馈入口**不是清单条目**（不写 `-`、不加粗），单独一行；
 - 链接只能用绝对地址
-  `https://github.com/MVennn/ZcodeAIModels/issues/new/choose` —— 同一份正文可能被转到
+  `https://github.com/MVennn/ModelBus/issues/new/choose` —— 同一份正文可能被转到
   别处，相对链接会落到错误的仓库；
 - `issues/new/choose` 会先让用户选「问题反馈」还是「功能建议」，两类都收。
 
