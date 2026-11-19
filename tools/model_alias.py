@@ -243,7 +243,12 @@ LOW_ORDER = [
     # 同厂商仍受 VENDOR_QUOTA=2 约束：HY 为 hy4std + hy4flash，QW 为 Max + 一条 Flash。
     "chat:cn:hy4std",                # 腾讯：旗舰（0.29，原主力第一位）
     "chat:qoder:Qwen3.8-Max",        # Qwen：旗舰（0.43，原主力贵备份）
-    "messages:qwen3.8-flash",        # Qwen：中文 / 长输出（AA 基准附近）
+    # 千问官方 Tail 跳（2026-11-19 用户口径）：QD 侧 Qwen 一直在排队
+    # （403/10605 isQueued，网关要白等 90s），官方 MaaS 同型号秒回，
+    # 所以两条 Qwen 都必须带上 QW 尾跳。显式写 qwen: 前缀 —— 裸名会被
+    # classify 猜成 OC 的同名免费跳（OC 已整渠道隐藏，等于没兜底）。
+    "messages:qwen:qwen3.8-max",
+    "messages:qwen:qwen3.8-flash",   # Qwen：中文 / 长输出（AA 基准附近）
     "chat:qoder:Qwen3.8-Flash",      # Qwen：Qoder 侧错峰免费（pf 0.0；白天 0.1×0.86≈0.086）。
                                      # 与上一条同族，靠 MERGE_ACROSS_PROTOCOL 并成一条链：
                                      # QD 首跳（免费）→ OC messages 跳（0.09）。
@@ -292,9 +297,9 @@ SCORE_MIN_VALUE = 1.0
 # Base models whose free GB tier is folded into the paid entry instead of being
 # listed separately: the paid entry tries the free upstream first, then the paid
 # one, then CN. Display name keeps the paid price.
-MERGE_FREE_GB = {"deepseek-v4.1-flash", "qwen3.8-flash"}
+MERGE_FREE_GB = {"deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-max"}
 # 同一型号允许 chat 与 messages 跳并进同一条链（路由按每跳自己的协议派发）。
-MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash", "qwen3.8-flash"}
+MERGE_ACROSS_PROTOCOL = {"deepseek-v4.1-flash", "qwen3.8-flash", "qwen3.8-max"}
 
 # WB（WorkBuddy）永远是第一消费来源：排序键里给它最高的固定优先级，
 # 不看价格、不受任何「临时降级」开关影响。历史教训 2026-11-05：曾用一个
@@ -313,6 +318,13 @@ WB_FIRST_CHANNELS = {"WB"}
 #   · GM=1：第三方中转直连付费档，与 OC/QD 同档，按价格排
 CHANNEL_RANK = {"WB": 0, "OC": 1, "QD": 1, "QW": 2, "GM": 1, "HJ": 1}
 CHANNEL_RANK_DEFAULT = 4
+
+# 千问旗舰 / 轻量：QW（官方 MaaS 预付额度）必须排在 QD 之前。
+# 2026-11-19 实测：QD 只在 08:58-09:15 / 20:58-21:15 / 21:58-22:15 三个窗口内
+# 真能回包，窗口外一律 403/10605 isQueued 排队 90s 起；等它超时期间 zgate 已经
+# 给客户端交了 200 的空正文，QW 兜底根本轮不到。QW 这边是每模型 1M tokens
+# 试用池（边际单价 0）+ 秒回，所以这两条型号把 QW 提到链首。
+QW_FIRST_MODELS = {"qwen3.8-max", "qwen3.8-flash"}
 
 # 千问「每模型 1M tokens」试用池到期日（¥300 额度见 QW_CREDIT_UNTIL）。
 # 试用池到期后边际成本从 0 变真钱，所以它比额度本身更早需要预警 —— 见 write_quota_windows。
@@ -2005,6 +2017,12 @@ def family_entries(items: list[dict], wb: dict, qd: dict, slot: str) -> list[dic
             # 两段并列逻辑已并入这张表，行为等价性见 CHANNEL_RANK 的注释。
             # 其后按价格、GB/CN 前缀、渠道、名称稳定排序。
             group = sorted(group, key=lambda h: (
+                # 白名单型号的链首特例（见 QW_FIRST_MODELS）：命中即抢排最前，
+                # 其余仍走 CHANNEL_RANK 的 WB → OC/QD → QW 消费顺序。
+                0 if (
+                    h["channel"] == "QW"
+                    and _bare(str(h.get("base_model") or "")).lower() in QW_FIRST_MODELS
+                ) else 1,
                 CHANNEL_RANK.get(h["channel"], CHANNEL_RANK_DEFAULT),
                 h["price"],
                 0 if h["upstream"].startswith("global:") else 1 if h["upstream"].startswith("cn:") else 2,
@@ -2286,6 +2304,14 @@ def entry_group(entry: dict, arena_targets: dict[tuple[str, str], dict],
             return "main", "arena"
     price = entry["price"]
     if price <= 0:
+        # 链首 0 价、但链里还有付费跳的白名单型号不算「免费档」：QW 预付额度打头、
+        # 付费兜底在后（2026-11-19 把 Qwen 两条的 QW 提到链首后就整条被搬进了免费组，
+        # 额度烧完它是要收钱的，放免费组会误导）。
+        if (
+            any(float(h.get("price") or 0) > 0 for h in entry["chain"])
+            and any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"])
+        ):
+            return "low", ""
         return "free", ""
     if any(_picked(entry, hop, LOW_PICKS) for hop in entry["chain"]):
         # 严格白名单命中即进省钱组，不受 LOW_MAX 价格上限约束
@@ -2366,6 +2392,34 @@ def drift_report(grouped: dict[str, list[dict]], existing_models: dict) -> dict[
         "price_changed": price_changed,
         "chain_changed": chain_changed,
     }
+
+
+def projected_for_drift(grouped: dict[str, list[dict]],
+                        hidden_ch: set[str]) -> dict[str, list[dict]]:
+    """把重算结果裁成「真正会写进 alias map 的形状」再拿去比漂移。
+
+    --apply 写 alias 条目时会把隐藏渠道的跳从 chain 里摘掉
+    （chain_without_hidden_channels），纯隐藏渠道的型号整条不写。--check 若拿
+    未裁剪的 grouped 去比，凡是隐藏渠道还有候选跳的型号都会永远报「链路漂移」，
+    漂移复查永不收敛（2026-11-19 实测：每日任务因此长期 exit 1）。
+    这里与写入端共用同一条裁剪规则，保证「重算→写盘→重算」幂等。
+    """
+    if not hidden_ch:
+        return grouped
+    out: dict[str, list[dict]] = {}
+    for group, rows in grouped.items():
+        kept: list[dict] = []
+        for row in rows:
+            chain = chain_without_hidden_channels(row, hidden_ch)
+            if not chain:
+                continue
+            fixed = dict(row)
+            fixed["chain"] = chain
+            # 写入端在同一步把头字段换成过滤后第一跳，签名里的 price 也要跟着走
+            fixed["price"] = chain[0].get("price", row.get("price"))
+            kept.append(fixed)
+        out[group] = kept
+    return out
 
 
 def print_drift(drift: dict[str, list]) -> None:
@@ -2829,7 +2883,9 @@ def main() -> int:
         return 1
 
     if args.check:
-        drift = drift_report(grouped, existing_models)
+        # 与写入端同一套裁剪：隐藏渠道的跳不写进 alias map，比漂移时必须先摘掉，
+        # 否则「磁盘上没有、重算里有」会被判成永久漂移。
+        drift = drift_report(projected_for_drift(grouped, hidden_channels()), existing_models)
         print_drift(drift)
         # 档位守门：这一轮算出来的继承链会抹掉已落盘档位就判失败。模型表本身
         # 漂移时上面的 drift 已经报 1；这里独立判定，两种漂移原因分开说清。

@@ -101,6 +101,9 @@ _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 # reasoning_effort 四档 low/medium/high/xhigh；但宿主 catalog 只声明 off/high 开关
 # （装饰项），每日同步若照 catalog 投影会把四档冲掉，故显式豁免、以 patch 为准。
 HANDSET_EFFORTS: set = {"Gemini-4-Hydrogen"}
+# provider 级默认档目标（2026-11-19 用户定）：组内共同档低于它时抬到这一档，
+# 缺这一档的模型用 wire 别名补齐；不再按「并列取低、省思考开销」的旧口径。
+DEFAULT_EFFORT_TARGET = "high"
 KNOWN_PROVIDER_IDS = {
     "opencode-go-chat": "zcode-main",
     "opencode-go-chat-free": "zcode-free",
@@ -147,6 +150,20 @@ def _construct_js(loader: yaml.Loader, node: yaml.Node) -> Any:
 
 for _tag in ("!js", "tag:yaml.org,2002:js"):
     _BlockLoader.add_constructor(_tag, _construct_js)
+
+# PyYAML 默认按 YAML 1.1 布尔表解析：裸 off/on/yes/no 都会读成布尔。DSH 客户端用
+# js-yaml（YAML 1.2）整体重写 profile patch 时会把 'off' 的引号去掉，这里再读一次就
+# 成了 {False: False}，safe_dump 回写成 false: false —— llm-pi-ai 的 zod 只认
+# false 或 7 个档位名，整份 providers 配置随之失效，设置页报
+# reasoningEfforts expected false | {...} but got {"false":false,...} 并拒绝保存，
+# 连新建供应商都点不下去（2026-11-19 实况）。这里把布尔表裁到 1.2 口径，
+# 与 js-yaml 对齐，只认 true/false 两种拼写。
+_BOOL_YAML12 = re.compile(r"^(?:true|True|TRUE|false|False|FALSE)$")
+_BlockLoader.yaml_implicit_resolvers = {
+    key: [(tag, rx) for tag, rx in resolvers if tag != "tag:yaml.org,2002:bool"]
+    for key, resolvers in _BlockLoader.yaml_implicit_resolvers.items()
+}
+_BlockLoader.add_implicit_resolver("tag:yaml.org,2002:bool", _BOOL_YAML12, list("tTfF"))
 
 
 def _load_yaml(text: str) -> Any:
@@ -481,29 +498,42 @@ def _apply_default_effort(models: list[dict[str, Any]]) -> str | None:
         档静默降级，于是显示 "Default" 伪档；
       * 请求兜底档 —— resolveReasoningLevel 对不支持的档直接抛
         UNSUPPORTED_REASONING_EFFORT。
-    所以整组必须有一个「每个模型都支持」的默认档。组内档位天然一致时直接用
-    共同最高档（不注入任何别名）；档位分散时选覆盖面最广的档，并给缺失该档
-    的模型注入一条 wire 别名（档位名 -> 该模型真实支持的最高档 wire 值），
-    让 UI 与请求都走同一个档名，而实际发给上游的仍是模型支持的 wire 值。
+    所以整组必须有一个「每个模型都支持」的默认档。策略（2026-11-19 用户定）：
+    默认一律抬到 DEFAULT_EFFORT_TARGET（high）——
+      * 共同档已达目标：直接用共同最高档，不注入任何别名；
+      * 目标档至少一个模型支持：用目标档，给缺该档的模型注入一条 wire 别名
+        （档名 -> 该模型真实支持的最高档 wire 值），让 UI 与请求都走同一个档名，
+        实际发给上游的仍是模型支持的 wire 值；
+      * 目标档没有模型支持：退回共同档，再退回覆盖面最广的档。
     """
-    # 1. 档位天然一致的组：直接用共同最高档，不注入任何别名。
     shared = _shared_default_effort(models)
-    if shared is not None:
-        return shared
-
-    # 2. 档位分散的组：选覆盖面最广、开销最低的档作默认。
     reasoning_models = [m for m in models if isinstance(m.get("reasoningEfforts"), dict)]
     if not reasoning_models:
-        return None
-    counts = {lv: 0 for lv in _LEVEL_ESCALATION}
-    for m in reasoning_models:
-        for lv in _LEVEL_ESCALATION:
-            if lv in m["reasoningEfforts"]:
-                counts[lv] += 1
-    # 并列时取 _LEVEL_ESCALATION 中靠前的档（low 优先于 high，思考开销更小）。
-    best = max(_LEVEL_ESCALATION, key=lambda lv: (counts[lv], -_LEVEL_ESCALATION.index(lv)))
-    if counts[best] == 0:
-        return None
+        return shared
+
+    target = DEFAULT_EFFORT_TARGET
+    target_rank = _LEVEL_ESCALATION.index(target) if target in _LEVEL_ESCALATION else None
+
+    # 1. 共同档已经不低于目标：直接用共同最高档，不注入任何别名。
+    if shared is not None and (
+        target_rank is None or _LEVEL_ESCALATION.index(shared) >= target_rank
+    ):
+        return shared
+
+    # 2. 挑默认档：目标档优先，没人支持时退回共同档 / 覆盖面最广的档。
+    if target_rank is not None and any(target in m["reasoningEfforts"] for m in reasoning_models):
+        best = target
+    elif shared is not None:
+        best = shared
+    else:
+        counts = {lv: 0 for lv in _LEVEL_ESCALATION}
+        for m in reasoning_models:
+            for lv in _LEVEL_ESCALATION:
+                if lv in m["reasoningEfforts"]:
+                    counts[lv] += 1
+        best = max(_LEVEL_ESCALATION, key=lambda lv: (counts[lv], -_LEVEL_ESCALATION.index(lv)))
+        if counts[best] == 0:
+            return None
 
     # 3. 给不支持 best 的模型补别名：best -> 它真实支持的最高档 wire 值。
     for m in models:
@@ -614,6 +644,23 @@ class _PatchDoc:
         return (before + "\n\n" if before else "") + block + ("\n" + after if after else "")
 
 
+def _efforts_schema_ok(efforts: Any) -> bool:
+    """llm-pi-ai 的 reasoningEfforts 只吃 false 或档位名到字符串的映射。
+
+    档位名限定 DSH_LEVELS 七档；任何别的东西（典型：PyYAML 把裸 off 读成布尔后
+    回写的 false: false 键值）都会让宿主前端拒绝保存整份 providers 配置，
+    所以这种值一概不沿用。
+    """
+    if efforts is False:
+        return True
+    if not isinstance(efforts, dict):
+        return False
+    return all(
+        isinstance(level, str) and level in DSH_LEVELS and isinstance(wire, str)
+        for level, wire in efforts.items()
+    )
+
+
 def _keep_efforts(routes: dict[str, Any], old_providers: dict[str, Any]) -> dict[str, Any]:
     """把现有 patch 里手写/人工调过的 reasoningEfforts 保留到新生成的路由上。
 
@@ -641,6 +688,12 @@ def _keep_efforts(routes: dict[str, Any], old_providers: dict[str, Any]) -> dict
                 continue
             old_model = old_models.get(mid)
             if not old_model or not old_model.get("reasoningEfforts"):
+                continue
+            if not _efforts_schema_ok(old_model["reasoningEfforts"]):
+                print(
+                    f"警告：{mid} 的 reasoningEfforts 不符合 llm-pi-ai schema"
+                    f"（{old_model['reasoningEfforts']!r}），不沿用、按源头重算"
+                )
                 continue
             model["reasoningEfforts"] = old_model["reasoningEfforts"]
             if old_model.get("compat"):

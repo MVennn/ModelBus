@@ -76,12 +76,13 @@ class QwenFlashChainTest(unittest.TestCase):
         except (FileNotFoundError, json.JSONDecodeError, OSError):
             self.hidden_channels = set()
 
-    def test_qd_hop_leads_the_chain(self) -> None:
-        """QD 必须是这条链最便宜的一跳。
+    def test_qw_leads_and_qd_follows(self) -> None:
+        """链首必须是 QW（千问官方预付额度），QD 只能跟在后面。
 
-        2026-11-06 23:44 上游还是 price_factor 0.0（真免费），23:59 已改成 0.04、
-        usage.billable 也从 false 变 true —— 免费窗口关掉了。所以这里不再写死 0.0，
-        只断言「比 OC 兜底便宜、排链首」；哪天上游涨价超过 OC，这条会红，提示复核。
+        2026-11-19 实测：QD 只在 08:58-09:15 / 20:58-21:15 / 21:58-22:15 三个窗口内
+        真能回包，窗口外排队 90s 起（403/10605 isQueued），等它期间网关已经给客户端
+        交了 200 空正文，QW 兜底轮不到。QW 是每模型 1M tokens 试用池（边际单价 0）
+        且秒回，所以见 QW_FIRST_MODELS。
         """
         entry = self.models.get("Qwen-3.8-Flash")
         if entry is None:
@@ -89,24 +90,12 @@ class QwenFlashChainTest(unittest.TestCase):
         chain = entry.get("chain") or []
         self.assertTrue(chain, "Qwen-3.8-Flash 链为空")
         head = chain[0]
-        self.assertEqual(head.get("channel"), "QD", f"链首不是 QD：{head}")
-        head_price = head.get("price")
-        self.assertIsNotNone(head_price, "QD 跳没有价格，会被静默剔除")
-        others = [h.get("price") for h in chain[1:] if h.get("price") is not None]
-        if "OC" in self.hidden_channels:
-            # OC 渠道被隐藏：chain 里的 OC 跳按设计已移除，不再断言兜底跳存在；
-            # 只保留「QD 链首 + 有价格」的核心约束。
-            self.assertEqual(
-                [hop.get("channel") for hop in chain], ["QD"],
-                f"OC 隐藏后应只剩 QD 首跳：{chain}",
-            )
-            return
-        self.assertTrue(others, f"链里没有 OC 付费兜底跳：{chain}")
-        self.assertLessEqual(head_price, min(others), f"QD 不再是最便宜的一跳：{head_price} vs {others}")
-        # 同一条链里必须还留着 OC 的付费跳做兜底（跨协议合并）。
+        self.assertEqual(head.get("channel"), "QW", f"链首不是 QW：{head}")
+        self.assertEqual(head.get("protocol"), "messages", f"QW 跳必须是 messages：{head}")
+        self.assertEqual(head.get("price"), 0.0, f"QW 跳在预付额度内应记 0 价：{head}")
         self.assertTrue(
-            any(hop.get("channel") == "OC" for hop in chain),
-            f"链里没有 OC 兜底跳：{chain}",
+            any(hop.get("channel") == "QD" for hop in chain),
+            f"QW 之后没有 QD 兜底跳：{chain}",
         )
 
     def test_no_duplicate_display_name(self) -> None:

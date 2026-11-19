@@ -214,7 +214,7 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
 | 运行层没有统一的家 | 路由在 `tools/`，守护器在 `workbuddy/`，Qoder 启动脚本在 `qoder/gateway/` |
 | 上游 clone 嵌两层 | `qoder/gateway/` 里再套 `docs/`、`scripts/`、`accounts/`，进入仓库后很难判断"哪些是上游、哪些是我们的" |
 
-全仓 tracked 文件只有 97 个，但两个 clone 带进来 439 个文件 / 63 MB ——
+截至 2026-10-23 重构前 tracked 仅 97 个，当前以 git ls-files 实读为准（本次核 274），但两个 clone 带进来 439 个文件 / 63 MB ——
 **目录混乱主要是 clone 位置造成的，不是文档造成的**。
 
 ### 4.2 目标结构

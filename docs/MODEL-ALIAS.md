@@ -572,6 +572,8 @@ python tools/model_alias.py --check --arena --scores \
 
 第二维 `HOP_PRIORITY` 只服务「同价多跳」：GM 的 7 个 Gemini Flash 档同价，靠 (价格, upstream 字符串) 排会把 `3.5` 排到 `3.8` 前面，于是把「新一代先试」写成显式数字表（0…6），表外取 99，行为与此表引入前一致。
 
+**唯一例外：`QW_FIRST_MODELS`（2026-11-19 加）**。`{"qwen3.8-max", "qwen3.8-flash"}` 两条型号的 QW 跳抢排链首，其余仍守上表。原因是 QD 只在 `08:58-09:15 / 20:58-21:15 / 21:58-22:15` 三个窗口内真能回包，窗口外一律 403 `10605 isQueued` 排队 90 s 起；等它期间 zgate 已给客户端交了 200 的空正文（`out=0`），QW 兜底根本轮不到。QW 是每模型 1M tokens 试用池（边际单价 0）且秒回，故改 QW 链首、QD 次跳。实测：改前 100–120 s 空白，改后 2.6 s / 3.4 s 正常回正文。守门用例 `tests/test_model_alias_qd_free.py::test_qw_leads_and_qd_follows`。
+
 `TAIL_HOPS` 常量已从 `tools/model_alias.py` 删除，被 `CHANNEL_RANK` 取代（散落在旧记忆与历史台账里的 `TAIL_HOPS` 一律按 rank 2/3 读）。
 
 **`DEMOTE_HOPS` 不可复活**：把 WB 跳降到 OC 之后躲限流，曾导致整条会话静默跑在 opencode 上计费。限流只许由 zgate 逐跳回落处理，回归由 `tests/test_model_alias_hop_order.py` 守。

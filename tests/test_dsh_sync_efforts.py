@@ -103,21 +103,21 @@ class SharedDefaultEffortTest(unittest.TestCase):
 
 
 class ScatteredDefaultEffortTest(unittest.TestCase):
-    """档位分散组：选覆盖面最广的档 + 给缺失模型注入 wire 别名。"""
+    """档位分散组：默认抬到 high + 给缺 high 的模型注入 wire 别名。"""
 
-    def test_scattered_group_picks_low_and_injects_alias(self):
+    def test_scattered_group_defaults_to_high_and_injects_alias(self):
         models = [
             {"id": "HY4", "reasoningEfforts": {"high": "high"}},
             {"id": "Qwen", "reasoningEfforts": {"low": "low", "medium": "medium", "xhigh": "xhigh"}},
             {"id": "GLM", "reasoningEfforts": {"low": "low", "high": "high", "max": "max"}},
         ]
         best = S._apply_default_effort(models)
-        self.assertEqual(best, "low")
-        # 只有 high 的 HY4 被注入 low->high 别名；原生支持 low 的不动
-        self.assertEqual(models[0]["reasoningEfforts"]["low"], "high")
-        # Qwen 原生支持 low，未被注入任何新档位键
-        self.assertEqual(set(models[1]["reasoningEfforts"].keys()), {"low", "medium", "xhigh"})
-        self.assertEqual(models[2]["reasoningEfforts"]["low"], "low")
+        self.assertEqual(best, "high")
+        # 原生支持 high 的模型不动
+        self.assertEqual(models[0]["reasoningEfforts"], {"high": "high"})
+        # Qwen 没有 high 档，注入 high->xhigh（它支持的最高档 wire）
+        self.assertEqual(models[1]["reasoningEfforts"]["high"], "xhigh")
+        self.assertEqual(set(models[2]["reasoningEfforts"].keys()), {"low", "high", "max"})
 
     def test_consistent_group_no_alias_injected(self):
         models = [
@@ -137,10 +137,10 @@ class ScatteredDefaultEffortTest(unittest.TestCase):
             {"id": "y", "reasoningEfforts": {"high": "high"}},  # 只有 high
         ]
         best = S._apply_default_effort(models)
-        # low 覆盖 1、high 覆盖 1、medium 覆盖 1... 并列取靠前 low
-        self.assertEqual(best, "low")
-        # y 只有 high，注入 low->high
-        self.assertEqual(models[1]["reasoningEfforts"]["low"], "high")
+        # 默认档抬到 high；x 没有 high，注入 high->X-WIRE（它最高的档）
+        self.assertEqual(best, "high")
+        self.assertEqual(models[0]["reasoningEfforts"]["high"], "X-WIRE")
+        self.assertEqual(models[1]["reasoningEfforts"], {"high": "high"})
 
 
 OLD_PATCH = """- id: llm-pi-ai
@@ -311,5 +311,65 @@ class DisplayNameProjectionTest(unittest.TestCase):
         self.assertEqual(S._display_names_from_alias_map(Path(d) / "missing.json"), {})
 
 
+class YamlBoolDialectTest(unittest.TestCase):
+    """YAML 1.1 布尔表会把客户端写的裸 off 读成布尔，回写即成 false: false。
+
+    2026-11-19 实况：客户端（js-yaml，YAML 1.2）整体重写 patch 时去掉 'off' 的引号，
+    PyYAML 读成 {False: False}，safe_dump 回写 false: false，llm-pi-ai 校验整份配置失败，
+    设置页连新建供应商都存不进去。
+    """
+
+    def test_unquoted_off_is_still_a_string(self):
+        doc = S._load_yaml("reasoningEfforts:\n  off: off\n  low: low\n")
+        self.assertEqual(doc["reasoningEfforts"], {"off": "off", "low": "low"})
+
+    def test_true_false_stay_booleans(self):
+        self.assertEqual(S._load_yaml("a: true\nb: false\n"), {"a": True, "b": False})
+
+    def test_roundtrip_requotes_off(self):
+        item = S._load_yaml(
+            "reasoningEfforts: {off: off, low: low, xhigh: xhigh}\n")
+        dumped = yaml.safe_dump(item, allow_unicode=True, sort_keys=False)
+        self.assertIn("'off': 'off'", dumped)
+        self.assertNotIn("false:", dumped)
+
+
+class EffortSchemaGuardTest(unittest.TestCase):
+    def test_invalid_handwritten_efforts_are_not_kept(self):
+        routes = {"zcode-main": {"models": [{"id": "Gemini-4-Hydrogen", "input": ["text"]}]}}
+        old = {"zcode-main": {"models": [
+            {"id": "Gemini-4-Hydrogen",
+             "reasoningEfforts": {"false": False, "low": "low"}},
+        ]}}
+        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        try:
+            out = S._keep_efforts(routes, old)
+        finally:
+            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+        self.assertNotIn("reasoningEfforts", out["zcode-main"]["models"][0])
+
+    def test_valid_handwritten_efforts_are_still_kept(self):
+        routes = {"zcode-main": {"models": [{"id": "Gemini-4-Hydrogen", "input": ["text"]}]}}
+        old = {"zcode-main": {"models": [
+            {"id": "Gemini-4-Hydrogen",
+             "reasoningEfforts": {"off": "off", "low": "low", "xhigh": "xhigh"}},
+        ]}}
+        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        try:
+            out = S._keep_efforts(routes, old)
+        finally:
+            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+        self.assertEqual(
+            out["zcode-main"]["models"][0]["reasoningEfforts"],
+            {"off": "off", "low": "low", "xhigh": "xhigh"})
+
+    def test_boolean_value_inside_map_is_rejected(self):
+        self.assertFalse(S._efforts_schema_ok({"off": False}))
+        self.assertFalse(S._efforts_schema_ok({"false": False}))
+        self.assertTrue(S._efforts_schema_ok(False))
+        self.assertTrue(S._efforts_schema_ok({"off": "disabled"}))
+
+
 if __name__ == "__main__":
     unittest.main()
+

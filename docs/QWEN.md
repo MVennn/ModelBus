@@ -211,6 +211,22 @@ DeepSeek-4.1-Flash
   这是 2026-10-28 新加的能力，之前一条链只能是同一种协议。
 - 代价：第 4 跳早先是**非流式桥接**（2026-10-28 口径），2026-11-09 起桥按流式双路径转发（见 §7.1）；但它仍按价格排在链尾，只在兜底时发生。
 
+### 4.6.2 两条 Qwen 型号的 QW 跳到链首（2026-11-19）
+
+磁盘活数据现状（`model-alias-map.json`）：
+
+```
+Qwen-3.8-Max    QW:qwen3.8-max      (messages, 0.00) -> QD:Qwen3.8-Max   (chat, 0.43)
+Qwen-3.8-Flash  QW:qwen3.8-flash    (messages, 0.00) -> QD:Qwen3.8-Flash (chat, 0.09)
+```
+
+- 与 §4.6.1 里 DeepSeek 的「QW 垫尾」不同：**QD 侧 Qwen 已不可用**（窗口外 403 `10605 isQueued`、
+  排队 90 s 起，窗口内也常 429），等它超时期间 zgate 先给客户端交了 200 的空正文，
+  QW 兜底轮不到。所以这两条型号由 `QW_FIRST_MODELS` 抢排链首，QD 退成次跳。
+- QW 跳必须是 `qwen:` 显式前缀（白名单裸名 `qwen3.8-flash` 会被 classify 猜成 OC 的同名免费跳）；
+  两条都写进 `MERGE_ACROSS_PROTOCOL` 与 `MERGE_FREE_GB`，否则免费跳会被拆成独立的 `-Free` 条目。
+- 实测（经 zgate，2026-11-19 20:30）：Max 3.4 s、Flash 2.6 s，均返回正常正文。
+
 ### 4.7 控制台列了但 API 调不通的三个
 
 | id | 结果 |

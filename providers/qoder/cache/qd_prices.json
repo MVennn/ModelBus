@@ -1,8 +1,8 @@
 {
   "Auto": {
-    "price": 0.5,
-    "peak": 0.5,
-    "valley": 0.5,
+    "price": 0.3,
+    "peak": 0.3,
+    "valley": 0.3,
     "off_peak": {}
   },
   "Qwen3.8-Max": {
@@ -99,9 +99,9 @@
     "off_peak": {}
   },
   "Fast": {
-    "price": 0.8,
-    "peak": 0.8,
-    "valley": 0.8,
+    "price": 0.6,
+    "peak": 0.6,
+    "valley": 0.6,
     "off_peak": {}
   },
   "Qwen4-Max-Preview": {
