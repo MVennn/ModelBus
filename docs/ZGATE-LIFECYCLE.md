@@ -57,7 +57,7 @@ Task Scheduler 服务（`svchost.exe`）→ `wscript.exe` → 脚本 → `zgate.
 
 | 项 | 值 |
 |---|---|
-| 触发器 | LogonTrigger（当前用户 `MVENN-PC\SansK`）+ 每 1 分钟（PT1M，StartBoundary 2026-11-06T22:14:00） |
+| 触发器 | LogonTrigger（当前登录用户，机器名脱敏）+ 每 1 分钟（PT1M，StartBoundary 2026-11-06T22:14:00） |
 | 运行级别 | Interactive / Limited |
 | 动作 | `wscript.exe //B //Nologo ensure-zgate.vbs` → `ensure-zgate.ps1`，`/health` 不通才拉起 |
 | 启动方式 | `ProcessStartInfo` + `UseShellExecute=$false` + `CreateNoWindow`，起**普通** `zgate.exe serve` |

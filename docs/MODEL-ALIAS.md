@@ -561,7 +561,7 @@ python tools/model_alias.py --check --arena --scores \
 
 ### 8.1 链序第一维：`CHANNEL_RANK`（`TAIL_HOPS` 已退役）
 
-链序是**三维排序**：渠道 rank → 跳级优先级 → 折算价升序。第一维现值：
+链序按以下键排序（现行，`tools/model_alias.py` 的 `family_entries()`）：`QW_FIRST_MODELS` 特例抢排最前 → 渠道 rank → 折算价升序 → GB/CN 前缀 → 同 rank 渠道先后 → upstream 字符串。早期曾有「跳级优先级」一维，已随旧 Gemini-AIS 组于 2026-11-17 删除（见下方历史项）；渠道 rank 现值：
 
 | rank | 渠道 | 语义 |
 |---|---|---|
@@ -570,7 +570,7 @@ python tools/model_alias.py --check --arena --scores \
 | 2 | QW | 一年期预付额度，排在所有付费跳之后（原 `TAIL_HOPS` 的等价表达） |
 | 4 | 未登记渠道 | `CHANNEL_RANK_DEFAULT` |
 
-第二维 `HOP_PRIORITY` 只服务「同价多跳」：GM 的 7 个 Gemini Flash 档同价，靠 (价格, upstream 字符串) 排会把 `3.5` 排到 `3.8` 前面，于是把「新一代先试」写成显式数字表（0…6），表外取 99，行为与此表引入前一致。
+> **历史（已退役，勿按现值读）**：`HOP_PRIORITY` / `HOP_PRIORITY_DEFAULT=99` 原是第二维，只服务「同价多跳」——GM 的 7 个 Gemini Flash 档同价，靠 (价格, upstream 字符串) 排会把 `3.5` 排到 `3.8` 前面，于是把「新一代先试」写成显式数字表（0…6），表外取 99。这组跳随旧 Gemini-AIS 组在 2026-11-17 一并删除（提交 c8dbbd8），`tools/model_alias.py` 已无这两个常量，现行同价排序直接落到 `price → upstream`。历史台账（`PROGRESS.md` / `CHANGELOG.md`）里的 `HOP_PRIORITY` 一律按「已退役机制」读，不要据此改现行链序。
 
 **唯一例外：`QW_FIRST_MODELS`（2026-11-19 加）**。`{"qwen3.8-max", "qwen3.8-flash"}` 两条型号的 QW 跳抢排链首，其余仍守上表。原因是 QD 只在 `08:58-09:15 / 20:58-21:15 / 21:58-22:15` 三个窗口内真能回包，窗口外一律 403 `10605 isQueued` 排队 90 s 起；等它期间 zgate 已给客户端交了 200 的空正文（`out=0`），QW 兜底根本轮不到。QW 是每模型 1M tokens 试用池（边际单价 0）且秒回，故改 QW 链首、QD 次跳。实测：改前 100–120 s 空白，改后 2.6 s / 3.4 s 正常回正文。守门用例 `tests/test_model_alias_qd_free.py::test_qw_leads_and_qd_follows`。
 

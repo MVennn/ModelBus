@@ -37,7 +37,7 @@
 
 失败表现：`429 FreeUsageLimitError`。请求字节完全一样，只要出站 TLS ClientHello 指纹是 Node 的就 429，Bun 的才放行。系统提示词还要带 OpenCode 的 `<env>` 块，且包含 `Working directory:` 行；jcleng 用 `injectOpencodeSystemEnv` 注入解决。
 
-zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:1242` 走 `net/http`，没有 TLS 指纹伪装能力。这道门不能在 zgate 里修，必须新增一个本地 Bun 代理：接收 zgate 转发来的请求，补系统提示词 `<env>`，用 Bun 的 TLS 栈发往 OpenCode。jcleng 是完整参考实现（Dockerfile `CMD bun`，`MAX_COUNTER=63`）。
+zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:1234` 走 `net/http`，没有 TLS 指纹伪装能力。这道门不能在 zgate 里修，必须新增一个本地 Bun 代理：接收 zgate 转发来的请求，补系统提示词 `<env>`，用 Bun 的 TLS 栈发往 OpenCode。jcleng 是完整参考实现（Dockerfile `CMD bun`，`MAX_COUNTER=63`）。
 
 ### 2.3 两道门与两个插件的覆盖对比
 
@@ -60,8 +60,8 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 | `gateways/zgate/zgate.json:75-82` | `upstreams` 当前 6 个渠道（OC / WB / QD / QW / GM / HJ） | 新增 `ZF`，`base` 指向本地 Bun 代理 `http://127.0.0.1:PORT`（PORT 待定，例 `8789`） |
 | `gateways/zgate/zgate.json:83-105` | `children` 现有托管进程 | 新增 Bun 子进程条目：`exe` 指向本地 bun，`args` 指向代理脚本，`cwd`/`port`/`health`/`startTimeoutSeconds` 按现有 child 模板 |
 | `gateways/zgate/internal/config/config.go:21-47` | `Upstream{Base,Child,KeyEnv,GuardReasoning}`、`Child{Policy,IdleSeconds,Exe,Args,Cwd,Port,Health,StartTimeoutSeconds,Windows}` | 结构已含 base / child / keyEnv，无需改结构体 |
-| `gateways/zgate/internal/router/router.go:1042-1072` | `forwardHeaders`，`OC` case 当前注 `opencode-cli/1.0` UA 与 `X-Opencode-Session` | 仿 `OC` 加 `ZF` case，注入第一道门全部头；`Authorization` 是否覆盖由 Bun 代理最终决定 |
-| `gateways/zgate/internal/router/router.go:1242` | `req.Header = headers.Clone()` 后走 `net/http` | 确认这里不会把 Bun 代理需要的头丢掉；TLS 指纹不在这里解决 |
+| `gateways/zgate/internal/router/router.go:1034-1065` | `forwardHeaders`，`OC` case 当前注 `opencode-cli/1.0` UA 与 `X-Opencode-Session` | 仿 `OC` 加 `ZF` case，注入第一道门全部头；`Authorization` 是否覆盖由 Bun 代理最终决定 |
+| `gateways/zgate/internal/router/router.go:1234` | `req.Header = headers.Clone()` 后走 `net/http` | 确认这里不会把 Bun 代理需要的头丢掉；TLS 指纹不在这里解决 |
 | `providers/opencode-go/ops/opencode-header-proxy.js:46-82` | 现成 Node 补头代理，监听 8787 | 参考其补头逻辑，改造成 Bun 版本地代理；不要直接沿用 Node 运行时过第二道门 |
 | `tools/dsh_sync.py:762-812` | 读 provider 配置并投影到 `cordis.patch.yml` 的逻辑 | 新增 provider 后自动进 DSH；此文件当前有并行会话改动，本文只引用不修改 |
 | `docs/MODEL-PROVIDERS.md:73-79` | provider 配置三个落点 | 落地后更新该文档；此文件当前有并行会话改动，本文只引用不修改 |
@@ -97,7 +97,7 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 ### 阶段 2：zgate 渠道接入（第一道门兜底）
 
 - 备份：`copy gateways\zgate\zgate.json .work\zen-free-backup\zgate.json.bak`；Go 源码若改也先复制备份。
-- 操作：`zgate.json:75-82` 的 `upstreams` 加 `ZF` 指向 `http://127.0.0.1:8789`；`:83-105` 的 `children` 加 Bun 进程托管；`router.go:1042-1072` 仿 `OC` 加 `ZF` case 注第一道门头。
+- 操作：`zgate.json:75-82` 的 `upstreams` 加 `ZF` 指向 `http://127.0.0.1:8789`；`:83-105` 的 `children` 加 Bun 进程托管；`router.go:1034-1065` 仿 `OC` 加 `ZF` case 注第一道门头。
 - 验证：改 Go 代码要跑对应测试；只改 `zgate.json` 可按 `tools/zgate-lifecycle/` 的换版流程生成 candidate 并做 md5 校验，不直接覆盖运行中的真值。
 - 回滚：恢复备份的 `zgate.json` 与 Go 源码；按 lifecycle 受控重启一次回到原状态。
 
@@ -121,7 +121,7 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 | 风险 / 未决项 | 现状 | 对策 / 待定 |
 |---|---|---|
 | Bun 安装状态（历史项） | 踩点时 PATH 无 Bun；落地后实测 `~\.bun\bin\bun.exe` v1.4.4（Node v24.13.1）；`docs/ARCHITECTURE.md:424` 是早期评估记录 | 已安装；zen-relay 于 2026-11-17 停用，见 `CHANGELOG.md` |
-| 第二道门只能在 Bun 层过 | zgate 纯 Go 标准库，`router.go:1242` 走 `net/http`，无 TLS 指纹伪装 | 必须在本地代理用 Bun TLS；不要把 429 误判成 zgate 头问题 |
+| 第二道门只能在 Bun 层过 | zgate 纯 Go 标准库，`router.go:1234` 走 `net/http`，无 TLS 指纹伪装 | 必须在本地代理用 Bun TLS；不要把 429 误判成 zgate 头问题 |
 | 第一道门两处重复 | zgate `ZF` case 与 Bun 代理都要补头 | 明确唯一真源（建议 Bun 代理最终负责，zgate 只兜底）后再写，避免 header 被覆盖或重复 |
 | 端点与 key 边界 | Go 凭据 `oc_sk_` 在 `/zen/go/v1/chat/completions` 返 `400 Model is unavailable` | 免费档走 Console 通用端点（`opencode-zen-chat`），不沿用 Go key |
 | 免费数据条款 | Big Pickle 匿名免费，数据可能用于改进模型 | 用户拍板是否接受；本轮不发送真实业务数据 |
@@ -144,7 +144,7 @@ zgate 是纯 Go 标准库网关（`go.mod` 无 `utls` 依赖），`router.go:124
 
 - `gateways/zgate/zgate.json:15-59`、`gateways/zgate/zgate.json:75-82`、`gateways/zgate/zgate.json:83-105`：渠道策略、upstreams、children 接入点。
 - `gateways/zgate/internal/config/config.go:21-47`：`Upstream` / `Child` 结构，字段已够。
-- `gateways/zgate/internal/router/router.go:1042-1072`、`gateways/zgate/internal/router/router.go:1242`：`forwardHeaders` 注入点与 `net/http` 出站边界。
+- `gateways/zgate/internal/router/router.go:1034-1065`、`gateways/zgate/internal/router/router.go:1234`：`forwardHeaders` 注入点与 `net/http` 出站边界。
 - `providers/opencode-go/ops/opencode-header-proxy.js:46-82`：现成 Node 补头代理，参考改 Bun 版。
 - `tools/dsh_sync.py:762-812`：provider 配置投影到 DSH 的逻辑。
 - `docs/MODEL-PROVIDERS.md:73-79`：provider 配置三个落点。
