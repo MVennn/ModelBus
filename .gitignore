@@ -109,3 +109,7 @@ desktop.ini
 # 日志现在写到 %LOCALAPPDATA%\ZcodeAIModels\logs\，这里再兜一层。
 /docs/reports/*.log
 /docs/reports/_last-sync.txt
+
+# ---- 环境变量字面量目录（搜狗/App-V 把 %SystemDrive% 当相对路径落在仓根，非项目文件）----
+%SystemDrive%/
+.local/
