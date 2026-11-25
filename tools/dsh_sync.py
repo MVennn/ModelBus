@@ -97,8 +97,10 @@ ALIAS_MAP = Path(
 # 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
 _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 # 手配档位白名单：这些模型的推理档位由 patch 人工维护，不随宿主 catalog 覆盖。
-# 当前为空（Gemini-4-Hydrogen 已随 odyfree 线路移除）。
-HANDSET_EFFORTS: set = set()
+# GLM-5.3-Flash：WB 渠道实测只有 max 档产出思维链，low/high 恒 think=0
+# （补 thinking.type=enabled 也救不回，见 docs/CAPABILITY-AUDIT.md 9.7），
+# 故 patch 手配成单档 max，禁止同步脚本按宿主 catalog 的 [low,high,max] 写回。
+HANDSET_EFFORTS: set = {"GLM-5.3-Flash"}
 # provider 级默认档目标（2026-11-19 用户定）：组内共同档低于它时抬到这一档，
 # 缺这一档的模型用 wire 别名补齐；不再按「并列取低、省思考开销」的旧口径。
 DEFAULT_EFFORT_TARGET = "high"

@@ -395,3 +395,77 @@ func TestIdleReaderBoundaryByteIsNotKilled(t *testing.T) {
 		t.Fatalf("watchdog fired late: %v", elapsed)
 	}
 }
+
+// reasoning_effort 是 OpenAI 方言，Anthropic Messages 用 thinking 对象表达。
+// 不翻译的话，只提供 Anthropic 协议的上游（如 QW）会把档位整包丢掉。
+func TestChatToAnthropicTranslatesReasoningEffort(t *testing.T) {
+	cases := []struct {
+		name     string
+		effort   string
+		maxTok   int
+		wantType string
+		wantBud  float64
+	}{
+		{"off 关掉思考", "off", 4096, "disabled", 0},
+		{"disabled 等同 off", "disabled", 4096, "disabled", 0},
+		{"none 等同 off", "none", 4096, "disabled", 0},
+		{"low", "low", 4096, "enabled", 1024},
+		{"medium", "medium", 4096, "enabled", 2048},
+		{"high", "high", 8192, "enabled", 4096},
+		{"high 装不下时折半", "high", 4096, "enabled", 2048},
+		{"xhigh", "xhigh", 16384, "enabled", 8192},
+		{"max", "max", 32768, "enabled", 16000},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			body := []byte(`{"model":"Qwen-Test","max_tokens":` + testItoa(tc.maxTok) + `,"reasoning_effort":"` + tc.effort + `","messages":[{"role":"user","content":"hi"}]}`)
+			payload := decode(t, chatToAnthropic(body, "qwen-upstream", false))
+			th, ok := payload["thinking"].(map[string]any)
+			if !ok {
+				t.Fatalf("thinking 没被翻译出来: %v", payload["thinking"])
+			}
+			if th["type"] != tc.wantType {
+				t.Fatalf("type = %v, want %v", th["type"], tc.wantType)
+			}
+			if tc.wantType == "enabled" {
+				bud, _ := th["budget_tokens"].(float64)
+				if bud != tc.wantBud {
+					t.Fatalf("budget_tokens = %v, want %v", bud, tc.wantBud)
+				}
+				if int(bud) >= tc.maxTok {
+					t.Fatalf("budget_tokens 必须严格小于 max_tokens")
+				}
+			}
+		})
+	}
+}
+
+// 没带档位、档位认不出、或预算顶到 max_tokens，都不该硬塞 thinking。
+func TestChatToAnthropicLeavesThinkingAlone(t *testing.T) {
+	cases := []struct{ name, body string }{
+		{"没带 reasoning_effort", `{"model":"M","max_tokens":4096,"messages":[{"role":"user","content":"hi"}]}`},
+		{"空串", `{"model":"M","max_tokens":4096,"reasoning_effort":"","messages":[{"role":"user","content":"hi"}]}`},
+		{"认不出的档位", `{"model":"M","max_tokens":4096,"reasoning_effort":"turbo","messages":[{"role":"user","content":"hi"}]}`},
+		{"max_tokens 太小装不下 budget", `{"model":"M","max_tokens":1024,"reasoning_effort":"high","messages":[{"role":"user","content":"hi"}]}`},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			payload := decode(t, chatToAnthropic([]byte(tc.body), "u", false))
+			if _, ok := payload["thinking"]; ok {
+				t.Fatalf("不该有 thinking: %v", payload["thinking"])
+			}
+		})
+	}
+}
+
+func testItoa(n int) string {
+	if n == 0 {
+		return "0"
+	}
+	var b []byte
+	for n > 0 {
+		b = append([]byte{byte('0' + n%10)}, b...)
+		n /= 10
+	}
+	return string(b)
+}

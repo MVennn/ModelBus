@@ -228,6 +228,28 @@ class MergeKeepsEffortsTest(unittest.TestCase):
         finally:
             S.HANDSET_EFFORTS.discard("HandsetSample")
 
+    def test_glm_5_3_flash_handset_single_max_effort(self):
+        """GLM-5.3-Flash 手配单档 max 不被宿主 catalog 的 low/high 写回（实测 low/high 不思考）"""
+        self.assertIn("GLM-5.3-Flash", S.HANDSET_EFFORTS)
+        old = OLD_PATCH.replace(
+            "          - id: Fresh\n            input: [text]",
+            "          - id: Fresh\n            input: [text]\n"
+            "          - id: GLM-5.3-Flash\n            input: [text]\n"
+            "            reasoningEfforts: {max: max}\n"
+            "            compat: {thinkingFormat: deepseek}",
+        )
+        text, changed, _ = S._merge_patch(
+            old,
+            {"zcode-free": _route([
+                {"id": "GLM-5.3-Flash", "input": ["text"],
+                 "reasoningEfforts": {"low": "low", "high": "high", "max": "max"},
+                 "name": "GLM-5.3-Flash"},
+            ])},
+        )
+        by_id = {m["id"]: m for m in yaml.safe_load(text)[0]["config"]["providers"]["zcode-free"]["models"]}
+        self.assertTrue(changed)
+        self.assertEqual(by_id["GLM-5.3-Flash"]["reasoningEfforts"], {"max": "max"})
+
     def test_non_zcode_provider_still_preserved(self):
         item, _ = self._merge([{"id": "Beam", "input": ["text"]}])
         providers = item["config"]["providers"]

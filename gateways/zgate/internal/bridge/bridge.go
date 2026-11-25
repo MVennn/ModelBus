@@ -861,7 +861,54 @@ func chatToAnthropic(body []byte, model string, stream bool) map[string]any {
 			payload["tool_choice"] = map[string]any{"type": "tool", "name": name}
 		}
 	}
+	// reasoning_effort 是 OpenAI 方言；Anthropic Messages 用 thinking 对象表达同一件事。
+	// 不翻译的话，QW 这类只提供 Anthropic 协议的上游会把客户端档位整包丢掉——表现为
+	// 「off 关不掉思考、各档也没有梯度」（实测 Qwen-3.8-Flash 的 off 仍吐 286 字符思考）。
+	// 只在客户端真的带了档位时介入，没带或空串一律不碰，保持上游默认。
+	if srcEffort, ok := src["reasoning_effort"].(string); ok && strings.TrimSpace(srcEffort) != "" {
+		switch strings.ToLower(strings.TrimSpace(srcEffort)) {
+		case "off", "disabled", "none":
+			payload["thinking"] = map[string]any{"type": "disabled"}
+		default:
+			// Anthropic 要求 budget_tokens >= 1024 且严格小于 max_tokens。max_tokens 装不下
+			// 时按一半折算，把档位差异保住（实测 max_tokens=512 的请求若直接不发 thinking，
+			// low/high/max 会全部退化成上游默认，看起来像"档位无效"）；折半后仍低于 1024
+			// 才整个不发——那种请求本来也留不出思考空间，硬发只会 400 打断整条链。
+			if budget := thinkingBudget(srcEffort); budget > 0 {
+				if budget >= maxTokens {
+					budget = maxTokens / 2
+				}
+				if budget >= minAnthropicThinkingTokens {
+					payload["thinking"] = map[string]any{
+						"type":          "enabled",
+						"budget_tokens": budget,
+					}
+				}
+			}
+		}
+	}
 	return payload
+}
+
+// minAnthropicThinkingTokens 是 Anthropic Messages 对 budget_tokens 的硬下限。
+const minAnthropicThinkingTokens = 1024
+
+// thinkingBudget 把 OpenAI 的档位名换算成 Anthropic 的思考预算（token）。
+// 认不出的档位返回 0，调用方据此跳过——宁可不发也不发一个上游会 400 的值。
+func thinkingBudget(effort string) int {
+	switch strings.ToLower(strings.TrimSpace(effort)) {
+	case "minimal", "low":
+		return 1024
+	case "medium":
+		return 2048
+	case "high":
+		return 4096
+	case "xhigh":
+		return 8192
+	case "max":
+		return 16000
+	}
+	return 0
 }
 
 func chatToResponses(body []byte, model string, stream bool) map[string]any {
