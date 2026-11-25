@@ -196,8 +196,15 @@ catch {
     Write-Log ('失败：{0}' -f $_.Exception.Message)
     Write-Log ('堆栈：{0}' -f $_.ScriptStackTrace)
     if ($replaced -and $backup -and (Test-Path $backup)) {
-        Copy-Item -LiteralPath $backup -Destination $exe -Force -ErrorAction SilentlyContinue
-        Write-Log ('已用备份恢复 {0}' -f $exe)
+        # 原写法用 -ErrorAction SilentlyContinue 且无条件写「已用备份恢复」：
+        # exe 被运行中实例占用时复制必然失败，日志却报成功。
+        try {
+            Copy-Item -LiteralPath $backup -Destination $exe -Force -ErrorAction Stop
+            Write-Log ('已用备份恢复 {0}' -f $exe)
+        } catch {
+            Write-Log ('回滚失败：{0}' -f $_.Exception.Message)
+            Write-Log ('需手工把 {0} 复制回 {1}（目标可能被运行中进程占用）' -f $backup, $exe)
+        }
     }
     # 无论是否换版，网关都必须以某个可用二进制重新起来
     try {
