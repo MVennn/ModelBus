@@ -13,5 +13,9 @@ Set shell = CreateObject("WScript.Shell")
 ps1 = "F:\Project\ModelBus\sync-models.ps1"
 cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """"
 
-' 0 = 隐藏, False = 不等待（wscript 立即退出，同步在后台跑完）
-shell.Run cmd, 0, False
+' 0 = 隐藏, True = 等待（同步跑完才退出，失败能回传非零退出码给计划任务）
+' 原为 False：wscript 立即退出，计划任务 1 秒记 0x0，而 ps1 还在后台跑，
+' 失败永远反映不到 LastTaskResult，且 IgnoreNew 因实例已结束而失效。
+Dim rc
+rc = shell.Run(cmd, 0, True)
+WScript.Quit rc
