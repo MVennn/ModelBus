@@ -135,20 +135,20 @@
 | scope | 返回 | 用途 |
 |---|---|---|
 | canonical（缺省） | 统一名（当前 10 条，2026-11-18 OC 隐藏后实测） | 客户端该用的那张表 |
-| legacy | 旧 id（当前 46 条，2026-11-18 实测） | 历史兼容，`canonical_id` 指回统一名 |
+| legacy | 旧 id（当前 48 条，2026-11-25 实测；以 /v1/models?scope= 现读为准） | 历史兼容，`canonical_id` 指回统一名 |
 | all | 两边都要 | 排障 / 对账 |
 
 返回体带 `scope`、`total`、`catalog_total` 三个字段，语义分清楚：
 
 | 字段 | 含义 | 例（canonical） |
 |---|---|---|
-| `total` | **本次返回**的条数，客户端直接拿来数「我有几个模型」 | 24 |
-| `catalog_total` | 全部两拨加起来的条数，对账用 | 56 |
-| `data` | 本条 scope 的条目 | 10 条 |
+| `total` | **本次返回**的条数，客户端直接拿来数「我有几个模型」 | canonical 9（2026-11-25 实测，hydrogen 删除后） |
+| `catalog_total` | 全部两拨加起来的条数，对账用 | 58（2026-11-25 实测） |
+| `data` | 本条 scope 的条目 | canonical 9 / legacy 46 条（2026-11-25 实测，hydrogen 删除后） |
 
 两个数混成一个会让 10 条的响应写着 56，看起来像分页没给完 —— 2026-11-10 首版就是这样（当时 20 / 93），当晚拆开。
 未知 scope 回 400 `invalid_request_error`，不静默退回默认（拼错才不会被藏住）。
-改默认值是一个**对外行为变更**：老客户端如果依赖「一口气拿到全部 56 条」，需要显式写 `?scope=all`。
+改默认值是一个**对外行为变更**：老客户端如果依赖「一口气拿到全部 58 条」（2026-11-25 实测），需要显式写 `?scope=all`。
 
 ---
 
@@ -186,7 +186,7 @@
 | WB | 0 | 0 | 0 | 0 | 18000 | 2 | 0 | 有 4 个单跳模型 → 软冷却必须 0；18s 只造福多跳链 |
 | OC | 60 | 20 | -1 | 0 | 0 | 2 | 0 | 唯一从不单跳的渠道（11 条多跳），可以放心冷却 |
 | QD | 0 | 20 | -1 | 0 | 0 | 2 | 0 | 有 Qwen-3.8-Max 单跳 → 软冷却必须 0 |
-| GM | — | 0 | — | 0 | 0 | — | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次）。**11-17**：GM 只剩单跳模型 `Gemini-4-Hydrogen`，`softCooldownSeconds` / `rateLimitBackoffMs` / `maxParallel` 三个多跳字段已从配置删除 —— 串行链 `attemptChain` 传 `at=nil`，这三个字段永远读不到，留着会被 `ValidatePolicies` 判 Fatal 直接拒绝启动 |
+| GM | — | 0 | — | 0 | 0 | — | -1 | 11-11 10:35 起改**单发串行**：三个对冲字段全部归零，一次只发一跳、失败才换下一跳（用户口径：不并发、不浪费资格、等上游下判决）。3.8 实测首字 127.5s 仍能成功返回，本地按时间判死会把它误杀成 504。10:47 冷却再收紧 soft 60→15、busy 20→10，见 §8.2。11:03 再补 `timeoutCooldownSeconds: 20`（504 不再冷藏 5 分钟）与 `retry500Once: true`（500 同跳重试一次）。**11-25**：`Gemini-4-Hydrogen` / odyfree 线路已移除，GM 渠道现无在役模型；`channelPolicy` / `upstreams` 的 GM 项已从 zgate.json 删除 |
 | HJ | — | — | — | — | — | — | -1 | 单跳直连，只关看门狗 |
 | QW | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | 未配 | QW 只当链尾且协议不同 → 永不走竞速 |
 
@@ -245,7 +245,7 @@ authFailCooldownHours = 0 → 不做渠道级禁用。
 3. 实机：`curl -s 127.0.0.1:7871/health` 看 early / chain / guard / upstream / hops 五段
    （`hops` 里各跳的 `ok/try` 反映该跳最近到底行不行）
    （`early.wrapped` 随流式请求增长 = 观测接上了；`guard.mode` 应等于 `zgate.json` 里的档位）；
-   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=10 / catalog_total=56`、`?scope=legacy` 应 `total=46`、`?scope=bad` 应 400（2026-11-18 OC 渠道隐藏后的实测值；`total` 随隐藏名单变、`catalog_total` 随上游目录走，两个都会自己变，别写死当契约）。
+   `curl -s "127.0.0.1:7871/v1/models?scope=canonical"` 应 `total=10 / catalog_total=58`、`?scope=legacy` 应 `total=48`、`?scope=bad` 应 400（2026-11-25 实测；`total` 随隐藏名单变、`catalog_total` 随上游目录走，两个都会自己变，别写死当契约）。
 4. 二进制层：换版只走 `tools/zgate-lifecycle/restart-zgate.cmd`（编译候选 → 停旧 → 原子替换 → 健康检查 → 失败回滚）。
 5. 回退：配置问题改 `zgate.json` 加 reload；代码问题 `git revert` 后跑同一条换版脚本。
 

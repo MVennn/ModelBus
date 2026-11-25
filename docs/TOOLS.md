@@ -97,10 +97,10 @@
 统一入口按 `zgate.json` 配 6 个 upstreams（OC / WB / QD / QW / GM / HJ）；自启父链、换版与回滚正本在 `tools/zgate-lifecycle/`，见 [ZGATE-LIFECYCLE.md](ZGATE-LIFECYCLE.md)。
 
 **当前生效清单单一真值**：`tools/zgate-lifecycle/current-models.ps1` 读 alias map + `zgate.json` 写出
-`%LOCALAPPDATA%/ModelBus/current-models.json`（24 统一名 + 55 legacy 键 + 6 upstreams + 2 children）；
+`%LOCALAPPDATA%/ModelBus/current-models.json`（9 统一名 + 46 legacy 键 + 6 upstreams + 2 children；2026-11-25 实测，hydrogen 删除后）；
 `install-sync-schedule.ps1` 只读核对 `\ModelBus 模型同步` 每日 12:00 触发器（不注册新任务）。
 `GET /v1/models` 与 `GET /models` 走 zgate 的 alias 命名空间聚合 handler（统一名优先 + legacy 去重，
-`owned_by=zgate`；`?scope=canonical|legacy|all` 分档，缺省只给 24 条统一名，口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §6），不再逐字节等于 OC 单家 catalog 透传；OC 独有裸 id 仍由 `routeFallback` 默认分支直穿 OC 兜底。
+`owned_by=zgate`；`?scope=canonical|legacy|all` 分档，缺省只给 9 条统一名（2026-11-25 实测，hydrogen 删除后），口径见 [ROUTING-POLICY.md](ROUTING-POLICY.md) §6），不再逐字节等于 OC 单家 catalog 透传；OC 独有裸 id 仍由 `routeFallback` 默认分支直穿 OC 兜底。
 
 **Qoder 经过统一路由**：模型 id 带 `qoder:` 前缀，7871 剥掉前缀后转给
 `127.0.0.1:8790`；兼容投影侧没有独立 `qoder` provider。模型矩阵见

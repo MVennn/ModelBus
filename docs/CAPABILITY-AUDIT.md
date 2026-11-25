@@ -1,6 +1,6 @@
 # 模型能力配置审计（2026-11-10）
 
-> **更新（2026-11-11）**：本文描述的问题已落地修复 —— 新增 `tools/caps_upstream.py` 直连 WB 面板 / OC 两个上游模型接口取真值，15/19 个模型的能力字段已换成接口实测值或取证值并投影进 DSH，剩 4 条无真值的老实标 none。落地细节、逐模型终值与验收命令见文末 **§9**。
+> **更新（2026-11-11）**：本文描述的问题已落地修复 —— 新增 `tools/caps_upstream.py` 直连 WB 面板 / OC 两个上游模型接口取真值，15/19 个模型（2026-11-11 历史口径；现网 canonical 9，2026-11-25 实测，hydrogen 删除后）的能力字段已换成接口实测值或取证值并投影进 DSH，剩 4 条无真值的老实标 none。落地细节、逐模型终值与验收命令见文末 **§9**。
 >
 > **2026-11-11 15:00 复算**：`Gemini-3.8-Flash` 整族下线（`HJ_PRICES` 清空、渠道保留），现网模型 20 → 19；下文的计数与逐模型表已按 19 复算。
 >
@@ -12,7 +12,7 @@
 
 | 问题 | 回答 |
 |---|---|
-| 从上游真取值的有多少？ | 历史快照（2026-11-11，19 模型口径）：**9 个**经 WorkBuddy 面板真值；10 个靠兜底。现网 canonical 24 条，终值见 §9 |
+| 从上游真取值的有多少？ | 历史快照（2026-11-11，19 模型口径）：**9 个**经 WorkBuddy 面板真值；10 个靠兜底。现网 canonical 9 条（2026-11-25 实测，hydrogen 删除后），终值见 §9 |
 | 上下文是随意填的吗？ | 分两类：9 条**全部能在上游目录原文里指到**（逐条比对过 JSON，0 条编造）；10 条是**兜底魔数** 1000000。这 10 条里真值差得最远的是 Iceman（262144，虚高 3.8 倍），另有 5 条真值 1048576～1050000（偏低约 5%） |
 | 输出上限呢？ | 12 个模型写死 128000。真值差得最远的是 MiniMax-M3.1（512000）和 DeepSeek（384000～393216） |
 | 「技能」（工具调用/图片）呢？ | 工具调用恒 true —— 但**DSH 宿主根本不读这个字段**，工具无条件发送，写 false 也拦不住；图片是有硬拦的：6 个模型被标成不支持，上游明确给了 `modalities.input: image`，于是这些模型永远发不出图 |
@@ -123,7 +123,7 @@ DSH 看到的每个字段，是 ZCode 引擎按顺序叠加 6 组规则算出来
 | `maxTokens` | 128000 |
 | `input` | 只有 `text` |
 
-历史快照（2026-11-10，19 模型口径）：符合「三件套全中」的 10 个含 Beam / Conatus / Iceman / Qwen-3.8 系列等；Conatus 等已下线，现网 canonical 24 条，终值见 §9。
+历史快照（2026-11-10，19 模型口径；现网 canonical 9，2026-11-25 实测）：符合「三件套全中」的 10 个含 Beam / Conatus / Iceman / Qwen-3.8 系列等；Conatus 等已下线，现网 canonical 9 条（2026-11-25 实测，hydrogen 删除后），终值见 §9。
 
 反过来，`HY3`/`HY3-X`（192000/64000）、`HY4`/`HY4-Free`（960000/64000）、`Space-Bunny`（1000000/128000/image）这几个数字不像兜底，才是 WB 真值写进来的。
 
@@ -278,8 +278,8 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 | 项 | 判据 |
 |---|---|
 | 字段来源可审计 | `python -B tools/model_alias.py --check` 与 `python -B tools/dsh_sync.py --check` 都 exit 0，且输出里列出「靠兜底」的模型数 |
-| DSH 与上游一致 | 19 个模型的 ctx/max/img/tools 与 `.work/cap-oc-models.json`、`evidence/wb_panel_models.json` 逐字段对齐（脚本比对，不靠眼看） |
-| 落盘一致 | `cordis.patch.yml` 的 19 条与生成器内存结果逐字段相等（含 3.5 那处投影丢失） |
+| DSH 与上游一致 | 19 个模型（2026-11-11 历史口径）的 ctx/max/img/tools 与 `.work/cap-oc-models.json`、`evidence/wb_panel_models.json` 逐字段对齐（脚本比对，不靠眼看） |
+| 落盘一致 | `cordis.patch.yml` 的 19 条（2026-11-11 历史口径）与生成器内存结果逐字段相等（含 3.5 那处投影丢失） |
 | 不回归 | `go test ./...`、`python -B -m unittest discover -s tests -q`、`check-project.py`、`check-docs.py` 全绿 |
 
 ---
@@ -359,10 +359,10 @@ dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投
 
 | 命令 | 结果 |
 |---|---|
-| `python -B tools/caps_upstream.py --check` | **exit 1**（2026-11-11 复跑）：现网缺某主力模型的 4 个取证字段（ctx / max / tool / img），是 §9.2 与现网脱节的存量差，不是本轮下线的连带 |
+| `python -B tools/caps_upstream.py --check` | **exit 0**（2026-11-25 复跑：现网与上游真值一致）。2026-11-11 曾 exit 1，原因是缺某主力模型的 4 个取证字段（ctx / max / tool / img），即 §9.2 与现网脱节的存量差，后已修复 |
 | `python -B tools/model_caps.py --upstream catalog/upstream_caps.json --check` | exit 1，剩 10 条**故意不落**的差异（4 条该模型取证 + 6 条档位/推断，后者见 §9.3） |
 | `python -B tools/dsh_sync.py --check` | exit 0，patch 与 provider_config 一致 |
-| `python -B -m unittest discover -s tests -q` | **134** tests OK（2026-11-11 复跑；`tests/test_caps_upstream.py` 是其中一组） |
+| `python -B -m unittest discover -s tests -q` | **217** tests OK（2026-11-25 复跑；`tests/test_caps_upstream.py` 是其中一组） |
 
 复跑采真值（需联网，约 3 秒）：`python -B tools/caps_upstream.py --fetch && python -B tools/caps_upstream.py --check`。
 

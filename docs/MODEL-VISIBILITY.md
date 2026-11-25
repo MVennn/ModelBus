@@ -160,7 +160,7 @@ python tools/model_visibility.py hide --channel OC --reason "OC 订阅暂停续�
 ```
 
 结果：DSH 投影从 3 组 29 个型号降到 3 组 11 个（主力 2 / 免费 2 / 省钱 7），`DeepSeek-4.1-Flash-OC` 一并消失。
-保留的都是主渠道为 WB / GM / QD 的型号：`DeepSeek-4.1-Flash`（WB→QW）、`Gemini-4-Hydrogen`（GM）、
+保留的都是主渠道为 WB / QD 的型号：`DeepSeek-4.1-Flash`（WB→QW）、
 `HY4-Flash-Free`（WB）、`HY4` / `GLM-5.3-Flash` / `MiniMax-M3.1-Flash` / `HY4-Flash` / `Space-Bunny`（WB）、
 `Qwen-3.8-Max` / `Qwen-3.8-Flash`（QD）。
 

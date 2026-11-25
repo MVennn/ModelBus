@@ -239,7 +239,7 @@ DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
   里含 proxy，否则直连那跳的 403 会把机场跳一起冷却掉（= 兜底被吃掉）。
 - 机场孪生跳排在 `QW` 尾跳之前、紧跟 OC 直连跳；磁盘活数据链为 `WB → OC → OC@机场 → QW`。
 - 改 `AIRPORT_PROXY` 时路由器侧必须同时有对应的 `listeners` 入站，
-  否则这一跳直接连不上（见 ShellcrashRules `docs/ARCHITECTURE.md` §2.2）。
+  否则这一跳直接连不上（见 ShellcrashRules `docs/ARCHITECTURE.md` §2（该文件无 2.2 小节））。
 - **这个出口只对经过 zgate 的请求生效**。同步脚本（`go_model_sync.py`）自己发探测、
   不经过路由器，所以它把同一个 `AIRPORT_PROXY` 用在「直连地区受限 → 复测」上，
   否则会把这三个模型当死模型删掉（[PITFALLS.md](PITFALLS.md) §35）。改地址时两处同改。
@@ -336,14 +336,14 @@ QD 按峰谷计价（×`QD_FACTOR` 0.86）：夜里 valley 0.04 → 0.03，白�
 生成时对 chain 按三元组去重一次即可。
 
 端点分布：WB `127.0.0.1:7863` 7 处、OC 直连 `opencode.ai/zen/go` 26 处、OC 本地 relay `127.0.0.1:8789` 9 处、`
-QD `127.0.0.1:8790` 4 处、QW / GM 各 1 处。
+QD `127.0.0.1:8790` 4 处、QW 1 处（GM 线路已移除）。
 
 **9 个模型只挂本地 relay**（`big-pickle`、`DeepSeek-4.1-Flash-Free`、`flint-40b`、`GLM-5.3-Flash-Free`、`
 `iceman`、`inkling-2-small`、`MiMo-2.6-Flash-Free`、`nemotron-3.5-lightning`、`nemotron-3.5-super-vl`）
 —— relay 一停它们整条不可达。2026-11-17 停 relay 后这 9 个已同时进隐藏名单
 （见 [MODEL-VISIBILITY.md](MODEL-VISIBILITY.md)）。
 
-**5 个可见模型没有回落**（`Gemini-4-Hydrogen`、`HY4`、`HY4-Flash`、`Qwen-3.8-Max`、`Space-Bunny`），
+**4 个可见模型没有回落**（`HY4`、`HY4-Flash`、`Qwen-3.8-Max`、`Space-Bunny`），
 渠道挂了就是直接失败；要冗余得在 alias map 里补跳，不是在 zgate 里加重试。
 ---
 
@@ -578,7 +578,7 @@ python tools/model_alias.py --check --arena --scores \
 
 **`DEMOTE_HOPS` 不可复活**：把 WB 跳降到 OC 之后躲限流，曾导致整条会话静默跑在 opencode 上计费。限流只许由 zgate 逐跳回落处理，回归由 `tests/test_model_alias_hop_order.py` 守。
 
-### 8.2 目录条数的四个数：19 / 42 / 56 / 72
+### 8.2 目录条数的四个数：19 / 42 / 56 / 72（历史快照 2026-11-13；现网以 /v1/models 现读为准）
 
 | 数 | 含义 | 出处 |
 |---|---|---|
@@ -587,9 +587,11 @@ python tools/model_alias.py --check --arena --scores \
 | 56 | WB 面板对话目录条目（cn 22 + global 34）；网关未重启时只有 34 个 global | `/panel/api/models` |
 | 72 | 历史 id → 现值 id 的映射条数（legacy 命名空间） | `model-alias-map.json` `legacy` |
 
+现网真值（2026-11-25 实测，hydrogen 删除后）：canonical 9 / legacy 46；catalog_total 随上游目录浮动，以 `/v1/models?scope=` 现读为准。
+
 `canonical` / `legacy` 分段与 91 = 19 + 72 在 [ROUTING-POLICY.md](ROUTING-POLICY.md) §scope 表已有，本节只补「四数并列 + 42 跳 + 56 面板」的对照与判据（四数实测 2026-11-13，56 面板为 2026-11-11 面板口径，会随上游目录漂）。
 
-判据：**面板条数属「CLI 菜单口径」，`/v1/models` 条数属「网关承诺口径」，两者不必相等也不该相等。**「面板 56 个、`/v1/models` 19 个」是正常态。查一个名字是否还在，用 `?scope=all` 看它是否只以 legacy 身份存在 —— 只在 legacy 意味着「可以继续用，但新配置不该再用这个名字」。
+判据：**面板条数属「CLI 菜单口径」，`/v1/models` 条数属「网关承诺口径」，两者不必相等也不该相等。**「面板条数与 `/v1/models` 条数不必相等」是正常态（2026-11-25 实测：网关 canonical 9 / catalog_total 以 `/v1/models?scope=all` 现读为准）。查一个名字是否还在，用 `?scope=all` 看它是否只以 legacy 身份存在 —— 只在 legacy 意味着「可以继续用，但新配置不该再用这个名字」。
 
 ### 8.3 档位投影到客户端：四层链与 `_efforts_lost` 守门
 
