@@ -203,30 +203,30 @@ class MergeKeepsEffortsTest(unittest.TestCase):
 
     def test_handset_efforts_beat_source(self):
         # 手配白名单模型即使源头算出 off/high，也以 patch 里手配的五档为准
-        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        S.HANDSET_EFFORTS.add("HandsetSample")
         old = OLD_PATCH.replace(
             "          - id: Fresh\n            input: [text]",
             "          - id: Fresh\n            input: [text]\n"
-            "          - id: Gemini-4-Hydrogen\n            input: [text]\n"
+            "          - id: HandsetSample\n            input: [text]\n"
             "            reasoningEfforts: {'off': 'off', low: low, medium: medium, high: high, xhigh: xhigh}",
         )
         try:
             text, changed, _ = S._merge_patch(
                 old,
                 {"zcode-free": _route([
-                    {"id": "Gemini-4-Hydrogen", "input": ["text"],
+                    {"id": "HandsetSample", "input": ["text"],
                      "reasoningEfforts": {"off": "disabled", "high": "high"},
-                     "name": "Gemini-4-Hydrogen"},
+                     "name": "HandsetSample"},
                 ])},
             )
             by_id = {m["id"]: m for m in yaml.safe_load(text)[0]["config"]["providers"]["zcode-free"]["models"]}
             self.assertTrue(changed)
             self.assertEqual(
-                by_id["Gemini-4-Hydrogen"]["reasoningEfforts"],
+                by_id["HandsetSample"]["reasoningEfforts"],
                 {"off": "off", "low": "low", "medium": "medium", "high": "high", "xhigh": "xhigh"},
             )
         finally:
-            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+            S.HANDSET_EFFORTS.discard("HandsetSample")
 
     def test_non_zcode_provider_still_preserved(self):
         item, _ = self._merge([{"id": "Beam", "input": ["text"]}])
@@ -336,29 +336,29 @@ class YamlBoolDialectTest(unittest.TestCase):
 
 class EffortSchemaGuardTest(unittest.TestCase):
     def test_invalid_handwritten_efforts_are_not_kept(self):
-        routes = {"zcode-main": {"models": [{"id": "Gemini-4-Hydrogen", "input": ["text"]}]}}
+        routes = {"zcode-main": {"models": [{"id": "HandsetSample", "input": ["text"]}]}}
         old = {"zcode-main": {"models": [
-            {"id": "Gemini-4-Hydrogen",
+            {"id": "HandsetSample",
              "reasoningEfforts": {"false": False, "low": "low"}},
         ]}}
-        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        S.HANDSET_EFFORTS.add("HandsetSample")
         try:
             out = S._keep_efforts(routes, old)
         finally:
-            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+            S.HANDSET_EFFORTS.discard("HandsetSample")
         self.assertNotIn("reasoningEfforts", out["zcode-main"]["models"][0])
 
     def test_valid_handwritten_efforts_are_still_kept(self):
-        routes = {"zcode-main": {"models": [{"id": "Gemini-4-Hydrogen", "input": ["text"]}]}}
+        routes = {"zcode-main": {"models": [{"id": "HandsetSample", "input": ["text"]}]}}
         old = {"zcode-main": {"models": [
-            {"id": "Gemini-4-Hydrogen",
+            {"id": "HandsetSample",
              "reasoningEfforts": {"off": "off", "low": "low", "xhigh": "xhigh"}},
         ]}}
-        S.HANDSET_EFFORTS.add("Gemini-4-Hydrogen")
+        S.HANDSET_EFFORTS.add("HandsetSample")
         try:
             out = S._keep_efforts(routes, old)
         finally:
-            S.HANDSET_EFFORTS.discard("Gemini-4-Hydrogen")
+            S.HANDSET_EFFORTS.discard("HandsetSample")
         self.assertEqual(
             out["zcode-main"]["models"][0]["reasoningEfforts"],
             {"off": "off", "low": "low", "xhigh": "xhigh"})

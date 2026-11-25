@@ -97,10 +97,8 @@ ALIAS_MAP = Path(
 # 源头 map 里出现 reasoning_effort，才代表上游真吃 OpenAI 风格档位字段
 _USES_EFFORT_FIELD = re.compile(r"reasoning_effort")
 # 手配档位白名单：这些模型的推理档位由 patch 人工维护，不随宿主 catalog 覆盖。
-# Gemini-4-Hydrogen（2026-11-17）：GM 渠道换成 123（odyfree），原生支持工具版真吃
-# reasoning_effort 四档 low/medium/high/xhigh；但宿主 catalog 只声明 off/high 开关
-# （装饰项），每日同步若照 catalog 投影会把四档冲掉，故显式豁免、以 patch 为准。
-HANDSET_EFFORTS: set = {"Gemini-4-Hydrogen"}
+# 当前为空（Gemini-4-Hydrogen 已随 odyfree 线路移除）。
+HANDSET_EFFORTS: set = set()
 # provider 级默认档目标（2026-11-19 用户定）：组内共同档低于它时抬到这一档，
 # 缺这一档的模型用 wire 别名补齐；不再按「并列取低、省思考开销」的旧口径。
 DEFAULT_EFFORT_TARGET = "high"

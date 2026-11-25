@@ -184,11 +184,6 @@ class DriftGateSnapshotTest(unittest.TestCase):
         with unittest.mock.patch.object(A, "EMPTY_ALLOWED", {"Beam"}):
             self.assertEqual(self._gate(cfg), [])
 
-    def test_gemini_hydrogen_is_in_empty_allowlist(self):
-        # GM（catiecli）/v1/models 只回 id、不回 reasoning 能力位，注定空档位；
-        # Gemini-4-Hydrogen 必须在白名单里（接替本批次移除的旧 Gemini-AIS），否则每日 --check 误判档位漂移、exit 1。
-        self.assertIn("Gemini-4-Hydrogen", A.EMPTY_ALLOWED)
-
     def test_nothing_reported_when_all_have_levels(self):
         cfg = _cfg(_rule("HY3", ["low", "high"]), _rule("Beam", ["low", "high"]))
         self.assertEqual(self._gate(cfg), [])

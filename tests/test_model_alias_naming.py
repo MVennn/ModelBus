@@ -117,15 +117,10 @@ class ExplicitOcPrefixTest(unittest.TestCase):
         self.assertEqual(items[0]["upstream"], "qwen3.8-max")
         self.assertTrue(items[0].get("explicit_channel"))
 
-    def test_main_order_names_the_gem_hop_explicitly(self) -> None:
-        # 主力组 = DeepSeek 三跳 + Gemini 4 Hydrogen（2026-11-17 接入）。
-        # Gemini 走 gem: 显式前缀（渠道 GM 不在 cn:/qoder: 这些天然前缀里），
-        # 2026-11-17 GM 从 catiecli 换到 123（odyfree）原生支持工具版，旧 catiecli id 已撤。
+    def test_main_order_stays_deepseek_only(self) -> None:
+        # 主力组只留 DeepSeek；Gemini-4-Hydrogen / odyfree 线路已移除。
         self.assertIn("chat:cn:deepseek-v4.1-flash", ma.MAIN_ORDER)
-        self.assertIn("chat:gem:gemini-4-hydrogen-原生1M支持工具", ma.MAIN_ORDER)
-        self.assertEqual([m for m in ma.MAIN_ORDER if "gem:" in m],
-                         ["chat:gem:gemini-4-hydrogen-原生1M支持工具"])
-
+        self.assertEqual([m for m in ma.MAIN_ORDER if "gem:" in m], [])
 
 if __name__ == "__main__":
     unittest.main()

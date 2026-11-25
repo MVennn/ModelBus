@@ -3,7 +3,7 @@
 
 为什么要有这道门禁：gateways/zgate/main.go:155 的 ValidatePolicies 会在
 「某个渠道只服务单跳模型、却配了多跳字段」时拒绝启动。2026-11-17 15:45 就是这样
-全站 503 了 25 分钟 —— GM 渠道只剩 Gemini-4-Hydrogen 一个单跳模型，配置里却还留着
+全站 503 了 25 分钟 —— 某渠道只剩单跳模型，配置里却还留着
 softCooldownSeconds / rateLimitBackoffMs / maxParallel 三个永远读不到的字段；错误只走
 stderr，watchdog 只记了 up=False (timed out)，日志里只剩三条 [policy] WARN。
 

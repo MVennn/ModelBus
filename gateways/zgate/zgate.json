@@ -5,7 +5,6 @@
   "wbGatewayConfig": "../upstream/workbuddy/config.json",
   "qoderEnvFile": "../../providers/qoder/.env.local",
   "qwenEnvFile": "../../providers/qwen/.env.local",
-  "geminiEnvFile": "../../providers/gemini/.env.local",
   "hajimiEnvFile": "../../providers/hajimi/.env.local",
   "session": "unified-router",
   "streamIdleHeartbeatSec": 15,
@@ -39,16 +38,6 @@
       "maxParallel": 2,
       "headerTimeoutSec": 0
     },
-    "GM": {
-      "silenceCooldownSeconds": 0,
-      "firstBlockMs": 0,
-      "hedgeAfterMs": 0,
-      "authFailCooldownHours": 24,
-      "busyCooldownSeconds": 10,
-      "headerTimeoutSec": -1,
-      "timeoutCooldownSeconds": 20,
-      "retry500Once": true
-    },
     "HJ": {
       "headerTimeoutSec": -1
     }
@@ -72,7 +61,7 @@
     "WB": { "base": "http://127.0.0.1:7863/v1", "child": "workbuddy" },
     "QD": { "base": "http://127.0.0.1:8790/v1", "child": "qoder" },
     "QW": { "base": "https://maas.qianwenaiapi.com/apps/anthropic/v1", "keyEnv": "QWEN_API_KEY" },
-    "GM": { "base": "https://odyfree.spinsnow.fun/v1", "keyEnv": "GEMINI_API_KEY" },
+    "GM": { "base": "https://catiecli.sukaka.top/v1", "keyEnv": "GEMINI_API_KEY" },
     "HJ": { "base": "https://api.gemai.cc/v1", "keyEnv": "HJM_API_KEY" }
   },
   "children": {

@@ -172,17 +172,10 @@ ZEN_FREE_UPSTREAMS = frozenset({
     "nemotron-3.5-lightning-free", "deepseek-v4.1-flash-free",
 })
 QW_BASE = "https://maas.qianwenaiapi.com/apps/anthropic/v1"
-# 谷歌 Gemini（123 中转 odyfree，OpenAI 兼容直连）。第三方转售通道没有公开价目表，
-# 价格按 DeepSeek 主力标准档估算，只影响组内排序与展示；渠道级返回 None 会让
-# 整个渠道被判「无价」并被 --apply 拒绝（见 main 的 dead channel 闸门），
-# 所以未收录的 id 一律返 None（该跳丢弃），已收录的给显式价。
-GM_BASE = "https://odyfree.spinsnow.fun/v1"
-# 2026-11-17：GM 渠道从 catiecli 换成 123（odyfree.spinsnow.fun），主力 Gemini-4-Hydrogen
-# 走它的原生支持工具版；推理四档靠 reasoning_effort 真参数（low→xhigh）。
-# 中转无公开价目，沿用 0.11 仅用于组内排序/展示；未登记 id 一律返 None（该跳丢弃）。
-GM_PRICES = {
-    "gemini-4-hydrogen-原生1M支持工具": 0.11,
-}
+# GM 渠道已无在役模型（Gemini-4-Hydrogen / odyfree 线路已移除）。
+# 渠道框架保留；价目表空，price_of(GM) 恒返 None，任何 id 都不会再进模型表。
+GM_BASE = "https://catiecli.sukaka.top/v1"
+GM_PRICES: dict = {}
 # 哈基米（gemai.cc）中转渠道：key 走 HJM_API_KEY（providers/hajimi/.env.local）。
 # 2026-11-11 用户口径：该渠道的 Gemini 3.8 族整族下线。渠道本身保留（CHANNEL_BASE /
 # CHANNEL_PREFIX / zgate upstreams 里的 HJ 不动），只把价目表清空 —— price_of 对本渠道
@@ -217,9 +210,6 @@ MAIN_ORDER = [
     # 它由 MERGE_ACROSS_PROTOCOL 并进上一条的链尾（同一显示名、按跳派发协议），
     # 这里仍列出是为了让排序与「链路覆盖」自解释。
     "messages:deepseek-v4.1-flash",
-    # 谷歌 Gemini 4 Hydrogen（2026-11-17）：GM 渠道从 catiecli 换成 123（odyfree），
-    # 走 123 原生支持工具版并入主力，推理四档靠 reasoning_effort 真参数。
-    "chat:gem:gemini-4-hydrogen-原生1M支持工具",
 ]
 MAIN_IDS = set(MAIN_ORDER)
 
@@ -455,8 +445,6 @@ QD_PRICES = {
 MODEL_META = {}
 
 ABBR = {
-    # Gemini 4 Hydrogen（123 中转）：原生支持工具版并入主力，显示名仍叫 Gemini-4-Hydrogen。
-    "gemini-4-hydrogen-原生1m支持工具": "Gemini-4-Hydrogen",
     "moonshotai/kimi-k3-free": "Kimi-K3",
     "deepseek-v4.1-flash": "DeepSeek-4.1-Flash",
     "deepseek-v4.1-flash-sg": "DeepSeek-4.1-Flash",
@@ -733,9 +721,6 @@ def _blank_effort_global(cfg: dict) -> bool:
 # 允许长期无档位的模型：上游确实没有多档（只有单一思考档或全是非 chat 网关模型），
 # 用户选择器里给个空下拉反而误导。加进来要在注释里写明原因。
 EMPTY_ALLOWED: set = {
-    # 123 中转的原生支持工具版在 DSH 里带 reasoningEfforts（low/medium/high/xhigh），
-    # 档位由 patch 手配、真源 optionSpecs 缺失，留在白名单避免每日同步漂移复查误判。
-    "Gemini-4-Hydrogen",
     # OC longcat-2.5-free：上游 /models 不声明 reasoning.effort（见 go 段报告的
     # 「上游目录未声明档位」，与 longcat-2.0 同批），独立成条后注定空档位；
     # 2026-11-17 收录进免费组后每日同步 --check 会误判成档位漂移，显式豁免。
@@ -1503,8 +1488,7 @@ def qw_credit_active() -> bool:
 def price_of(channel: str, upstream: str, wb: dict[str, dict],
              qd: dict[str, dict], slot: str) -> float | None:
     if channel == "GM":
-        # 中转无公开价目：只认 GM_PRICES 的显式价，未登记 id 返 None（该跳被丢）。
-        # 2026-11-17 Gemini 4 Hydrogen 已从不抗截断的普通档接入。
+        # GM 渠道已无在役模型，价目表空，恒返 None（该跳被丢）。
         return GM_PRICES.get(upstream)
     if channel == "HJ":
         # 哈基米同为转售站，口径同 GM：只认 HJ_PRICES 的显式价，未收录即 None。
