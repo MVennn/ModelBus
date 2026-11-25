@@ -377,3 +377,63 @@ GM 不会告诉你能力字段（`/v1/models` 只有 id，`/v1beta/models` 自�
 原文兜底值也错在一起：`max_output_tokens=128000`（真值 65536，虚高约一倍）、`supports_image=false`（实际收图）。改完 DSH 侧 `maxTokens: 65536`、`input: [text, image]` 都已投影。
 
 仍属推断、明确不写的两处：**Qwen-3.8-Max** 的 max/img 只有 OC 交叉参考（QD 8790 拒连）；**HY3-X** 在 WB 面板与 `/v1/models` 都不存在，没有可对号的上游条目。
+
+### 9.6 档位参数在 Anthropic 协议上游曾被整包丢弃（2026-11-25 已修）
+
+QW 上游只提供 Anthropic Messages 协议（`https://maas.qianwenaiapi.com/apps/anthropic/v1`）。`chatToAnthropic` 在把 OpenAI 请求翻成 Anthropic 形状时只搬 messages / tools / max_tokens 一类字段，**从不读 `reasoning_effort`、也不生成 `thinking`**，于是模型走 QW 这条跳时档位被整包丢掉，上游永远按自己的默认思考回答——这才是「Qwen 的 off 关不掉思考」的真因，与 §9.3 里"档位值写宽了"是两回事。
+
+实测对照（`Qwen-3.8-Flash`，同一 prompt，思考字符）：
+
+| 档位 | 修复前（现网旧二进制） | 修复后（7971 隔离实例） |
+|---|---|---|
+| off | 286 | **0** |
+| low | 335 | 59 |
+| medium | 321 | 61 |
+| high | 334 | 62 |
+| max | 未测 | 134 |
+
+修复点：`internal/bridge/bridge.go` 的 `chatToAnthropic` 增加 `reasoning_effort → thinking` 翻译。off / disabled / none → `{"type":"disabled"}`；其余按 `thinkingBudget` 换算 `budget_tokens`（low 1024 / medium 2048 / high 4096 / xhigh 8192 / max 16000）。Anthropic 要求 `budget_tokens` ≥ 1024 且严格小于 `max_tokens`：装不下时折半，折半后仍不足 1024 就不发——那种请求本来留不出思考空间，硬发只会 400 打断整条链。只有客户端真的带了档位才介入，没带或空串一律不碰。
+
+单测：`internal/bridge/bridge_test.go` 的 `TestChatToAnthropicTranslatesReasoningEffort`（9 例含折半）与 `TestChatToAnthropicLeavesThinkingAlone`（4 例）。
+
+生效条件：**改的是二进制不是配置，需重启 7871 网关才在现网生效**。
+
+### 9.7 GLM-5.3-Flash 的 low / high 档不产生思考（2026-11-25 实测）
+
+首轮全矩阵把 GLM 记成"三档全超时"，追查后是 QD 抢首发且挂死（见 §9.6 之外的渠道排序问题），不是档位问题。绕开网关路由、直连 WB（`http://127.0.0.1:7863/v1`，`model=cn:glm-5.3-flash`）重测，同一 prompt：
+
+| 档位 | 思考字符 | 正文字符 |
+|---|---|---|
+| low | 0 | 127 |
+| high | 0（复测也是 0） | 116 / 114 |
+| max | 753 / 809 | 115 / 143 |
+
+抓 high 档的原始 SSE，`delta` 字段累计只有 `content` 与 `role`，**没有任何 reasoning 类字段**——不是探针取错字段，是这一档确实不产出思考。
+
+WB 侧配置 `thinking = {client_priority: true, default_effort: "max", enabled: true, override_scope: "level"}`，而 `providers/workbuddy/cache/wb_pricing.json` 把 GLM 的 `supported_efforts` 标成 `["low","high","max"]`。也就是说目录声明的三档里，只有 max 在思考维度上真正有意义，low 与 high 实际等价于"不思考"。
+
+处理建议（未改配置，等拍板）：要么按实测把 low/high 合并成一档只留 max，要么拿到上游真正的档位语义后再填。
+
+#### 9.7.1 两条路都做完后的裁决（2026-11-25）
+
+两条路都走了：
+
+1. **查上游真实语义**：z.ai 官方文档 `docs.z.ai/guides/overview/concept-param.md` 称 GLM-5.3 / 5.3-Flash 的 `reasoning_effort` 仅在 `thinking.type=enabled` 时生效、且这三档"强制思考"；工程侧事实更硬——`MODEL-PROVIDERS.md:576/721` 早已实测记录 `glm-5.3-flash` 的 `thinking:disabled` 400、`reasoning_effort:none` 400、`enable_thinking:false` 仍思考。也就是上游**没有关闭开关**，low/high/max 对它都是"开思考"的不同强度标记。
+2. **黑盒穷举**（`.work/effort-matrix/probe_glm_thinking.py`，直连 WB `cn:glm-5.3-flash`）：
+
+| case | 思考字符 | 判定 |
+|---|---|---|
+| A 现状 low / high / max | 0 / 0 / 2031 | 只有 max 出思维链 |
+| B 补 `thinking:{type:enabled}` 后 low / high / max | 0 / 0 / 1975 | 补字段救不回 low/high |
+| C `thinking:{type:disabled}` + high | 0（且 HTTP 200） | disabled 反而能关 |
+
+注意 C 与文档记录的"thinking:disabled 400"矛盾：直连 WB `:7863` 的 OpenAI 兼容端点返回 200 且关掉思考，经 zgate 或另一路径才 400——说明 GLM 的思考控制是**路径相关**的，但无论哪条路，low/high 都不产出思维链这一点一致。
+
+**裁决：采纳"砍 low/high 只留 max"。** 理由：档位的核心价值是让思考深度可选；GLM-5.3-Flash 的 low/high 在这条链路上与"不思考"等价，留着是虚假选项，还会误导用户以为调低能省钱省时。上游文档写的"三档强制思考"是**协议声明层**，WB 渠道的**行为层**只兑现了一档，以实测行为为准（证据优先原则）。
+
+落地改动（均可回滚）：
+- `~/.dsh/profiles/desktop/cordis.patch.yml`：GLM-5.3-Flash 的 reasoningEfforts 从三档改为单档 `max: max`；备份 `.work/effort-matrix/cordis.patch.yml.bak-glm`（改前 22933 B）。
+- `tools/dsh_sync.py` 的 `HANDSET_EFFORTS`：加入 GLM-5.3-Flash，防止下次 `dsh_sync --apply` 按宿主 catalog 的 [`low,high,max`] 写回。
+- `tests/test_dsh_sync_efforts.py`：新增 `test_glm_5_3_flash_handset_single_max_effort` 锁住该行为。
+
+验证：`load_contract()` 读到 `{max:max}`；`python -m unittest test_dsh_sync_efforts` 34 项全 ok（含新增用例）；`dsh_sync --check` 返回 1 是 Gemini-4-Hydrogen 隐藏的历史遗留，A/B 对照证明与本次改动无关。

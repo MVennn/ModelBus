@@ -4107,3 +4107,43 @@ ais 的 Gemini 3.8 处理失败原来直接降代到 3.7。要求在**降代之�
   恢复命令：python tools/model_visibility.py show --channel OC
 
 ## 状态: 已完成
+
+
+## 2026-11-25 推理档位：Anthropic 协议上游丢档位已修
+
+### 背景
+首轮全矩阵实测（`.work/effort-matrix/latest.json`，9 模型 30 单元）发现 Qwen 的 off（wire=disabled）仍吐 286 字符思考、各档无梯度。
+
+### 根因
+QW 上游只提供 Anthropic Messages 协议。`chatToAnthropic`（internal/bridge/bridge.go:725）翻请求时只搬 messages/tools/max_tokens，不读 `reasoning_effort`、也不生成 `thinking`，于是模型走 QW 这条跳时档位被整包丢掉，上游永远按默认思考回答。
+
+### 改动
+- internal/bridge/bridge.go：`chatToAnthropic` 末段增加 `reasoning_effort → thinking` 翻译；新增 `thinkingBudget`（low 1024 / medium 2048 / high 4096 / xhigh 8192 / max 16000）与常量 `minAnthropicThinkingTokens = 1024`。`budget_tokens` 必须 ≥1024 且 <`max_tokens`，装不下时折半，折半后仍不足 1024 就不发。
+- internal/bridge/bridge_test.go：新增 `TestChatToAnthropicTranslatesReasoningEffort`（9 例，含折半）与 `TestChatToAnthropicLeavesThinkingAlone`（4 例）。
+
+### 验收
+- `go build ./...` EXIT=0；`go test ./...` 全包 ok（router 17.777s、bridge 2.681s、supervisor 10.482s、alias/config ok）。
+- 7971 隔离实例（ZGATE_LISTEN 覆盖 + 配置复制到 .work/zgate-test/，绝对化 envFile 路径）实测 Qwen-3.8-Flash 思考字符：off 0 / low 59 / medium 61 / high 62 / max 134（修复前 off 286、各档 265–335 无梯度）。
+- `python tools/check-docs.py` → [OK] 61 篇文档全部通过。
+
+### 未生效项
+改的是二进制不是配置；7871 现网仍是旧可执行文件，需 `tools/zgate-lifecycle/deploy-zgate.ps1` 重启才生效（会话流量经过网关，按 §6 不自动重启）。
+
+### GLM-5.3-Flash 追查与实测（同批次）
+- 首轮"三档全超时"定性为误报：日志显示 11-19 至 11-25 12:00 一直走 `-> WB:cn:glm-5.3-flash (1/2)`（4.2s/25.5s/6.8s），17:13 起改成 `-> QD:GLM-5.3-Flash (2/2)`（48–186 秒）。原因是 rankedChain（internal/router/race.go:450-488、462-467）给"空闲停止的按需子进程"打 class -1 强制首发，QD 的 `child: qoder` 空闲停止后抢了 WB 的首发位，尾流被 25 秒硬超时截断。
+- 直连 WB 重测（.work/effort-matrix/probe_glm_direct.py，绕过 zgate 路由）：low think=0/content=127、high think=0/content=116（复测 0/114）、max think=753/809。抓 high 档原始 SSE，delta 只有 content 与 role，无任何 reasoning 字段。
+- 结论：GLM-5.3-Flash 只有 max 档真正产生思考，low/high 名不副实（WB 面板却把 supported_efforts 标成 ["low","high","max"]）。
+
+### 待解决
+- GLM 的 low/high 档要不要按实测合并、或换上游真实档位语义，待拍板。
+- 契约里 Qwen 的 `high → xhigh` 映射属历史遗留；high 现在能独立映射 4096，可择机改回。
+
+
+### 2026-11-25 GLM 档位"两条路都做"综合裁决
+- 用户令："都做然后综合评判"（查上游语义 + 砍名不副实档位）。
+- 上游语义：z.ai 官方文档 reasoning_effort 仅 thinking.type=enabled 生效、GLM-5.3 三档强制思考无关闭开关；MODEL-PROVIDERS.md:576 实测 thinking:disabled 400 / enable_thinking:false 仍思考。
+- 黑盒穷举（直连 WB :7863）：A 现状 low/high/max=0/0/2031；B 补 thinking.enabled=0/0/1975；C thinking:disabled+high=0(200)。→ 只有 max 出思维链，补字段救不回 low/high。
+- 裁决：砍 low/high 只留 max（行为层只兑现一档，以实测为准）。
+- 改动：cordis.patch.yml 的 GLM-5.3-Flash → {max:max}（备份 .work/effort-matrix/cordis.patch.yml.bak-glm，22933B）；dsh_sync.py HANDSET_EFFORTS 加 GLM-5.3-Flash 防写回；test_dsh_sync_efforts.py 加回归用例。
+- 踩坑：Python write_text 默认把 LF 转 CRLF（文件 22933→23483），改从备份读 + newline="" 重写，恢复 LF（22885B/598LF/0CRLF）。
+- 验证：load_contract={max:max}；unittest 34 项全 ok（含新用例）；dsh_sync --check 返回 1 是 Gemini-4-Hydrogen 隐藏的历史遗留（A/B 对照证明与本次无关）；check-docs 61 篇全通过。
