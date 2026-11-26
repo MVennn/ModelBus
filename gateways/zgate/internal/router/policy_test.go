@@ -10,6 +10,7 @@ package router
 //   - 守卫 mode=channels 按渠道能力位走。
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -287,5 +288,23 @@ func TestSingleHopSkipsSoftCooling(t *testing.T) {
 	}
 	if !srv.cooling(alias.Hop{Channel: "WB", Upstream: "a"}) {
 		t.Fatal("多跳链的 503 仍要埋软冷却，否则每个请求都先撞一遍坏跳")
+	}
+}
+
+// 2026-11-26：429 不再进单跳例外。WB 单跳被 429 埋 45s 冷却，期间该模型全量 502。
+// 单跳链上 429 与 5xx 一样不埋冷却；额度耗尽是确定性长期状态，仍照旧埋。
+func TestSingleHop429DoesNotCool(t *testing.T) {
+	srv, _ := newServer(t, `{"models":{},"legacy":{}}`, "http://127.0.0.1:1")
+	hop := alias.Hop{Channel: "WB", Upstream: "a"}
+	ctx := withChainContext(context.Background(), 0, true)
+
+	srv.coolHop(ctx, hop, 45*time.Second, coolWhyRateLimit)
+	if srv.cooling(hop) {
+		t.Fatal("429 不该给单跳链埋冷却（等于把这个模型关 45 秒，期间全量 502）")
+	}
+
+	srv.coolHop(ctx, hop, 24*time.Hour, coolWhyQuota)
+	if !srv.cooling(hop) {
+		t.Fatal("额度耗尽仍要埋冷却，否则每半小时白撞一次")
 	}
 }

@@ -95,7 +95,8 @@ func (s *Server) hopBase(hop alias.Hop) string {
 	return ""
 }
 
-// 冷却理由里只有这两种是「上游明确拒绝服务」，其余都是网关按状态码或时间做的判断。
+// 冷却理由：额度耗尽是「上游明确且长期拒绝服务」；限流（429）是瞬时状态，
+// 退避重试就能过，不该当硬拒绝。区分点落在 coolHop 的单跳例外里。
 const (
 	coolWhyRateLimit = "限流"
 	coolWhyQuota     = "额度"
@@ -109,16 +110,19 @@ func coolWhyOf(reason string) string {
 	return "不可用"
 }
 
-// coolHop 是所有「埋冷却」的统一入口，只为一件事：单跳链不许埋软性冷却。
+// coolHop 是所有「埋冷却」的统一入口，只为一件事：单跳链不埋软性冷却。
 // 单跳链冷却一跳 = 把这个模型整体关掉，而 2026-11-10 的 Gemini-3.8-Flash 就是
 // 这么从「偶尔慢」被连续判断死成「连片 502」的 —— 用户看到的是模型挂了，
-// 实际是网关自己把唯一的路封了 20 秒。429 与额度耗尽是例外：那是上游明确拒绝
-// 继续服务，再打只会被限得更久，且不是猜测，埋了才是对的。
+// 实际是网关自己把唯一的路封了 20 秒。
+// 2026-11-26：429 从例外里移除。WB 一跳被 429 埋 45s 冷却，期间 HY4-Flash-Free
+// 这条单跳链全量 502（实测）。429 是瞬时状态，上游 wb2api 自身还会换号重试；
+// 退避重试仍失败就把 429 交回客户端，不再封掉唯一的跳。
+// 只有额度耗尽（quota，确定性长期状态）继续埋冷却，省得每半小时白撞一次。
 func (s *Server) coolHop(ctx context.Context, hop alias.Hop, d time.Duration, why string) {
 	if d <= 0 {
 		return
 	}
-	if singleHopChain(ctx) && why != coolWhyRateLimit && why != coolWhyQuota {
+	if singleHopChain(ctx) && why != coolWhyQuota {
 		s.log.Infof("[router] %s 单跳链的%s不埋冷却（%v）：没有下一跳可换，埋下去等于把这个模型关掉",
 			hopKeyForLog(hop), why, d)
 		return
