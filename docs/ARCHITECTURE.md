@@ -99,7 +99,7 @@ qoder2api-hub（Python，`qoder_proxy.py`）。把它们"合进一个进程"等�
 
 ### 3.2 进程模型
 
-```
+```bash
 ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
              │  zgate.json 配 6 个 upstream：OC / WB / QD / QW / GM / HJ
              ├─ OC / QW ──▶ 远程（opencode.ai / 千问，无本地进程）
@@ -137,7 +137,7 @@ ZCode ──▶ 127.0.0.1:7871  zgate (Go, ~20 MB)
 
 ### 3.4 代码结构
 
-```
+```bash
 gateways/zgate/
 ├─ main.go                 # 子命令分发
 ├─ zgate.json              # 端口 / 超时 / 回收阈值 / 子进程命令（不含凭据）
@@ -219,7 +219,7 @@ supervisor ~400 行、windows ~150 行，合计 **~1500 行 Go**，加测试 ~20
 
 ### 4.2 目标结构
 
-```
+```text
 ModelBus/
 ├─ gateways/                    # 【运行层】唯一会产出进程的目录
 │  ├─ zgate/                    #   我们的 Go 入口（源码 + config.json）

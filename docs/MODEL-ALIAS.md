@@ -33,7 +33,7 @@ alias map **不含凭据**；上游 key 仍由路由按渠道从 `provider_confi
 
 ## 2. 显示名格式
 
-```
+```text
 <型号>
 ```
 
@@ -205,7 +205,7 @@ L3 决定「是不是同一代」 → ctx / out 不同 = 不同代，即使名�
 
 链路第一维是渠道优先级：**WB 固定链首**（额度优先消费对象，不看价格），其余按价格升序、同价时 GB 优先于 CN；`QW` 预付额度由 `CHANNEL_RANK`（rank 2）钉在所有付费跳之后。链序硬规则见 `tools/model_alias.py` 与 `tests/test_model_alias_hop_order.py`。以 DeepSeek 为例：
 
-```
+```bash
 DeepSeek-4.1-Flash
   1. WB  cn:deepseek-v4.1-flash          0.11   ← 面板现价
   2. OC  deepseek-v4.1-flash             0.11
@@ -229,7 +229,7 @@ opencode 的型号共用 `opencode.ai`，规则层分不开，只有 `gpt-*` / `
 生成器给每条 OC 直连跳补一条**同上游的孪生跳**（`AIRPORT_PROXY`，默认
 `<AIRPORT_PROXY>` —— 路由器上的入站固定绑 🤖 AI接口 组），**排在 `QW` 尾跳之前**：
 
-```
+```bash
 GPT-6-Luna         1. OC gpt-6-luna 直连
                    2. OC gpt-6-luna @机场   ← 直连 403 才走它
 DeepSeek-4.1-Flash 1. WB cn → 2. OC 直连 → 3. OC @机场 → 4. QW 直连
@@ -299,7 +299,7 @@ Qoder 的 `Qwen3.8-Flash`（catalog key `qfmodel`）在官方目录里曾是
 
 结果是一条链、一个显示名（免费窗口内落免费组，关闭后落省钱组）：
 
-```
+```bash
 Qwen-3.8-Flash   chain: QD:Qwen3.8-Flash -> OC:qwen3.8-flash -> OC:qwen3.8-flash(机场孪生)   price 0.00
 ```
 

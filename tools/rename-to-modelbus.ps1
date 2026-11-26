@@ -21,11 +21,12 @@ param(
 
 $ErrorActionPreference = 'Stop'
 
-$SrcDir   = 'F:\Project\ZcodeAIModels'
-$DstDir   = 'F:\Project\ModelBus'
-$LinkRoot = 'F:\Project\_merged\DeepseekHarness'
 $OldToken = 'ZcodeAIModels'
 $NewToken = 'ModelBus'
+$ProjectParent = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$LinkRoot  = Join-Path $ProjectParent '_merged\DeepseekHarness'
+$SrcDir    = Join-Path $ProjectParent $OldToken
+$DstDir    = Join-Path $ProjectParent $NewToken
 $LocalDir = Join-Path $env:LOCALAPPDATA 'ZCodeGateway'
 $StateOld = Join-Path $env:LOCALAPPDATA $OldToken
 $StateNew = Join-Path $env:LOCALAPPDATA $NewToken
@@ -129,7 +130,7 @@ foreach ($task in $taskList) {
 # ---------- 6. launchers / configs / shortcuts outside the repo ----------
 # Any text file that hardcodes the old path or the old token gets rewritten.
 # ZcodeAIModels -> ModelBus keeps the drive/prefix, so token replacement alone
-# already fixes every JSON-escaped form (F:\\Project\\ZcodeAIModels) too.
+# already fixes every JSON-escaped form (<项目根>\\ZcodeAIModels) too.
 function PatchTextFile([string]$Path) {
     $enc = New-Object System.Text.UTF8Encoding($false)
     $text = [System.IO.File]::ReadAllText($Path, [System.Text.Encoding]::UTF8)

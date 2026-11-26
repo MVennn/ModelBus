@@ -61,6 +61,8 @@ DEFAULT_PROVIDER_ID = "qoder"
 DEFAULT_PROVIDER_NAME = "Qoder"
 DEFAULT_GROUP = "standard-personal"
 DEFAULT_MAX_PRICE = 0.8
+# Hub 清单按域切分；默认把国际域并进来，否则只上架当前域（CN）的模型。
+DEFAULT_EXTRA_REALMS = os.environ.get("QD_EXTRA_REALMS", "intl")
 DEFAULT_ORDER_AFTER = "opencode-go-chat-free"
 PREFIX = "qoder:"
 # Merge targets by Qoder's own relative price. The WorkBuddy tiers use a credit
@@ -119,8 +121,13 @@ def config_path(explicit: str | None) -> Path:
     return Path.home() / ".zcode" / "v2" / "provider_config.json"
 
 
-def fetch_models(base: str, key: str, timeout: int = 20) -> list[dict]:
+def fetch_models(base: str, key: str, timeout: int = 20,
+                 realm: str | None = None) -> list[dict]:
+    # Hub 的模型清单是**按域**返回的（GET /v1/models?realm=cn|intl）：国际区独有的
+    # HungerG 之类不会出现在当前域清单里。realm=None 表示「当前域」。
     url = base.rstrip("/") + "/models"
+    if realm:
+        url += "?realm=" + realm
     request = urllib.request.Request(
         url,
         headers={"Authorization": f"Bearer {key}", "Accept": "application/json"},
@@ -357,6 +364,8 @@ def main() -> int:
                         help=f"price_factor 上限（默认 {DEFAULT_MAX_PRICE}；0 = 不设上限）")
     parser.add_argument("--order-after", default=DEFAULT_ORDER_AFTER,
                         help=f"separate 模式插入位置（默认 {DEFAULT_ORDER_AFTER}）")
+    parser.add_argument("--extra-realms", default=DEFAULT_EXTRA_REALMS,
+                        help=f"额外合并的域，逗号分隔（默认 {DEFAULT_EXTRA_REALMS}；空串=只当前域）")
     parser.add_argument("--probe-file",
                         help="qoder_probe.py 的结果；只保留 status=ok 的模型")
     args = parser.parse_args()
@@ -366,7 +375,15 @@ def main() -> int:
     if not path.exists():
         raise SystemExit(f"找不到兼容投影配置：{path}")
 
-    models, skipped = select_models(fetch_models(args.base_url, key), args.max_price)
+    raw_models = fetch_models(args.base_url, key)
+    extra_realms = [r.strip() for r in str(args.extra_realms or "").split(",") if r.strip()]
+    for extra in extra_realms:
+        try:
+            raw_models += fetch_models(args.base_url, key, realm=extra)
+        except SystemExit as exc:
+            # 没有该域账号时不阻断：只少几个模型，当前域照常写入。
+            print(f"[warn] realm={extra} 清单拉取失败：{exc}", file=sys.stderr)
+    models, skipped = select_models(raw_models, args.max_price)
     transient_kept: list[str] = []
     if args.probe_file:
         probe_path = Path(args.probe_file).expanduser()

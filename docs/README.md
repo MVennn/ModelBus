@@ -41,6 +41,7 @@
 | 文档 | 一句话定位 |
 |---|---|
 | [PITFALLS.md](PITFALLS.md) | **为什么会出这个坑**：机制解释，每条标 **【通用】/【实例 A】/【实例 B】** |
+| [archive/PITFALLS-40-61.md](archive/PITFALLS-40-61.md) | PITFALLS 的 §40–§61 原文续篇（归档只读）：思考守卫、加密分流、控制台脱敏、启动自检等 22 条，编号不变、仍有效 |
 | [TROUBLESHOOTING.md](TROUBLESHOOTING.md) | **怎么查**：现象 → 排查步骤 → 原因 / 解法，标题即检索词 |
 
 ## 四、参考资料

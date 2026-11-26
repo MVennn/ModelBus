@@ -1,4 +1,6 @@
 # 凭据与安全须知
+> 占位符语义（`<REDACTED-…>` / `<REPLACE-…>` / `<YOUR-…>`）与豁免统一见跨仓文档 `F:/Project/docs/PLACEHOLDERS.md`（在本仓库外，故意不写成仓内相对链接）。
+
 
 > **一句话**：本仓涉及哪些凭据、**分别从哪儿读**、活数据缓存在哪儿、上传公开仓库前该怎么处理 ——
 > 本篇**只写位置，不写值**。
@@ -62,7 +64,7 @@
 - **缺失时**：Python 脚本抛 `RuntimeError`、Node 脚本打印错误并退出，
   **绝不带着空 key 去请求**（省得收到一个含义不明的 401 再回头查）。
 
-```sh
+```bash
 export OPENCODE_GO_KEY='<OpenCode-Go api_key>'
 ```
 
@@ -78,7 +80,7 @@ export OPENCODE_GO_KEY='<OpenCode-Go api_key>'
   网关回 **401**。这是本仓与 OpenCode-Go 侧的一个**行为差异**，排查时注意区分：
   「OpenCode-Go 侧立刻抛 `RuntimeError`」与「WorkBuddy 侧表现为 401」是两种症状。
 
-```sh
+```bash
 export WB_GATEWAY_KEY='<网关 api_key>'
 ```
 
@@ -166,7 +168,7 @@ export WB_GATEWAY_KEY='<网关 api_key>'
 
 ## 5. 上传公开仓库前的检查清单
 
-```sh
+```bash
 # 1) 确认没有把凭据文件带进去
 git ls-files | grep -E 'provider_config\.json|\.bak-|providers/workbuddy/cache/|gateways/upstream/qoder/|providers/qoder/qoder_probe\.json|\.env$|\.key$'
 
@@ -223,7 +225,7 @@ git diff --cached | grep -nE 'oc_sk_|apiKey|api_key|Bearer [A-Za-z0-9]'
 
 ---
 
-# 推送前脱敏规则（通用）
+## 推送前脱敏规则（通用）
 
 > **一句话**：推送前跑一次 `python tools/check-secrets.py`；它拦的是三类东西 ——
 > 可用凭据、本机用户目录、真实邮箱。规则对 8 个仓完全一致，一处改全局同步。
@@ -300,7 +302,7 @@ git diff --cached | grep -nE 'oc_sk_|apiKey|api_key|Bearer [A-Za-z0-9]'
 
 ## 5. 推送前怎么做
 
-```sh
+```bash
 # 1) 默认扫工作树：已跟踪 + 未跟踪且未被 .gitignore 排除的文件
 python tools/check-secrets.py
 

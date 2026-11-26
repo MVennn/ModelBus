@@ -4147,3 +4147,15 @@ QW 上游只提供 Anthropic Messages 协议。`chatToAnthropic`（internal/brid
 - 改动：cordis.patch.yml 的 GLM-5.3-Flash → {max:max}（备份 .work/effort-matrix/cordis.patch.yml.bak-glm，22933B）；dsh_sync.py HANDSET_EFFORTS 加 GLM-5.3-Flash 防写回；test_dsh_sync_efforts.py 加回归用例。
 - 踩坑：Python write_text 默认把 LF 转 CRLF（文件 22933→23483），改从备份读 + newline="" 重写，恢复 LF（22885B/598LF/0CRLF）。
 - 验证：load_contract={max:max}；unittest 34 项全 ok（含新用例）；dsh_sync --check 返回 1 是 Gemini-4-Hydrogen 隐藏的历史遗留（A/B 对照证明与本次无关）；check-docs 61 篇全通过。
+
+
+### 2026-11-25 全仓代码审查（4 路只读子代理 + 主线实测）
+- 产出：`evidence/review-2026-11-25-code-audit.md`（分级报告 P0–P3）、`review-race-proof.md`（崩溃复现）、`review-2026-11-25-fixes.md`（已验证补丁）、4 份分片 `agent-*.md`。
+- 基线：`go vet ./...` exit 0；`go test ./... -count=1` 全绿（router 18.711s / bridge 3.263s / supervisor 11.100s / config 0.614s / alias 1.584s）。
+- P0：`conversions.js:158-194` 用 `JSON.stringify` 当 shell 引号，模型参数被拼进 bash（实测 `x$(echo INJECTED)` 展开成 `xINJECTED`）。
+- P1：`early_sse.go:124` `Header()` 无锁 + `commitLocked:186-211` 迭代同一 map，探针复现 `fatal error: concurrent map iteration and map write`（不可 recover，进程退出）；`race.go:228-281` 窥探读协程返回后仍偷读；`server.js:62-74` `ACAO: *` + `auth.js:35-38` 未设 key 即放行；`bridge.go:131-140` `json.Unmarshal("null")` → 200 空正文。
+- 信任面：`supervisor.go:222-234` 端口先到先得即接管，且 `healthy()` 只判 `<500` → 本机进程可冒充子进程收走真实 `Authorization`。
+- 已验证修复（临时克隆 `%TEMP%\mb-fixcheck`，工作树零改动）：`early_sse` 加 header 快照（vet 0 / router 17.360s ok / 探针 20000 轮不崩）；`conversions.js` 拆 `shellQuoteLiteral` + `shellQuoteGlob`（relay 81 pass）。
+- 未做：未改任何被跟踪文件；本机无 cgo，`-race` 不可用，崩溃用运行时 fatal error 复现替代；CRLF 分帧等 6 项标疑似。
+- 待定：上述两处补丁是否应用进真实仓（生效需受控重启 zgate，按 §6 不自动重启）。
+

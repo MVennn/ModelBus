@@ -72,4 +72,4 @@ python3 tools/check-docs.py
 
 ## 提交信息
 
-Conventional Commits；**按对象拆行**，不要打包成"代码整理"。
+Conventional Commits（`type(scope): subject`，按对象拆行）；tag 用 `vMAJOR.MINOR.PATCH`，只在发版时创建。完整口径见跨仓共享文档 GIT-WORKFLOW.md（随文档库分发；单仓检出时以本节口径为准）。

@@ -250,7 +250,7 @@ key 的**变量名**写在表里，值从环境变量读 —— 这跟本仓 AGE
 
 第 3 条的 map 原文（逐字）：
 
-```
+```text
 {
   "thinking": { "type": reasoningLevel == "disabled" || reasoningLevel == "none" ? "disabled" : "enabled" },
   "enable_thinking": reasoningLevel != "disabled" && reasoningLevel != "none",

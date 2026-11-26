@@ -1,4 +1,4 @@
-﻿#Requires -Version 5.1
+#Requires -Version 5.1
 <#
 .SYNOPSIS
     ModelBus 每日模型同步（Windows 计划任务入口）
@@ -31,7 +31,7 @@ param(
 $ErrorActionPreference = "Continue"
 
 # ---- 环境 ----------------------------------------------------------------
-$ROOT       = "F:\Project\ModelBus"
+$ROOT       = $PSScriptRoot
 $GIT_DIR    = "C:\Program Files\Git\cmd"
 $REPORT_DIR = Join-Path $ROOT "docs\reports"
 
@@ -43,6 +43,18 @@ $STATE_DIR = Join-Path $env:LOCALAPPDATA "ModelBus"
 $LOG_DIR   = Join-Path $STATE_DIR "logs"
 $STAMP     = Get-Date -Format "yyyyMMdd-HHmmss"
 $LOG       = Join-Path $LOG_DIR "sync-$STAMP.log"
+
+# 单实例锁：定时任务与手动触发并发时，后到者直接退出。
+# vbs 改成等待后 IgnoreNew 已生效，但手动启动不经过计划任务，仍需要进程级互斥。
+# 用独占打开锁文件实现：进程退出时 OS 自动释放句柄，不依赖显式 Release，
+# 也不会留下「abandoned mutex」那种需要接管的状态。
+$LOCK_PATH = Join-Path $STATE_DIR "sync.lock"
+try {
+    $script:SYNC_LOCK = [IO.File]::Open($LOCK_PATH, [IO.FileMode]::OpenOrCreate, [IO.FileAccess]::ReadWrite, [IO.FileShare]::None)
+} catch {
+    Write-Host "[sync] 另一实例正在运行（$LOCK_PATH 被占用），本次退出"
+    exit 0
+}
 $SUMMARY   = Join-Path $STATE_DIR "_last-sync.txt"
 
 # Python 位置不能写死成 C:\Users\<用户名>\...，那同样会触发敏感信息扫描。

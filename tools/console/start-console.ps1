@@ -1,4 +1,4 @@
-param(
+﻿param(
     [int]$Port = 7872,
     [switch]$Check,
     [switch]$Detach

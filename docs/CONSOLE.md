@@ -287,7 +287,7 @@ v1 稿里「chain 竖向卡片」「alias 与 /models 差集高亮」「TTFB p50
 | 绑定 | 只 `127.0.0.1:7872`，不 `0.0.0.0`；`Host` 只接受 `127.0.0.1` / `localhost` / `[::1]`（带或不带 :7872） |
 | 跨站 | 不发任何 CORS 头；`POST` 额外校验 `Origin`，**缺省即拒绝**、非同源 403 |
 | 响应头 | `Cache-Control: no-store`、`X-Content-Type-Options: nosniff`、`Referrer-Policy: no-referrer` |
-| 凭据 | `sources.scrub()` 只按「凭据语境」字段名精确匹配换 `<redacted>`（`accessToken` / `refreshToken` / `cookie` / `api_key` / `authorization` / `secret` / `password` 等），`SECRET_VALUE` 正则脱敏 `sk-` / `Bearer` 值形状；**裸 `token` 不算凭据** —— `total_tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens` 是业务计量，必须保留（见 [PITFALLS.md](PITFALLS.md) §51）；`provider_config.json` 只出存在性与键名；`auths/*.json` 只出条数、昵称与掩码 ID |
+| 凭据 | `sources.scrub()` 只按「凭据语境」字段名精确匹配换 `<redacted>`（`accessToken` / `refreshToken` / `cookie` / `api_key` / `authorization` / `secret` / `password` 等），`SECRET_VALUE` 正则脱敏 `sk-` / `Bearer` 值形状；**裸 `token` 不算凭据** —— `total_tokens` / `prompt_tokens` / `completion_tokens` / `cache_hit_tokens` 是业务计量，必须保留（见 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §51）；`provider_config.json` 只出存在性与键名；`auths/*.json` 只出条数、昵称与掩码 ID |
 | 掩码 | 账号 ID / UID 前 4 后 2（`work…96`）；日志行裁到 240 字符 |
 | 写操作 | 只有 `reload`；前端二次确认弹窗；**绝不自动重启 zgate** |
 | 不做 | 不代理 WB `panel/api`、不提供配置编辑、不在前端拼 shell 命令、不读 `credentials.json` 的值 |
@@ -329,7 +329,7 @@ tools/console/
 
 ---
 
-## 12. 验收标准与实测结果
+## 12. 验收与实测结果
 
 | # | 标准 | 实测 |
 |---|---|---|

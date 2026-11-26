@@ -8,7 +8,7 @@
 
 ---
 
-## 0. 结论先行
+## 0. 结论
 
 | 问题 | 回答 |
 |---|---|
@@ -314,7 +314,7 @@ GLM-5.3-Flash 在 `provider_config.json` 里 `maxOutputTokens.max = 131072`，`d
 
 写入链路变成三段，每段都能单独核对：
 
-```
+```text
 caps_upstream.py --fetch        # 上游接口 + 取证覆盖层 → catalog/upstream_caps.json（证据）
 model_caps.py --upstream ... --apply --apply-source upstream:   # 证据 → provider_config（只落真值）
 dsh_sync.py --apply             # provider_config → cordis.patch.yml（DSH 投影）

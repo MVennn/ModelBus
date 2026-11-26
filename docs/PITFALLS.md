@@ -761,6 +761,22 @@ prune。它同时也认不出这些模型已经配置过，会把整个 Go 目�
   1. `model_probe.py` 默认 `--max-tokens 32`。部分上游的 Gemini 系模型是「先思考再出字」，
      32 token 全被思考预算吃掉，上游回 400 / 或超时，记录写成 `status=timeout|error`
      且 `ever_ok` 为空 —— **能用的模型被记成死型号**。
+  2. `model_alias.py --probe-file` 摘除时不区分主力组，`timeout` 且无 `ever_ok` 直接 skip。
+  3. `tools/dsh_sync.py` 把 `modelOrder/personalModelIds` 原样投影成 zcode-main 的型号
+     清单，**缺型号不降级、直接硬失败**，于是清单少一条 = 整场会话报废。
+  另外 Gemini-3.8-Flash 当时走的是 HJ `[福利]gemini-3.8-flash`，该档在 gemai.cc 已断供
+  （`model_not_found / No available channel`），zgate 记 `fallback (none)` → 502。
+- **解法**：
+  - 「先思考再出字」的模型探活必须给足预算：默认提到 256，`sync-models.ps1` 显式传
+    `--max-tokens 256 --timeout 90`。
+  - 探活过滤里**主力组成员只报不删**：状态非 ok 时保留并打
+    `WARN: 主力组成员本轮探测不健康…`，真下架（unavailable / 404）照删。
+  - `dsh_sync.py` 维护 `~/.dsh/profiles/<profile>/zcode-model-ledger.json`，投影时比对
+    上一次清单，少条就 WARN 点名 —— 静默少一条是这次最难查的地方。
+- **验证**：探活三个主力全 `ok http=200`；`unittest discover -s tests` 135 tests OK；
+  `model_alias --check` exit 0「无漂移」。
+
+> **§40–§61 已外移**：因「单篇 ≤ 800 行」（[DOC-RULES.md](DOC-RULES.md) §6），§40–§61 的原文落在 [archive/PITFALLS-40-61.md](archive/PITFALLS-40-61.md)，编号不变、条目仍有效，按 §41 这样引用即可。
 
 ## 62. 客户端重写剥掉引号，PyYAML 1.1 布尔表把 `off` 读成 `false`，DSH 设置页再也存不进任何改动 【通用】
 

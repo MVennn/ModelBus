@@ -126,7 +126,7 @@
 
 `zgate serve` 的 Fatal 走 stderr 这一点很要命：由计划任务/隐藏窗口拉起时 stderr 继承自
 父进程、等于丢进 NUL。`tools/zgate-lifecycle/start-zgate-nw.ps1` 因此改成「启动即退出就
-重跑一次抓 stderr 并写进 `zgate-launch.log`」（见 [PITFALLS.md](PITFALLS.md) §61）。
+重跑一次抓 stderr 并写进 `zgate-launch.log`」（见 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §61）。
 
 ---
 

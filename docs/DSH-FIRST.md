@@ -38,7 +38,7 @@
 
 ## 3. 目标架构：一份真源，多个投影
 
-```
+```text
             ┌──────────────────────────┐
             │ catalog/  模型目录真源     │  display id / base_model / 渠道链 /
             │ （capabilities + 出处）    │  能力字段 + source + confidence

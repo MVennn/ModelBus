@@ -197,7 +197,7 @@ python tools/model_alias.py --no-pools --apply           # 只要单型号，不
 
 `DeepSeek-4.1-Flash` 现在是**一条四跳的链**（磁盘活数据口径），不是两个显示名：
 
-```
+```bash
 DeepSeek-4.1-Flash
   1. WB  cn:deepseek-v4.1-flash   chat      0.11   ← WB 固定链首（额度优先消费）
   2. OC  deepseek-v4.1-flash      chat      0.11   ← WB 挂了 / 限流时
@@ -215,7 +215,7 @@ DeepSeek-4.1-Flash
 
 磁盘活数据现状（`model-alias-map.json`）：
 
-```
+```bash
 Qwen-3.8-Max    QW:qwen3.8-max      (messages, 0.00) -> QD:Qwen3.8-Max   (chat, 0.43)
 Qwen-3.8-Flash  QW:qwen3.8-flash    (messages, 0.00) -> QD:Qwen3.8-Flash (chat, 0.09)
 ```
@@ -309,7 +309,7 @@ python tools/model_alias.py --check
 
 2026-10-28 实测：`deepseek-v4.1-flash` 的 1M 试用池用尽后，上游返回
 
-```
+```json
 HTTP 403  event:error
 data:{"code":"AccessDenied","message":"Free quota exhausted. To continue accessing the model
 on a paid basis, please add funds or disable the \"use free tier only\" mode ..."}

@@ -12,7 +12,7 @@
 ## 1. 背景与要解决的问题
 
 `Default` 伪档位让请求不带 `reasoning_effort`，推理模型因此丢思考、正文聚成整块；
-根因、补丁与实测对照以 [PITFALLS.md](PITFALLS.md) §41 为正本，这里不重复定义。
+根因、补丁与实测对照以 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §41 为正本，这里不重复定义。
 准入机制只保留上游文档给出的真实档位（`disabled / low / medium / high / xhigh / max`
 等，按宿主 `THINKING_LEVELS` 固定序），effort 为空时取 `model.reasoning.efforts` 末位
 并显式写进请求。
@@ -69,7 +69,7 @@ provider 以 `zcode-` 开头的模型表。`tools/dsh_sync.py --apply` 从 ZCode
 `reasoning_details[type=reasoning.encrypted]`。A 格式尾部也会带一条 replay detail，
 所以 B 分流的判据是「零明文思考（`THINK=0`）且 `ENC>0`」：此时理由写明
 「上游加密思考分流」，不再含糊标成「声明 deepseek 思考但 reasoningChars=0」。
-上游分流根因、展示层与网关层避法以 [PITFALLS.md](PITFALLS.md) §42 为正本，
+上游分流根因、展示层与网关层避法以 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §42 为正本，
 这里只记探针口径，不重复定义机制。
 
 产物是 `.work/model-stream/report-<UTC>.json` 与 `latest.json`（真实项目内，
@@ -100,7 +100,7 @@ provider 以 `zcode-` 开头的模型表。`tools/dsh_sync.py --apply` 从 ZCode
 
 ## 5. 触发链：新增模型为什么不用手工测
 
-```
+```text
 上游清单 / 白名单 → model_alias.py --apply → dsh_sync.py --apply（投影 patch）
         → 每日 12:00 \ModelBus 模型同步 → sync-models.ps1 → 投影块之后
           model_stream_check.py --changed --soft（带 -Soft，不阻断流水线）
@@ -157,7 +157,7 @@ Claude-Haiku-5.5（403，`http!=403` 复通）。上游修好后无需人工改�
 
 - 活体探针只在本机每日同步链尾跑；CI / pre-commit 只跑离线守卫。
 - 报告与证据是中间产物，落在真实项目 `.work/` 内，不进版本库。
-- 改带 BOM 的 `sync-models.ps1` 必须保留 `EF BB BF` + LF，见 [PITFALLS.md](PITFALLS.md) §41。
+- 改带 BOM 的 `sync-models.ps1` 必须保留 `EF BB BF` + LF，见 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §40（编辑类工具剥 BOM）与 §55（编辑器 / 脚本改 PS1 掉 BOM）。
 - 网关守卫是 Go 代码，必须换 `zgate.exe` 才生效；`/admin/reload` 只热加载 `zgate.json`，流程见 [TROUBLESHOOTING.md](TROUBLESHOOTING.md) §16.2。
 - 文档规则（单一正本、索引、孤儿、体量）见 [DOC-RULES.md](DOC-RULES.md)。
 
@@ -194,4 +194,4 @@ Claude-Haiku-5.5（403，`http!=403` 复通）。上游修好后无需人工改�
 "streamIdleHeartbeatSec": 15  // 空闲心跳（负数=关）；非事件流不掺
 ```
 
-**踩坑提醒**：`Content-Length` 必须摘（`router.go` 对事件流 `Del("Content-Length")`），否则摘首段/插提示/掺心跳都会触发 `wrote more than the declared Content-Length` 断流，客户端 200 却 0 字节。细节见 [PITFALLS.md](PITFALLS.md) §41。
+**踩坑提醒**：`Content-Length` 必须摘（`router.go` 对事件流 `Del("Content-Length")`），否则摘首段/插提示/掺心跳都会触发 `wrote more than the declared Content-Length` 断流，客户端 200 却 0 字节。细节见 [PITFALLS-40-61.md](archive/PITFALLS-40-61.md) §42「二次修复」第 2 条。

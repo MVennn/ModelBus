@@ -4,13 +4,13 @@
 '   WScript.Shell.Run 的第二个参数 0 = 隐藏窗口，所以整个 PowerShell
 '   进程树都不会闪出 cmd / 控制台窗口。
 '
-' 日志与结果仍写在 F:\Project\ModelBus\docs\reports\
+' 日志与结果仍写在脚本同仓的 docs\reports\ 下
 Option Explicit
 
 Dim shell, ps1, cmd
 Set shell = CreateObject("WScript.Shell")
 
-ps1 = "F:\Project\ModelBus\sync-models.ps1"
+ps1 = Left(WScript.ScriptFullName, InStrRev(WScript.ScriptFullName, "\")) & "sync-models.ps1"
 cmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & ps1 & """"
 
 ' 0 = 隐藏, True = 等待（同步跑完才退出，失败能回传非零退出码给计划任务）

@@ -1,4 +1,4 @@
-#requires -Version 5.1
+﻿#requires -Version 5.1
 # 本地 OpenCode Zen 免费档代理（Bun）。健康检查 8789，不通则无窗拉起。
 # 父链在 Task Scheduler，不随 DSH/CMD 会话退出。
 $ErrorActionPreference = 'Stop'
